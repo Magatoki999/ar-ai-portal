@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+// 1. トップレベルで型だけを安全にインポート
+import type { AnimationMixer } from "three";
 
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -17,7 +19,7 @@ export default function MindARViewer() {
         "three/examples/jsm/loaders/GLTFLoader.js"
       );
 
-      const { AnimationMixer, Clock } = THREE;
+      const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE; // 変数名の衝突を避けるためエイリアス
 
       const mindarThree = new MindARThree({
         container: containerRef.current!,
@@ -39,7 +41,8 @@ export default function MindARViewer() {
 
       const loader = new GLTFLoader();
 
-      let mixer: any;
+      // 2. any をやめて型を指定（初期値は未定義なので undefined も許容）
+      let mixer: AnimationMixer | undefined;
 
       loader.load("/nondraco.glb", (gltf) => {
         gltf.scene.scale.set(0.3, 0.3, 0.3);
@@ -47,7 +50,8 @@ export default function MindARViewer() {
         anchor.group.add(gltf.scene);
 
         if (gltf.animations.length > 0) {
-          mixer = new AnimationMixer(gltf.scene);
+          // 3. ここでインスタンスを代入
+          mixer = new ThreeAnimationMixer(gltf.scene);
 
           const action = mixer.clipAction(
             gltf.animations[0]
