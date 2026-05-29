@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-// 1. トップレベルで型だけを安全にインポート
+// 1. TypeScript対策: トップレベルで型だけを安全にインポート
 import type { AnimationMixer } from "three";
 
 export default function MindARViewer() {
@@ -19,44 +19,32 @@ export default function MindARViewer() {
         "three/examples/jsm/loaders/GLTFLoader.js"
       );
 
-      const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE; // 変数名の衝突を避けるためエイリアス
+      // 変数名の衝突を避けるためにエイリアス（ThreeAnimationMixer）を適用
+      const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
 
       const mindarThree = new MindARThree({
         container: containerRef.current!,
         imageTargetSrc: "/targets.mind",
       });
 
-      const { renderer, scene, camera } =
-        mindarThree;
+      const { renderer, scene, camera } = mindarThree;
 
-      const light = new THREE.HemisphereLight(
-        0xffffff,
-        0xbbbbff,
-        1
-      );
-
+      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
       const anchor = mindarThree.addAnchor(0);
-
       const loader = new GLTFLoader();
 
-      // 2. any をやめて型を指定（初期値は未定義なので undefined も許容）
+      // 2. ESLint対策: any型を排除し、初期値のundefinedを許容する型を定義
       let mixer: AnimationMixer | undefined;
 
       loader.load("/nondraco.glb", (gltf) => {
         gltf.scene.scale.set(0.3, 0.3, 0.3);
-
         anchor.group.add(gltf.scene);
 
         if (gltf.animations.length > 0) {
-          // 3. ここでインスタンスを代入
           mixer = new ThreeAnimationMixer(gltf.scene);
-
-          const action = mixer.clipAction(
-            gltf.animations[0]
-          );
-
+          const action = mixer.clipAction(gltf.animations[0]);
           action.play();
         }
       });
@@ -67,9 +55,7 @@ export default function MindARViewer() {
 
       renderer.setAnimationLoop(() => {
         const delta = clock.getDelta();
-
         if (mixer) mixer.update(delta);
-
         renderer.render(scene, camera);
       });
     };
@@ -78,12 +64,35 @@ export default function MindARViewer() {
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        width: "100vw",
-        height: "100vh",
-      }}
-    />
+    <>
+      {/* 3. 全画面対策: MindARが背後で自動生成するvideo/canvasを強制的に画面いっぱいに広げるCSS */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .mindar-full-container video,
+        .mindar-full-container canvas {
+          width: 100vw !important;
+          height: 100vh !important;
+          object-fit: cover !important;
+          position: fixed !important;
+          top: 0 !important;
+          left: 0 !important;
+        }
+      `}} />
+
+      {/* 親のレイアウトを無視して画面全体をジャックする設定 */}
+      <div
+        ref={containerRef}
+        className="mindar-full-container"
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+          overflow: "hidden",
+          zIndex: 999,
+          backgroundColor: "#000",
+        }}
+      />
+    </>
   );
 }
