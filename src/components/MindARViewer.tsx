@@ -22,6 +22,9 @@ export default function MindARViewer() {
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
+  // 🔊 ElevenLabsの再生音声管理用Ref（連打時の音声重なり防止とクリーンアップ用）
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   // 1. AIのステート(aiStatus)が変更されたら、3Dモデルのモーションをスムーズに切り替える
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
@@ -51,9 +54,10 @@ export default function MindARViewer() {
 
   // 2. MindAR / Three.js の初期化
   useEffect(() => {
-    let mindarThreeInstance: any = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let mindarThreeInstance: any = null;
 
-    const start = async () => {
+      const start = async () => {
       const THREE = await import("three");
       const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
       const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
@@ -119,10 +123,15 @@ export default function MindARViewer() {
       if (mindarThreeInstance) {
         mindarThreeInstance.stop();
       }
+      // 画面を離れた時やリロード時に音声を確実に止める
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
     };
   }, []);
 
-  // 💡 環境変数に応じた通信・フォールバックハンドラー
+  // 💡 環境変数に応じた通信・ハンドラー
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -131,6 +140,12 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
+    // 💡 連続で話しかけられた場合、現在再生中のアシエルの声を止める
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
     // 1. 思考中ステートに変更
     setSubtitle("思考中...");
     setAiStatus("thinking");
@@ -138,7 +153,7 @@ export default function MindARViewer() {
     // 環境変数からバックエンドURLを取得
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
-    // 💡 Aパターン: バックエンドのURLがある場合（ローカル開発など）
+    // 💡 Aパターン: バックエンドのURLがある場合（ローカル開発・本番Render連携など）
     if (baseUrl) {
       try {
         const response = await fetch(`${baseUrl}/api/chat`, {
@@ -158,15 +173,46 @@ export default function MindARViewer() {
 
         const data = await response.json();
 
-        // 発話ステートに変更し、FastAPIから返ってきたレスポンスを表示
+        // 字幕にアシエルのセリフを反映
         setSubtitle(data.reply);
-        setAiStatus("talking");
 
-        // 5秒後に自動でIdle（待機状態）に戻す
-        setTimeout(() => {
-          setSubtitle("次の指示を待っています。");
-          setAiStatus("idle");
-        }, 5000);
+        // 💡 ElevenLabsから音声データが正常に返ってきた場合の処理
+        if (data.audio_data) {
+          try {
+            // Base64文字列をオーディオソースに変換
+            const audioSrc = `data:audio/mpeg;base64,${data.audio_data}`;
+            const audio = new Audio(audioSrc);
+            audioRef.current = audio;
+
+            // 発話ステートに変更（モーション開始）
+            setAiStatus("talking");
+
+            // 音声の再生を開始
+            await audio.play();
+
+            // 🔮 音声の再生が完了した瞬間に自動でIdle（待機状態）へ戻す
+            audio.onended = () => {
+              setSubtitle("次の指示を待っています。");
+              setAiStatus("idle");
+              audioRef.current = null;
+            };
+          } catch (audioError) {
+            console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
+            // 音声API側などでエラーが起きた場合のセーフティネット（5秒タイマー）
+            setAiStatus("talking");
+            setTimeout(() => {
+              setSubtitle("次の指示を待っています。");
+              setAiStatus("idle");
+            }, 5000);
+          }
+        } else {
+          // 音声が何らかの理由で含まれていなかった場合（従来の5秒タイマー挙動）
+          setAiStatus("talking");
+          setTimeout(() => {
+            setSubtitle("次の指示を待っています。");
+            setAiStatus("idle");
+          }, 5000);
+        }
         return;
 
       } catch (error) {
@@ -177,7 +223,7 @@ export default function MindARViewer() {
       }
     }
 
-    // 💡 Bパターン: バックエンドURLが無い場合（Vercel初期本番環境用セーフティネット）
+    // 💡 Bパターン: バックエンドURLが無い場合（Vercel初期フロントテスト用セーフティネット）
     setTimeout(() => {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。バックエンド未接続のため、フロント側で召喚を維持します。`);
       setAiStatus("talking");
