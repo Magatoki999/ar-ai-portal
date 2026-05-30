@@ -25,11 +25,12 @@ export default function SBTAuthGate() {
   const { address, isConnected } = useAccount();
   const [mounted, setMounted] = useState(false);
 
-  // Next.jsのハイドレーションエラー（SSRとクライアントの差異）を防ぐ対策
+// Next.jsのハイドレーションエラー（SSRとクライアントの差異）を防ぐ対策
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
-
+  
   // スマートコントラクトから、接続されたアドレスのSBT保有数を読み込む
   const { data: balance, isLoading, isError } = useReadContract({
     address: SBT_CONTRACT_ADDRESS,
