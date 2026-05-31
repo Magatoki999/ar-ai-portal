@@ -67,26 +67,28 @@ export default function MindARViewer() {
       recognition.lang = "ja-JP";     // Optimize engine for Japanese speech patterns
       recognition.interimResults = false; // Capture only final processed results
 
-      recognition.onstart = () => {
-        setIsListening(true);
-        setSubtitle("（音声認識中...お話しください）");
-      };
+      get_recognition_ready: {
+        recognition.onstart = () => {
+          setIsListening(true);
+          setSubtitle("（音声認識中...お話しください）");
+        };
 
-      recognition.onend = () => {
-        setIsListening(false);
-      };
+        recognition.onend = () => {
+          setIsListening(false);
+        };
 
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (inputRef.current) {
-          // Fill input box with recognized voice text
-          inputRef.current.value = transcript;
-          
-          // Programmatically submit the form for a hands-free interactive experience
-          const form = inputRef.current.form;
-          if (form) form.requestSubmit();
-        }
-      };
+        recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript;
+          if (inputRef.current) {
+            // Fill input box with recognized voice text
+            inputRef.current.value = transcript;
+            
+            // Programmatically submit the form for a hands-free interactive experience
+            const form = inputRef.current.form;
+            if (form) form.requestSubmit();
+          }
+        };
+      }
 
       recognitionRef.current = recognition;
     }
@@ -100,6 +102,7 @@ export default function MindARViewer() {
       const THREE = await import("three");
       const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
       const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+      const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
 
       const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
 
@@ -116,10 +119,16 @@ export default function MindARViewer() {
       scene.add(light);
 
       const anchor = mindarThree.addAnchor(0);
-      const loader = new GLTFLoader();
 
-      // Load avatar asset and extract key skeletal animations
-      loader.load("/nondraco.glb", (gltf) => {
+      // Setup DRACO decoder for compressed meshes
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+
+      const loader = new GLTFLoader();
+      loader.setDRACOLoader(dracoLoader);
+
+      // Load avatar asset and extract key skeletal animations with cache buster
+      loader.load("/avatar.glb?v=1", (gltf) => {
         gltf.scene.scale.set(0.3, 0.3, 0.3);
         anchor.group.add(gltf.scene);
 

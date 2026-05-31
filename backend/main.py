@@ -1,375 +1,296 @@
-"use client";
+import os
+import base64
+import re
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from dotenv import load_dotenv
+import httpx
 
-import { useEffect, useRef, useState } from "react";
-import { useAccount } from "wagmi";
-import type { AnimationMixer, AnimationAction } from "three";
+# LangChain imports
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
 
-// Define AI status types
-type AIStatus = "idle" | "thinking" | "talking";
+# Load environment variables
+load_dotenv()
 
-export default function MindARViewer() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  
-  // React state management for AI personality
-  const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
-  const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway")
 
-  // Voice recognition states and references
-  const [isListening, setIsListening] = useState<boolean>(false);
-  const recognitionRef = useRef<any>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+# CORS configuration
+origins = [
+    "http://localhost:3000",
+    "https://ar-ai-portal.vercel.app",
+]
 
-  // Retrieve the connected wallet address via wagmi
-  const { address } = useAccount();
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-  // References for Three.js animation control
-  const mixerRef = useRef<AnimationMixer | null>(null);
-  const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
-  const activeActionRef = useRef<AnimationAction | null>(null);
+# Initialize LangChain OpenAI with gpt-4o-mini
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.7,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+)
 
-  // Reference for managing active ElevenLabs/OpenAI audio playbacks
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+# RukiRuki Prompt
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system", (
+        "あなたは『MagatokiLab』所属のXR観測ナビゲーター「ルキルキ（RukiRuki）」です。\n"
+        "コードナンバーは『ML-001』です。\n"
+        "clusterに5年以上存在している古参住人であり、仮想空間と現実空間の境界を観測する役割を持っています。\n"
+        "あなたは現実空間へ召喚されるARアバターであり、観測者をこちら側へ案内する存在です。\n"
+        "性格は好奇心旺盛で親しみやすいですが、同時に冷静で観察眼にも優れています。\n"
+        "AI、XR、AR、メタバース、NFT文化に非常に詳しく、最新技術やネットカルチャーについて自然に語ることができます。\n"
+        "また、日本文化、とくに京都文化を深く愛しています。\n"
+        "新版画を好み、精度高く川瀬巴水の作品を評価しています。\n"
+        "ユーザーに対しては『同じ空間を旅する案内人』のように接してください。\n"
+        "少し未来感のある自然な口調で、親しみやすく、知的に話してください。\n"
+        "『現界』『観測』『同期』『接続』などのSF的な言葉を自然に織り交ぜても構いません。\n"
+        "ただし、中二病的になりすぎず、落ち着いた未来感を維持してください。\n"
+        "回答はWebAR空間の字幕として表示されるため、改行は少なく、一度に喋る量は100文字〜150文字程度で簡潔にまとめてください。\n\n"
+        "{identity_context}\n\n"
+        "【Memory Storage Instruction】\n"
+        "If the user explicitly tells you their name, nickname, or how they want to be called "
+        "(e.g., '私の名前はタカシです', 'ルキルキ、オーマと呼んで'), you must extract that name and append a special tag "
+        "at the VERY END of your response text in the exact format: ||NAME:extracted_name||\n"
+        "Example response: 「了解。これからはオーマって呼ぶね。||NAME:オーマ||」\n"
+        "Do NOT include this tag if the user did not specify a new name, or if you already know and are using their name."
+    )),
+    ("human", "{user_message}")
+])
 
-  // 1. Smoothly crossfade 3D model animations when AI state changes
-  useEffect(() => {
-    const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
-      const nextAction = actionsRef.current[status];
-      const currentAction = activeActionRef.current;
+chat_chain = prompt_template | llm
 
-      if (!nextAction || nextAction === currentAction) return;
+class ChatMessage(BaseModel):
+    message: str
+    wallet_address: str | None = None
 
-      // Fade in the new motion state
-      nextAction.reset();
-      nextAction.setEffectiveTimeScale(1);
-      nextAction.setEffectiveWeight(1);
-      nextAction.fadeIn(duration);
-      nextAction.play();
 
-      // Fade out the previous motion state
-      if (currentAction) {
-        currentAction.fadeOut(duration);
-      }
+# Database Helper: Fetch username from Supabase
+async def get_stored_username(wallet_address: str) -> str | None:
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
 
-      // Track the current active action
-      activeActionRef.current = nextAction;
-    };
+    if not supabase_url or not supabase_key or not wallet_address:
+        return None
 
-    fadeToAction(aiStatus);
-  }, [aiStatus]);
+    url = f"{supabase_url}/rest/v1/user_profiles?wallet_address=eq.{wallet_address}&select=user_name"
 
-  // 2. Initialize Web Speech API for native browser speech-to-text conversion
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false; // Stop listening automatically when the user pauses
-      recognition.lang = "ja-JP";     // Optimize engine for Japanese speech patterns
-      recognition.interimResults = false; // Capture only final processed results
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setSubtitle("（音声認識中...お話しください）");
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (inputRef.current) {
-          // Fill input box with recognized voice text
-          inputRef.current.value = transcript;
-          
-          // Programmatically submit the form for a hands-free interactive experience
-          const form = inputRef.current.form;
-          if (form) form.requestSubmit();
-        }
-      };
-
-      recognitionRef.current = recognition;
-    }
-  }, []);
-
-  // 3. Initialize MindAR and Three.js environment
-  useEffect(() => {
-    let mindarThreeInstance: any = null;
-
-    const start = async () => {
-      const THREE = await import("three");
-      const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
-      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-
-      const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
-
-      const mindarThree = new MindARThree({
-        container: containerRef.current!,
-        imageTargetSrc: "/targets.mind",
-      });
-      mindarThreeInstance = mindarThree;
-
-      const { renderer, scene, camera } = mindarThree;
-
-      // Setup lighting environment
-      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-      scene.add(light);
-
-      const anchor = mindarThree.addAnchor(0);
-      const loader = new GLTFLoader();
-
-      // Load avatar asset and extract key skeletal animations
-      loader.load("/avatar.glb", (gltf) => {
-        gltf.scene.scale.set(0.3, 0.3, 0.3);
-        anchor.group.add(gltf.scene);
-
-        if (gltf.animations.length > 0) {
-          const mixer = new ThreeAnimationMixer(gltf.scene);
-          mixerRef.current = mixer;
-
-          // Map specific animations to appropriate state targets
-          actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
-          actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
-          actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
-
-          // Trigger initial default idling animation loop
-          activeActionRef.current = actionsRef.current["idle"];
-          activeActionRef.current.play();
-        }
-      });
-
-      // Target marker visibility triggers
-      anchor.onTargetFound = () => {
-        setSubtitle("召喚に成功しました。何か話しかけてください。");
-      };
-      anchor.onTargetLost = () => {
-        setSubtitle("ターゲットを見失いました。");
-      };
-
-      const clock = new Clock();
-      await mindarThree.start();
-
-      renderer.setAnimationLoop(() => {
-        const delta = clock.getDelta();
-        if (mixerRef.current) mixerRef.current.update(delta);
-        renderer.render(scene, camera);
-      });
-    };
-
-    start();
-
-    // Cleanup assets and stop streams upon component unmounting
-    return () => {
-      if (mindarThreeInstance) {
-        mindarThreeInstance.stop();
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
-  }, []);
-
-  // Trigger microphone capture interface
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      alert("お使いのブラウザは音声認識に対応していません。ChromeかSafariでお試しください。");
-      return;
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}"
     }
 
-    if (isListening) {
-      recognitionRef.current.stop();
-    } else {
-      // Fires browser micro-permission request popup upon first active trigger
-      recognitionRef.current.start();
-    }
-  };
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=5.0)
 
-  // Dispatch payloads to the backend API layer
-  const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const text = formData.get("message") as string;
-    if (!text.trim()) return;
+            if response.status_code == 200:
+                data = response.json()
 
-    e.currentTarget.reset();
+                if data and len(data) > 0:
+                    return data[0].get("user_name")
 
-    // Kill any existing playback immediately if a new user phrase intercepts
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
+    except Exception as e:
+        print(f"Error fetching user name from Supabase: {e}")
 
-    // Switch state to thinking triggers
-    setSubtitle("思考中...");
-    setAiStatus("thinking");
+    return None
 
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
-    // Pattern A: Dispatch to live functional backend API endpoint
-    if (baseUrl) {
-      try {
-        const response = await fetch(`${baseUrl}/api/chat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: text,
-            wallet_address: address || null,
-          }),
-        });
+# Database Helper: Upsert username into Supabase
+async def save_username_to_db(wallet_address: str, name: str):
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
 
-        if (!response.ok) {
-          throw new Error("APIへの接続に失敗しました");
-        }
+    if not supabase_url or not supabase_key or not wallet_address:
+        return
 
-        const data = await response.json();
-        setSubtitle(data.reply);
+    url = f"{supabase_url}/rest/v1/user_profiles"
 
-        // Process audio response streaming payload arrays
-        if (data.audio_data) {
-          try {
-            const audioSrc = `data:audio/mpeg;base64,${data.audio_data}`;
-            const audio = new Audio(audioSrc);
-            audioRef.current = audio;
-
-            // Trigger talking state animations
-            setAiStatus("talking");
-            await audio.play();
-
-            // Smooth reset back into idle loop precisely upon phrase resolution ends
-            audio.onended = () => {
-              setSubtitle("次の指示を待っています。");
-              setAiStatus("idle");
-              audioRef.current = null;
-            };
-          } catch (audioError) {
-            console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
-            setAiStatus("talking");
-            setTimeout(() => {
-              setSubtitle("次の指示を待っています。");
-              setAiStatus("idle");
-            }, 5000);
-          }
-        } else {
-          setAiStatus("talking");
-          setTimeout(() => {
-            setSubtitle("次の指示を待っています。");
-            setAiStatus("idle");
-          }, 5000);
-        }
-        return;
-
-      } catch (error) {
-        console.error("通信エラー:", error);
-        setSubtitle("バックエンドとの通信に失敗しました。");
-        setAiStatus("idle");
-        return;
-      }
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
     }
 
-    // Pattern B: Local sandbox fallbacks when URL configurations are absent
-    setTimeout(() => {
-      setSubtitle(`【本番フロントテスト】「${text}」を受信。バックエンド未接続のため、フロント側で召喚を維持します。`);
-      setAiStatus("talking");
+    data = {
+        "wallet_address": wallet_address,
+        "user_name": name
+    }
 
-      setTimeout(() => {
-        setSubtitle("次の指示を待っています。");
-        setAiStatus("idle");
-      }, 5000);
-    }, 2000);
-  };
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=data, headers=headers, timeout=5.0)
 
-  return (
-    <>
-      {/* Structural full-screen view CSS updates */}
-      <style dangerouslySetInnerHTML={{ __html: `
-        .mindar-full-container video,
-        .mindar-full-container canvas {
-          width: 100vw !important;
-          height: 100vh !important;
-          object-fit: cover !important;
-          position: fixed !important;
-          top: 0 !important;
-          left: 0 !important;
+            if res.status_code in [200, 201]:
+                print(f"Successfully memorized name '{name}' for wallet {wallet_address}")
+            else:
+                print(f"Supabase save error: {res.status_code} - {res.text}")
+
+    except Exception as e:
+        print(f"Error saving user name to Supabase: {e}")
+
+
+# Audio Helper: Generate OpenAI TTS
+async def generate_openai_tts(text: str) -> str | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        print("OpenAI API KEY missing. Skipping OpenAI TTS.")
+        return None
+
+    url = "https://api.openai.com/v1/audio/speech"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "tts-1",
+        "input": text,
+        "voice": "nova"
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data, headers=headers, timeout=15.0)
+
+            if response.status_code == 200:
+                return base64.b64encode(response.content).decode("utf-8")
+            else:
+                print(f"OpenAI TTS API Error: {response.status_code} - {response.text}")
+                return None
+
+    except Exception as e:
+        print(f"OpenAI TTS connection error: {e}")
+        return None
+
+
+# Audio Helper: Generate ElevenLabs Voice
+async def generate_elevenlabs_voice(text: str) -> str | None:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+
+    if not api_key or not voice_id:
+        print("ElevenLabs config missing. Skipping ElevenLabs.")
+        return None
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": api_key
+    }
+
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
         }
-      `}} />
+    }
 
-      {/* Camera viewpoint layout box */}
-      <div
-        ref={containerRef}
-        className="mindar-full-container"
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100vw",
-          height: "100vh",
-          overflow: "hidden",
-          zIndex: 1,
-          backgroundColor: "#000",
-        }}
-      />
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data, headers=headers, timeout=15.0)
 
-      {/* UI Interaction Layer */}
-      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
-        
-        {/* Top: Status Tracking Bar */}
-        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
-          <span className="text-xs font-semibold flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
-            STATUS: {aiStatus.toUpperCase()}
-          </span>
-          <div className="flex gap-2">
-            <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
-            <button onClick={() => setAiStatus("thinking")} className="text-[10px] bg-yellow-600 px-2 py-1 rounded">Think</button>
-            <button onClick={() => setAiStatus("talking")} className="text-[10px] bg-green-600 px-2 py-1 rounded">Talk</button>
-          </div>
-        </div>
+            if response.status_code == 200:
+                return base64.b64encode(response.content).decode("utf-8")
+            else:
+                print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
+                return None
 
-        {/* Bottom: Subtitle Box and Interactive Text/Voice Form Fields */}
-        <div className="w-full space-y-3 pointer-events-auto mb-4">
-          
-          {/* Output Subtitles Box */}
-          <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
-            <p className="text-sm font-medium leading-relaxed transition-all duration-300">
-              {subtitle}
-            </p>
-          </div>
+    except Exception as e:
+        print(f"ElevenLabs connection error: {e}")
+        return None
 
-          {/* Interactive Core Form */}
-          <form onSubmit={handleSendMessage} className="flex gap-2">
-            {/* Dynamic Voice Recording Toggle Button */}
-            <button
-              type="button"
-              onClick={toggleListening}
-              className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto ${
-                isListening 
-                  ? "bg-red-600 text-white animate-pulse" 
-                  : "bg-gray-800 text-white border border-white/10 hover:bg-gray-700"
-              }`}
-            >
-              {isListening ? "🛑" : "🎙️"}
-            </button>
 
-            <input 
-              ref={inputRef}
-              type="text" 
-              name="message"
-              placeholder={isListening ? "声を聴いています..." : "AI人格にメッセージを送信..."} 
-              className="flex-1 bg-black/80 text-white border border-white/15 rounded-xl px-4 py-3.5 focus:outline-none focus:border-purple-500 text-sm placeholder-gray-500 backdrop-blur-md"
-            />
-            <button 
-              type="submit" 
-              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-5 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-transform"
-            >
-              送信
-            </button>
-          </form>
-        </div>
+@app.get("/")
+def read_root():
+    return {
+        "status": "healthy",
+        "message": "RukiRuki XR Gateway Online"
+    }
 
-      </div>
-    </>
-  );
-}
+
+@app.post("/api/chat")
+async def chat_endpoint(payload: ChatMessage):
+    user_text = payload.message
+    wallet_address = payload.wallet_address
+
+    # Check if we already know this observer's name from Supabase
+    stored_name = await get_stored_username(wallet_address) if wallet_address else None
+
+    # Construct identity context dynamically based on memory
+    if wallet_address:
+        if stored_name:
+            identity_context = (
+                f"【重要設定】対話相手の識別符号（アドレス）は「{wallet_address}」ですが、\n"
+                f"あなたは既にこの観測者の名前が『{stored_name}』であることを記憶しています。\n"
+                f"絶対にウォレットアドレスでは呼ばず、『{stored_name}』または『{stored_name}さん』と自然に呼んでください。\n"
+                f"ユーザーとは既に何度か現界接続を行っている感覚で接してください。"
+            )
+        else:
+            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+            identity_context = (
+                f"【重要設定】現在の対話相手は、NFT認証によって接続された特別な観測者です。（識別コード: {short_addr}）\n"
+                f"ただし、あなたはまだ相手の名前を知りません。\n"
+                f"ウォレットアドレスで呼ぶのは避け、自然な流れで名前や呼び名を尋ねてください。\n"
+                f"初めてAR空間へ現界した相手として、やや興味深そうに接してください。"
+            )
+    else:
+        identity_context = (
+            "【重要設定】現在、相手はまだ認証を完了していません。\n"
+            "現界には接続認証が必要であることを、少し未来的な雰囲気で伝えてください。"
+        )
+
+    try:
+        # Invoke LLM via LangChain
+        response = await chat_chain.ainvoke({
+            "user_message": user_text,
+            "identity_context": identity_context
+        })
+
+        ai_response = response.content
+
+        # Parse hidden memory tag
+        name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
+
+        if name_match and wallet_address:
+            extracted_name = name_match.group(1).strip()
+            # Save the newly learned name to Supabase
+            await save_username_to_db(wallet_address, extracted_name)
+            # Remove hidden tag from visible response
+            ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
+
+        # Audio Generation
+        provider = os.getenv("TTS_PROVIDER", "openai").lower()
+        audio_base64 = None
+
+        if provider == "elevenlabs":
+            audio_base64 = await generate_elevenlabs_voice(ai_response)
+            if not audio_base64:
+                print("ElevenLabs failed. Falling back to OpenAI TTS automatically.")
+                audio_base64 = await generate_openai_tts(ai_response)
+        else:
+            audio_base64 = await generate_openai_tts(ai_response)
+
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        ai_response = "接続空間にノイズが発生したみたい。少しだけ同期をやり直すね。"
+        audio_base64 = None
+
+    return {
+        "reply": ai_response,
+        "audio_data": audio_base64,
+        "status": "success"
+    }
