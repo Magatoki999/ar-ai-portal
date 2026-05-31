@@ -112,18 +112,19 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // 💡 [UPDATE] Adjusted Studio Lighting to remove unnatural facial/mouth shadows
-      // Boost ambient light heavily to soften any self-shadowing artifacts
-      const ambientLight = new THREE.AmbientLight(0xffffff, 2.0); 
+      // 💡 [UPDATE] Setup high-fidelity color spaces and filmic tone mapping to prevent pitch-black crushing
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.2; // Slightly brightened exposure context
+
+      // Setup soft, high-intensity ambient lighting environment
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.8); 
       scene.add(ambientLight);
 
-      // Reposition directional light to front-upper side (closer to camera view) to wipe out under-nose shadows
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); 
-      directionalLight.position.set(0, 4, 12); 
+      // Flashlight-like position right in front of the camera to wash away facial valleys shadows
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); 
+      directionalLight.position.set(0, 2, 10); 
       scene.add(directionalLight);
-
-      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 0.4); 
-      scene.add(hemisphereLight);
 
       const anchor = mindarThree.addAnchor(0);
 
@@ -134,13 +135,29 @@ export default function MindARViewer() {
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load avatar asset and extract key skeletal animations with cache buster v3
-      loader.load("/avatar.glb?v=3", (gltf) => {
-        // 💡 [UPDATE] Set avatar scale to exactly 1.0
+      // Load avatar asset with cache buster v4
+      loader.load("/avatar.glb?v=4", (gltf) => {
+        // 💡 [UPDATE] Set avatar scale to exactly 1.0 as requested
         gltf.scene.scale.set(1.0, 1.0, 1.0);
 
         // Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
         gltf.scene.rotation.x = Math.PI / 2;
+
+        // 💡 [UPDATE] Traverse avatar meshes and apply soft emissive properties to annihilate mustache artifacts
+        gltf.scene.traverse((child: any) => {
+          if (child.isMesh && child.material) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((mat) => {
+              // Inject a subtle baseline gray emission so shadows never drop to absolute black
+              if (mat.emissive) {
+                mat.emissive.setHex(0x2a2a2a); 
+              }
+              // Prevent anime avatar skins from looking greasy/wet under direct lights
+              if (mat.roughness !== undefined) mat.roughness = 0.9;
+              if (mat.metalness !== undefined) mat.metalness = 0.0;
+            });
+          }
+        });
 
         anchor.group.add(gltf.scene);
 
@@ -201,7 +218,6 @@ export default function MindARViewer() {
     if (isListening) {
       recognitionRef.current.stop();
     } else {
-      // Fires browser micro-permission request popup upon first active trigger
       recognitionRef.current.start();
     }
   };
@@ -215,19 +231,16 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
-    // Kill any existing playback immediately if a new user phrase intercepts
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
 
-    // Switch state to thinking triggers
     setSubtitle("思考中...");
     setAiStatus("thinking");
 
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
-    // Pattern A: Dispatch to live functional backend API endpoint
     if (baseUrl) {
       try {
         const response = await fetch(`${baseUrl}/api/chat`, {
@@ -248,18 +261,15 @@ export default function MindARViewer() {
         const data = await response.json();
         setSubtitle(data.reply);
 
-        // Process audio response streaming payload arrays
         if (data.audio_data) {
           try {
             const audioSrc = `data:audio/mpeg;base64,${data.audio_data}`;
             const audio = new Audio(audioSrc);
             audioRef.current = audio;
 
-            // Trigger talking state animations
             setAiStatus("talking");
             await audio.play();
 
-            // Smooth reset back into idle loop precisely upon phrase resolution ends
             audio.onended = () => {
               setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
@@ -290,7 +300,6 @@ export default function MindARViewer() {
       }
     }
 
-    // Pattern B: Local sandbox fallbacks when URL configurations are absent
     setTimeout(() => {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。バックエンド未接続のため、フロント側で召喚を維持します。`);
       setAiStatus("talking");
@@ -304,7 +313,6 @@ export default function MindARViewer() {
 
   return (
     <>
-      {/* Structural full-screen view CSS updates */}
       <style dangerouslySetInnerHTML={{ __html: `
         .mindar-full-container video,
         .mindar-full-container canvas {
@@ -317,7 +325,6 @@ export default function MindARViewer() {
         }
       `}} />
 
-      {/* Camera viewpoint layout box */}
       <div
         ref={containerRef}
         className="mindar-full-container"
@@ -333,10 +340,8 @@ export default function MindARViewer() {
         }}
       />
 
-      {/* UI Interaction Layer */}
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
         
-        {/* Top: Status Tracking Bar */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
           <span className="text-xs font-semibold flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
@@ -349,19 +354,15 @@ export default function MindARViewer() {
           </div>
         </div>
 
-        {/* Bottom: Subtitle Box and Interactive Text/Voice Form Fields */}
         <div className="w-full space-y-3 pointer-events-auto mb-4">
           
-          {/* Output Subtitles Box */}
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
             <p className="text-sm font-medium leading-relaxed transition-all duration-300">
               {subtitle}
             </p>
           </div>
 
-          {/* Interactive Core Form */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
-            {/* Dynamic Voice Recording Toggle Button */}
             <button
               type="button"
               onClick={toggleListening}
