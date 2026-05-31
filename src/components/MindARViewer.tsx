@@ -67,28 +67,26 @@ export default function MindARViewer() {
       recognition.lang = "ja-JP";     // Optimize engine for Japanese speech patterns
       recognition.interimResults = false; // Capture only final processed results
 
-      get_recognition_ready: {
-        recognition.onstart = () => {
-          setIsListening(true);
-          setSubtitle("（音声認識中...お話しください）");
-        };
+      recognition.onstart = () => {
+        setIsListening(true);
+        setSubtitle("（音声認識中...お話しください）");
+      };
 
-        recognition.onend = () => {
-          setIsListening(false);
-        };
+      recognition.onend = () => {
+        setIsListening(false);
+      };
 
-        recognition.onresult = (event: any) => {
-          const transcript = event.results[0][0].transcript;
-          if (inputRef.current) {
-            // Fill input box with recognized voice text
-            inputRef.current.value = transcript;
-            
-            // Programmatically submit the form for a hands-free interactive experience
-            const form = inputRef.current.form;
-            if (form) form.requestSubmit();
-          }
-        };
-      }
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (inputRef.current) {
+          // Fill input box with recognized voice text
+          inputRef.current.value = transcript;
+          
+          // Programmatically submit the form for a hands-free interactive experience
+          const form = inputRef.current.form;
+          if (form) form.requestSubmit();
+        }
+      };
 
       recognitionRef.current = recognition;
     }
@@ -114,9 +112,16 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // Setup lighting environment
-      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-      scene.add(light);
+      // 💡 [UPDATE] Enhanced Studio Lighting Setup to fix pitch-black avatar shadows
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // Soft white ambient light
+      scene.add(ambientLight);
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5); // Key directional light
+      directionalLight.position.set(0, 10, 10);
+      scene.add(directionalLight);
+
+      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 0.5); // Sky/ground context light
+      scene.add(hemisphereLight);
 
       const anchor = mindarThree.addAnchor(0);
 
@@ -127,9 +132,15 @@ export default function MindARViewer() {
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load avatar asset and extract key skeletal animations with cache buster
-      loader.load("/avatar.glb?v=1", (gltf) => {
-        gltf.scene.scale.set(0.3, 0.3, 0.3);
+      // Load avatar asset and extract key skeletal animations with cache buster v2
+      loader.load("/avatar.glb?v=2", (gltf) => {
+        // 💡 [UPDATE] Magnify avatar scale by exactly 3x (from 0.3 to 0.9)
+        gltf.scene.scale.set(0.9, 0.9, 0.9);
+
+        // 💡 [UPDATE] Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
+        // (Note: If it stands upside down or backwards, adjust to -Math.PI / 2 or add Y-axis rotation)
+        gltf.scene.rotation.x = Math.PI / 2;
+
         anchor.group.add(gltf.scene);
 
         if (gltf.animations.length > 0) {
@@ -257,7 +268,7 @@ export default function MindARViewer() {
             console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("次の指示を待っています。");
+              setSubtitle("次の指示を待っています.");
               setAiStatus("idle");
             }, 5000);
           }
