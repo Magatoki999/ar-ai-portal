@@ -112,15 +112,17 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // 💡 [UPDATE] Enhanced Studio Lighting Setup to fix pitch-black avatar shadows
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // Soft white ambient light
+      // 💡 [UPDATE] Adjusted Studio Lighting to remove unnatural facial/mouth shadows
+      // Boost ambient light heavily to soften any self-shadowing artifacts
+      const ambientLight = new THREE.AmbientLight(0xffffff, 2.0); 
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5); // Key directional light
-      directionalLight.position.set(0, 10, 10);
+      // Reposition directional light to front-upper side (closer to camera view) to wipe out under-nose shadows
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); 
+      directionalLight.position.set(0, 4, 12); 
       scene.add(directionalLight);
 
-      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 0.5); // Sky/ground context light
+      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 0.4); 
       scene.add(hemisphereLight);
 
       const anchor = mindarThree.addAnchor(0);
@@ -132,13 +134,12 @@ export default function MindARViewer() {
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load avatar asset and extract key skeletal animations with cache buster v2
-      loader.load("/avatar.glb?v=2", (gltf) => {
-        // 💡 [UPDATE] Magnify avatar scale by exactly 3x (from 0.3 to 0.9)
-        gltf.scene.scale.set(0.9, 0.9, 0.9);
+      // Load avatar asset and extract key skeletal animations with cache buster v3
+      loader.load("/avatar.glb?v=3", (gltf) => {
+        // 💡 [UPDATE] Set avatar scale to exactly 1.0
+        gltf.scene.scale.set(1.0, 1.0, 1.0);
 
-        // 💡 [UPDATE] Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
-        // (Note: If it stands upside down or backwards, adjust to -Math.PI / 2 or add Y-axis rotation)
+        // Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
         gltf.scene.rotation.x = Math.PI / 2;
 
         anchor.group.add(gltf.scene);
@@ -268,7 +269,7 @@ export default function MindARViewer() {
             console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("次の指示を待っています.");
+              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
             }, 5000);
           }
