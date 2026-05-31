@@ -112,17 +112,16 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // 💡 [UPDATE] Setup high-fidelity color spaces and filmic tone mapping to prevent pitch-black crushing
+      // 💡 [UPDATE] Adjusted Exposure to prevent over-brightness/whiteout
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.2; // Slightly brightened exposure context
+      renderer.toneMappingExposure = 1.0; // Restored from 1.2 to 1.0 for a natural look
 
-      // Setup soft, high-intensity ambient lighting environment
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.8); 
+      // 💡 [UPDATE] Balanced Studio Lighting to soften highlights while retaining shadow fix
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); // Toned down from 1.8 to 1.2
       scene.add(ambientLight);
 
-      // Flashlight-like position right in front of the camera to wash away facial valleys shadows
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); 
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // Toned down from 0.8 to 0.6
       directionalLight.position.set(0, 2, 10); 
       scene.add(directionalLight);
 
@@ -135,24 +134,23 @@ export default function MindARViewer() {
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load avatar asset with cache buster v4
-      loader.load("/avatar.glb?v=4", (gltf) => {
-        // 💡 [UPDATE] Set avatar scale to exactly 1.0 as requested
+      // Load avatar asset with cache buster v5
+      loader.load("/avatar.glb?v=5", (gltf) => {
+        // Set avatar scale to exactly 1.0
         gltf.scene.scale.set(1.0, 1.0, 1.0);
 
         // Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
         gltf.scene.rotation.x = Math.PI / 2;
 
-        // 💡 [UPDATE] Traverse avatar meshes and apply soft emissive properties to annihilate mustache artifacts
+        // 💡 [UPDATE] Lowered emissive hex to prevent looking overly glowing/radioactive
         gltf.scene.traverse((child: any) => {
           if (child.isMesh && child.material) {
             const materials = Array.isArray(child.material) ? child.material : [child.material];
             materials.forEach((mat) => {
-              // Inject a subtle baseline gray emission so shadows never drop to absolute black
+              // Inject a subtle baseline dark gray emission to prevent sharp black creases without bleeding light
               if (mat.emissive) {
-                mat.emissive.setHex(0x2a2a2a); 
+                mat.emissive.setHex(0x111111); // Dropped from 0x2a2a2a to 0x111111
               }
-              // Prevent anime avatar skins from looking greasy/wet under direct lights
               if (mat.roughness !== undefined) mat.roughness = 0.9;
               if (mat.metalness !== undefined) mat.metalness = 0.0;
             });
@@ -218,6 +216,12 @@ export default function MindARViewer() {
     if (isListening) {
       recognitionRef.current.stop();
     } else {
+      // 💡 [スマホ音声対策・マイク経由] タップした同期文脈でAudioオブジェクトの器を作ってアンロック
+      if (audioRef.current) audioRef.current.pause();
+      const audioInstance = new Audio();
+      audioInstance.play().catch(() => {});
+      audioRef.current = audioInstance;
+
       recognitionRef.current.start();
     }
   };
@@ -231,11 +235,15 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
+    // 💡 [スマホ音声対策・テキスト送信経由] タップした瞬間の同期文脈で枠を解放
     if (audioRef.current) {
       audioRef.current.pause();
-      audioRef.current = null;
     }
+    const audioInstance = audioRef.current && !audioRef.current.src ? audioRef.current : new Audio();
+    audioInstance.play().catch(() => {}); 
+    audioRef.current = audioInstance;
 
+    // Switch state to thinking triggers
     setSubtitle("思考中...");
     setAiStatus("thinking");
 
@@ -263,18 +271,28 @@ export default function MindARViewer() {
 
         if (data.audio_data) {
           try {
-            const audioSrc = `data:audio/mpeg;base64,${data.audio_data}`;
-            const audio = new Audio(audioSrc);
-            audioRef.current = audio;
+            // 💡 [UPDATE: スマホ即Idle/音声切断バグ対策] Base64文字列を安全なBlobオブジェクトURLへ変換
+            const binaryString = window.atob(data.audio_data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: "audio/mpeg" });
+            const audioUrl = URL.createObjectURL(blob);
 
-            setAiStatus("talking");
-            await audio.play();
-
-            audio.onended = () => {
+            // 💡 [UPDATE] play()を呼ぶ前に確実にイベントをバインドし、終了時にメモリを解放する
+            audioInstance.onended = () => {
               setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
-              audioRef.current = null;
+              URL.revokeObjectURL(audioUrl); // Clean browser runtime cache
             };
+
+            // 解放済みの枠にオブジェクトURLを流し込んで再生開始
+            audioInstance.src = audioUrl;
+            setAiStatus("talking");
+            await audioInstance.play();
+
           } catch (audioError) {
             console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
             setAiStatus("talking");
