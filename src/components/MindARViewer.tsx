@@ -4,33 +4,46 @@ import { useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import type { AnimationMixer, AnimationAction } from "three";
 
-// Define AI status types
 type AIStatus = "idle" | "thinking" | "talking";
 
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // React state management for AI personality
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
-
-  // Voice recognition states and references
   const [isListening, setIsListening] = useState<boolean>(false);
+  
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Retrieve the connected wallet address via wagmi
   const { address } = useAccount();
 
-  // References for Three.js animation control
+  // Three.js Animation References
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // Reference for managing active ElevenLabs/OpenAI audio playbacks
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // 💡 [NEW] Audio Pipeline References for Smart Lip-Sync
+  const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const freqDataRef = useRef<Uint8Array | null>(null);
+  
+  // 💡 [NEW] References to track the avatar's face mesh and mouth morph shape
+  const faceMeshRef = useRef<any>(null);
+  const mouthTargetIdxRef = useRef<number | null>(null);
 
-  // 1. Smoothly crossfade 3D model animations when AI state changes
+  // 1. Initialize Global Audio Instance on Mount (Prevents MediaElement Source duplication errors)
+  useEffect(() => {
+    audioInstanceRef.current = new Audio();
+    return () => {
+      if (audioInstanceRef.current) {
+        audioInstanceRef.current.pause();
+        audioInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  // 2. Smoothly crossfade 3D model animations when AI state changes
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -38,61 +51,61 @@ export default function MindARViewer() {
 
       if (!nextAction || nextAction === currentAction) return;
 
-      // Fade in the new motion state
-      nextAction.reset();
-      nextAction.setEffectiveTimeScale(1);
-      nextAction.setEffectiveWeight(1);
-      nextAction.fadeIn(duration);
-      nextAction.play();
-
-      // Fade out the previous motion state
-      if (currentAction) {
-        currentAction.fadeOut(duration);
-      }
-
-      // Track the current active action
+      nextAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(duration).play();
+      if (currentAction) currentAction.fadeOut(duration);
       activeActionRef.current = nextAction;
     };
-
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
-  // 2. Initialize Web Speech API for native browser speech-to-text conversion
+  // 3. Initialize Web Speech API for voice recording
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
-      recognition.continuous = false; // Stop listening automatically when the user pauses
-      recognition.lang = "ja-JP";     // Optimize engine for Japanese speech patterns
-      recognition.interimResults = false; // Capture only final processed results
+      recognition.continuous = false;
+      recognition.lang = "ja-JP";
+      recognition.interimResults = false;
 
       recognition.onstart = () => {
         setIsListening(true);
         setSubtitle("（音声認識中...お話しください）");
       };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
+      recognition.onend = () => setIsListening(false);
       recognition.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
         if (inputRef.current) {
-          // Fill input box with recognized voice text
           inputRef.current.value = transcript;
-          
-          // Programmatically submit the form for a hands-free interactive experience
           const form = inputRef.current.form;
           if (form) form.requestSubmit();
         }
       };
-
       recognitionRef.current = recognition;
     }
   }, []);
 
-  // 3. Initialize MindAR and Three.js environment
+  // 💡 [NEW] Safe Audio Context unlocker function required for mobile browsers
+  const initAudioPipeline = (audioInstance: HTMLAudioElement) => {
+    if (!audioContextRef.current) {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32; // Small size is optimal for basic amplitude calculations
+      
+      const source = audioCtx.createMediaElementSource(audioInstance);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      
+      audioContextRef.current = audioCtx;
+      analyserRef.current = analyser;
+      freqDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+    }
+    if (audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume();
+    }
+  };
+
+  // 4. Initialize MindAR and Three.js environment
   useEffect(() => {
     let mindarThreeInstance: any = null;
 
@@ -112,44 +125,57 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // 💡 [UPDATE] Adjusted Exposure to prevent over-brightness/whiteout
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.0; // Restored from 1.2 to 1.0 for a natural look
+      renderer.toneMappingExposure = 1.0; 
 
-      // 💡 [UPDATE] Balanced Studio Lighting to soften highlights while retaining shadow fix
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); // Toned down from 1.8 to 1.2
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // Toned down from 0.8 to 0.6
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); 
       directionalLight.position.set(0, 2, 10); 
       scene.add(directionalLight);
 
       const anchor = mindarThree.addAnchor(0);
 
-      // Setup DRACO decoder for compressed meshes
       const dracoLoader = new DRACOLoader();
       dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load avatar asset with cache buster v5
-      loader.load("/avatar.glb?v=5", (gltf) => {
-        // Set avatar scale to exactly 1.0
+      // Load asset via cache buster v6
+      loader.load("/avatar.glb?v=6", (gltf) => {
         gltf.scene.scale.set(1.0, 1.0, 1.0);
-
-        // Rotate avatar 90 degrees on X-axis to stand up straight relative to the image target
         gltf.scene.rotation.x = Math.PI / 2;
 
-        // 💡 [UPDATE] Lowered emissive hex to prevent looking overly glowing/radioactive
         gltf.scene.traverse((child: any) => {
+          // 💡 [UPDATE: LIP-SYNC] Automatically locate the facial mesh and the 'Aa' vowel morph target
+          if (child.isMesh && child.morphTargetDictionary) {
+            // Scan common VRoid shape key layouts for mouth opening profiles
+            const candidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
+            for (const key of candidates) {
+              if (child.morphTargetDictionary[key] !== undefined) {
+                faceMeshRef.current = child;
+                mouthTargetIdxRef.current = child.morphTargetDictionary[key];
+                break;
+              }
+            }
+          }
+
+          // 💡 [UPDATE: LIGHTING] Smart emissive filtration to fix hair over-brightness
           if (child.isMesh && child.material) {
             const materials = Array.isArray(child.material) ? child.material : [child.material];
             materials.forEach((mat) => {
-              // Inject a subtle baseline dark gray emission to prevent sharp black creases without bleeding light
+              // Discern if the mesh element corresponds to a hair configuration
+              const isHair = child.name.toLowerCase().includes("hair") || (mat.name && mat.name.toLowerCase().includes("hair"));
+              
               if (mat.emissive) {
-                mat.emissive.setHex(0x111111); // Dropped from 0x2a2a2a to 0x111111
+                if (isHair) {
+                  mat.emissive.setHex(0x000000); // 髪の毛パーツは完全に発光を切り、白飛びを防止
+                } else {
+                  mat.emissive.setHex(0x080808); // 肌や服は薄く発光させ、パキッとした黒いお髭影を防御
+                }
               }
               if (mat.roughness !== undefined) mat.roughness = 0.9;
               if (mat.metalness !== undefined) mat.metalness = 0.0;
@@ -162,25 +188,17 @@ export default function MindARViewer() {
         if (gltf.animations.length > 0) {
           const mixer = new ThreeAnimationMixer(gltf.scene);
           mixerRef.current = mixer;
-
-          // Map specific animations to appropriate state targets
           actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
           actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
           actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
 
-          // Trigger initial default idling animation loop
           activeActionRef.current = actionsRef.current["idle"];
           activeActionRef.current.play();
         }
       });
 
-      // Target marker visibility triggers
-      anchor.onTargetFound = () => {
-        setSubtitle("召喚に成功しました。何か話しかけてください。");
-      };
-      anchor.onTargetLost = () => {
-        setSubtitle("ターゲットを見失いました。");
-      };
+      anchor.onTargetFound = () => setSubtitle("召喚に成功しました。何か話しかけてください。");
+      anchor.onTargetLost = () => setSubtitle("ターゲットを見失いました。");
 
       const clock = new Clock();
       await mindarThree.start();
@@ -188,25 +206,42 @@ export default function MindARViewer() {
       renderer.setAnimationLoop(() => {
         const delta = clock.getDelta();
         if (mixerRef.current) mixerRef.current.update(delta);
+        
+        // 💡 [UPDATE: REAL-TIME LIP-SYNC RUNTIME]
+        const audioInstance = audioInstanceRef.current;
+        const isVoicePlaying = audioInstance && !audioInstance.paused;
+
+        if (isVoicePlaying && analyserRef.current && freqDataRef.current && faceMeshRef.current && mouthTargetIdxRef.current !== null) {
+          analyserRef.current.getByteFrequencyData(freqDataRef.current);
+          
+          // Calculate average amplitude across captured frames
+          let totalAmplitude = 0;
+          for (let i = 0; i < freqDataRef.current.length; i++) {
+            totalAmplitude += freqDataRef.current[i];
+          }
+          const averageVolume = totalAmplitude / freqDataRef.current.length;
+          
+          // Map voice amplitude to morph weights, scaling up slightly for visual impact
+          const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
+          
+          // Inject real-time values into the Three.js mesh's morph array
+          faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = morphWeight > 0.05 ? morphWeight : 0;
+        } else if (faceMeshRef.current && mouthTargetIdxRef.current !== null) {
+          // Snap mouth shut when audio playback terminates or pauses
+          faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = 0;
+        }
+
         renderer.render(scene, camera);
       });
     };
 
     start();
 
-    // Cleanup assets and stop streams upon component unmounting
     return () => {
-      if (mindarThreeInstance) {
-        mindarThreeInstance.stop();
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
+      if (mindarThreeInstance) mindarThreeInstance.stop();
     };
   }, []);
 
-  // Trigger microphone capture interface
   const toggleListening = () => {
     if (!recognitionRef.current) {
       alert("お使いのブラウザは音声認識に対応していません。ChromeかSafariでお試しください。");
@@ -216,17 +251,15 @@ export default function MindARViewer() {
     if (isListening) {
       recognitionRef.current.stop();
     } else {
-      // 💡 [スマホ音声対策・マイク経由] タップした同期文脈でAudioオブジェクトの器を作ってアンロック
-      if (audioRef.current) audioRef.current.pause();
-      const audioInstance = new Audio();
-      audioInstance.play().catch(() => {});
-      audioRef.current = audioInstance;
-
+      const audioInstance = audioInstanceRef.current;
+      if (audioInstance) {
+        audioInstance.play().catch(() => {});
+        initAudioPipeline(audioInstance);
+      }
       recognitionRef.current.start();
     }
   };
 
-  // Dispatch payloads to the backend API layer
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -235,15 +268,15 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
-    // 💡 [スマホ音声対策・テキスト送信経由] タップした瞬間の同期文脈で枠を解放
-    if (audioRef.current) {
-      audioRef.current.pause();
+    // 💡 Unlock audio context within the user's explicit tap scope
+    const audioInstance = audioInstanceRef.current;
+    if (audioInstance) {
+      audioInstance.pause();
+      audioInstance.src = ""; // Flush previous track references
+      audioInstance.play().catch(() => {});
+      initAudioPipeline(audioInstance);
     }
-    const audioInstance = audioRef.current && !audioRef.current.src ? audioRef.current : new Audio();
-    audioInstance.play().catch(() => {}); 
-    audioRef.current = audioInstance;
 
-    // Switch state to thinking triggers
     setSubtitle("思考中...");
     setAiStatus("thinking");
 
@@ -253,25 +286,17 @@ export default function MindARViewer() {
       try {
         const response = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: text,
-            wallet_address: address || null,
-          }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, wallet_address: address || null }),
         });
 
-        if (!response.ok) {
-          throw new Error("APIへの接続に失敗しました");
-        }
+        if (!response.ok) throw new Error("APIへの接続に失敗しました");
 
         const data = await response.json();
         setSubtitle(data.reply);
 
-        if (data.audio_data) {
+        if (data.audio_data && audioInstance) {
           try {
-            // 💡 [UPDATE: スマホ即Idle/音声切断バグ対策] Base64文字列を安全なBlobオブジェクトURLへ変換
             const binaryString = window.atob(data.audio_data);
             const len = binaryString.length;
             const bytes = new Uint8Array(len);
@@ -281,20 +306,18 @@ export default function MindARViewer() {
             const blob = new Blob([bytes], { type: "audio/mpeg" });
             const audioUrl = URL.createObjectURL(blob);
 
-            // 💡 [UPDATE] play()を呼ぶ前に確実にイベントをバインドし、終了時にメモリを解放する
             audioInstance.onended = () => {
               setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
-              URL.revokeObjectURL(audioUrl); // Clean browser runtime cache
+              URL.revokeObjectURL(audioUrl); 
             };
 
-            // 解放済みの枠にオブジェクトURLを流し込んで再生開始
             audioInstance.src = audioUrl;
             setAiStatus("talking");
             await audioInstance.play();
 
           } catch (audioError) {
-            console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
+            console.error("音声再生エラー。フォールバック処理を行います:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
               setSubtitle("次の指示を待っています。");
@@ -309,7 +332,6 @@ export default function MindARViewer() {
           }, 5000);
         }
         return;
-
       } catch (error) {
         console.error("通信エラー:", error);
         setSubtitle("バックエンドとの通信に失敗しました。");
@@ -318,10 +340,10 @@ export default function MindARViewer() {
       }
     }
 
+    // Local standard mock fallback context
     setTimeout(() => {
-      setSubtitle(`【本番フロントテスト】「${text}」を受信。バックエンド未接続のため、フロント側で召喚を維持します。`);
+      setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
-
       setTimeout(() => {
         setSubtitle("次の指示を待っています。");
         setAiStatus("idle");
@@ -348,13 +370,8 @@ export default function MindARViewer() {
         className="mindar-full-container"
         style={{
           position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100vw",
-          height: "100vh",
-          overflow: "hidden",
-          zIndex: 1,
-          backgroundColor: "#000",
+          top: 0, left: 0, width: "100vw", height: "100vh",
+          overflow: "hidden", zIndex: 1, backgroundColor: "#000",
         }}
       />
 
@@ -373,7 +390,6 @@ export default function MindARViewer() {
         </div>
 
         <div className="w-full space-y-3 pointer-events-auto mb-4">
-          
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
             <p className="text-sm font-medium leading-relaxed transition-all duration-300">
               {subtitle}
@@ -385,9 +401,7 @@ export default function MindARViewer() {
               type="button"
               onClick={toggleListening}
               className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto ${
-                isListening 
-                  ? "bg-red-600 text-white animate-pulse" 
-                  : "bg-gray-800 text-white border border-white/10 hover:bg-gray-700"
+                isListening ? "bg-red-600 text-white animate-pulse" : "bg-gray-800 text-white border border-white/10 hover:bg-gray-700"
               }`}
             >
               {isListening ? "🛑" : "🎙️"}
