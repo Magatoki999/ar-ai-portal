@@ -4,28 +4,33 @@ import { useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import type { AnimationMixer, AnimationAction } from "three";
 
-// AIのステート定義
+// Define AI status types
 type AIStatus = "idle" | "thinking" | "talking";
 
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // ReactでAIの状態を管理
+  // React state management for AI personality
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
 
-  // 💡 接続中のウォレットアドレスを取得（SBTAuthGateを通過しているため確実に取得可能）
+  // Voice recognition states and references
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const recognitionRef = useRef<any>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Retrieve the connected wallet address via wagmi
   const { address } = useAccount();
 
-  // Three.jsのアニメーション制御用Ref
+  // References for Three.js animation control
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // 🔊 ElevenLabsの再生音声管理用Ref（連打時の音声重なり防止とクリーンアップ用）
+  // Reference for managing active ElevenLabs/OpenAI audio playbacks
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // 1. AIのステート(aiStatus)が変更されたら、3Dモデルのモーションをスムーズに切り替える
+  // 1. Smoothly crossfade 3D model animations when AI state changes
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -33,31 +38,65 @@ export default function MindARViewer() {
 
       if (!nextAction || nextAction === currentAction) return;
 
-      // 新しいモーションをフェードイン
+      // Fade in the new motion state
       nextAction.reset();
       nextAction.setEffectiveTimeScale(1);
       nextAction.setEffectiveWeight(1);
       nextAction.fadeIn(duration);
       nextAction.play();
 
-      // 前のモーションをフェードアウト
+      // Fade out the previous motion state
       if (currentAction) {
         currentAction.fadeOut(duration);
       }
 
-      // 現在のアクションを更新
+      // Track the current active action
       activeActionRef.current = nextAction;
     };
 
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
-  // 2. MindAR / Three.js の初期化
+  // 2. Initialize Web Speech API for native browser speech-to-text conversion
   useEffect(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let mindarThreeInstance: any = null;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false; // Stop listening automatically when the user pauses
+      recognition.lang = "ja-JP";     // Optimize engine for Japanese speech patterns
+      recognition.interimResults = false; // Capture only final processed results
 
-      const start = async () => {
+      recognition.onstart = () => {
+        setIsListening(true);
+        setSubtitle("（音声認識中...お話しください）");
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (inputRef.current) {
+          // Fill input box with recognized voice text
+          inputRef.current.value = transcript;
+          
+          // Programmatically submit the form for a hands-free interactive experience
+          const form = inputRef.current.form;
+          if (form) form.requestSubmit();
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  // 3. Initialize MindAR and Three.js environment
+  useEffect(() => {
+    let mindarThreeInstance: any = null;
+
+    const start = async () => {
       const THREE = await import("three");
       const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
       const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
@@ -72,13 +111,14 @@ export default function MindARViewer() {
 
       const { renderer, scene, camera } = mindarThree;
 
-      // ライト配置
+      // Setup lighting environment
       const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
       scene.add(light);
 
       const anchor = mindarThree.addAnchor(0);
       const loader = new GLTFLoader();
 
+      // Load avatar asset and extract key skeletal animations
       loader.load("/nondraco.glb", (gltf) => {
         gltf.scene.scale.set(0.3, 0.3, 0.3);
         anchor.group.add(gltf.scene);
@@ -87,18 +127,18 @@ export default function MindARViewer() {
           const mixer = new ThreeAnimationMixer(gltf.scene);
           mixerRef.current = mixer;
 
-          // GLB内のアニメーションを各ステートに割り当て
+          // Map specific animations to appropriate state targets
           actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
           actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
           actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
 
-          // 初期モーション(Idle)の再生
+          // Trigger initial default idling animation loop
           activeActionRef.current = actionsRef.current["idle"];
           activeActionRef.current.play();
         }
       });
 
-      // ターゲットを認識した時のイベントリスナー
+      // Target marker visibility triggers
       anchor.onTargetFound = () => {
         setSubtitle("召喚に成功しました。何か話しかけてください。");
       };
@@ -118,12 +158,11 @@ export default function MindARViewer() {
 
     start();
 
-    // クリーンアップ
+    // Cleanup assets and stop streams upon component unmounting
     return () => {
       if (mindarThreeInstance) {
         mindarThreeInstance.stop();
       }
-      // 画面を離れた時やリロード時に音声を確実に止める
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -131,7 +170,22 @@ export default function MindARViewer() {
     };
   }, []);
 
-  // 💡 環境変数に応じた通信・ハンドラー
+  // Trigger microphone capture interface
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("お使いのブラウザは音声認識に対応していません。ChromeかSafariでお試しください。");
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+    } else {
+      // Fires browser micro-permission request popup upon first active trigger
+      recognitionRef.current.start();
+    }
+  };
+
+  // Dispatch payloads to the backend API layer
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -140,20 +194,19 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
-    // 💡 連続で話しかけられた場合、現在再生中のアシエルの声を止める
+    // Kill any existing playback immediately if a new user phrase intercepts
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
 
-    // 1. 思考中ステートに変更
+    // Switch state to thinking triggers
     setSubtitle("思考中...");
     setAiStatus("thinking");
 
-    // 環境変数からバックエンドURLを取得
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
-    // 💡 Aパターン: バックエンドのURLがある場合（ローカル開発・本番Render連携など）
+    // Pattern A: Dispatch to live functional backend API endpoint
     if (baseUrl) {
       try {
         const response = await fetch(`${baseUrl}/api/chat`, {
@@ -163,7 +216,7 @@ export default function MindARViewer() {
           },
           body: JSON.stringify({
             message: text,
-            wallet_address: address || null, // 認証済みウォレットアドレスを含める
+            wallet_address: address || null,
           }),
         });
 
@@ -172,25 +225,20 @@ export default function MindARViewer() {
         }
 
         const data = await response.json();
-
-        // 字幕にアシエルのセリフを反映
         setSubtitle(data.reply);
 
-        // 💡 ElevenLabsから音声データが正常に返ってきた場合の処理
+        // Process audio response streaming payload arrays
         if (data.audio_data) {
           try {
-            // Base64文字列をオーディオソースに変換
             const audioSrc = `data:audio/mpeg;base64,${data.audio_data}`;
             const audio = new Audio(audioSrc);
             audioRef.current = audio;
 
-            // 発話ステートに変更（モーション開始）
+            // Trigger talking state animations
             setAiStatus("talking");
-
-            // 音声の再生を開始
             await audio.play();
 
-            // 🔮 音声の再生が完了した瞬間に自動でIdle（待機状態）へ戻す
+            // Smooth reset back into idle loop precisely upon phrase resolution ends
             audio.onended = () => {
               setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
@@ -198,7 +246,6 @@ export default function MindARViewer() {
             };
           } catch (audioError) {
             console.error("音声の再生に失敗しました。フォールバックタイマーに切り替えます:", audioError);
-            // 音声API側などでエラーが起きた場合のセーフティネット（5秒タイマー）
             setAiStatus("talking");
             setTimeout(() => {
               setSubtitle("次の指示を待っています。");
@@ -206,7 +253,6 @@ export default function MindARViewer() {
             }, 5000);
           }
         } else {
-          // 音声が何らかの理由で含まれていなかった場合（従来の5秒タイマー挙動）
           setAiStatus("talking");
           setTimeout(() => {
             setSubtitle("次の指示を待っています。");
@@ -223,12 +269,11 @@ export default function MindARViewer() {
       }
     }
 
-    // 💡 Bパターン: バックエンドURLが無い場合（Vercel初期フロントテスト用セーフティネット）
+    // Pattern B: Local sandbox fallbacks when URL configurations are absent
     setTimeout(() => {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。バックエンド未接続のため、フロント側で召喚を維持します。`);
       setAiStatus("talking");
 
-      // 5秒後にIdleに戻す
       setTimeout(() => {
         setSubtitle("次の指示を待っています。");
         setAiStatus("idle");
@@ -238,7 +283,7 @@ export default function MindARViewer() {
 
   return (
     <>
-      {/* 全画面対策CSS */}
+      {/* Structural full-screen view CSS updates */}
       <style dangerouslySetInnerHTML={{ __html: `
         .mindar-full-container video,
         .mindar-full-container canvas {
@@ -251,7 +296,7 @@ export default function MindARViewer() {
         }
       `}} />
 
-      {/* ARカメラコンテナ */}
+      {/* Camera viewpoint layout box */}
       <div
         ref={containerRef}
         className="mindar-full-container"
@@ -267,39 +312,52 @@ export default function MindARViewer() {
         }}
       />
 
-      {/* UIレイヤー (TailwindCSS) */}
+      {/* UI Interaction Layer */}
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
         
-        {/* 上部：ステータスバー */}
+        {/* Top: Status Tracking Bar */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
           <span className="text-xs font-semibold flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
             STATUS: {aiStatus.toUpperCase()}
           </span>
           <div className="flex gap-2">
-            {/* デバッグ用手動切り替えボタン */}
             <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
             <button onClick={() => setAiStatus("thinking")} className="text-[10px] bg-yellow-600 px-2 py-1 rounded">Think</button>
             <button onClick={() => setAiStatus("talking")} className="text-[10px] bg-green-600 px-2 py-1 rounded">Talk</button>
           </div>
         </div>
 
-        {/* 下部：字幕 ＆ 入力フォーム */}
+        {/* Bottom: Subtitle Box and Interactive Text/Voice Form Fields */}
         <div className="w-full space-y-3 pointer-events-auto mb-4">
           
-          {/* 字幕コンテナ */}
+          {/* Output Subtitles Box */}
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
             <p className="text-sm font-medium leading-relaxed transition-all duration-300">
               {subtitle}
             </p>
           </div>
 
-          {/* チャット入力フォーム */}
+          {/* Interactive Core Form */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
+            {/* Dynamic Voice Recording Toggle Button */}
+            <button
+              type="button"
+              onClick={toggleListening}
+              className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto ${
+                isListening 
+                  ? "bg-red-600 text-white animate-pulse" 
+                  : "bg-gray-800 text-white border border-white/10 hover:bg-gray-700"
+              }`}
+            >
+              {isListening ? "🛑" : "🎙️"}
+            </button>
+
             <input 
+              ref={inputRef}
               type="text" 
               name="message"
-              placeholder="AI人格にメッセージを送信..." 
+              placeholder={isListening ? "声を聴いています..." : "AI人格にメッセージを送信..."} 
               className="flex-1 bg-black/80 text-white border border-white/15 rounded-xl px-4 py-3.5 focus:outline-none focus:border-purple-500 text-sm placeholder-gray-500 backdrop-blur-md"
             />
             <button 
