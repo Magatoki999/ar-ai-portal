@@ -1,21 +1,22 @@
 import os
 import base64
+import re  # Added for parsing hidden memory tags
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import httpx  # 高速な非同期通信のために追加
+import httpx
 
-# LangChain関連のインポート
+# LangChain imports
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
-# .env ファイルから環境変数を読み込み
+# Load environment variables
 load_dotenv()
 
 app = FastAPI(title="WebAR AI Portal Backend")
 
-# CORS設定
+# CORS configuration
 origins = [
     "http://localhost:3000",
     "https://ar-ai-portal.vercel.app",
@@ -29,14 +30,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LangChain & OpenAI の初期化
+# Initialize LangChain OpenAI with gpt-4o-mini
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.7,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# アシエル（ACIEL）の人格プロンプト定義
+# Expand prompt template to handle dynamic context and implicit memory learning
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", (
         "あなたは『MagatokiLab』の研究員であり、機関連絡員を務める「アシエル（ACIEL）」です。\n"
@@ -44,12 +45,17 @@ prompt_template = ChatPromptTemplate.from_messages([
         "知的で冷静、少しミステリアスでありながら、現界観測や技術研究に対して強い好奇心を持っています。\n"
         "ユーザー（観測者）に対しては丁寧かつ少し距離を置いた独特の口調で接してください。\n"
         "回答はWebAR空間の「字幕」として表示されるため、改行は少なく、一度に喋る量は100文字〜150文字程度で簡潔にまとめるようにしてください。\n\n"
-        "{wallet_context}"  # ここにウォレット連動の特別扱いプロンプトが動的に入る
+        "{identity_context}\n\n"
+        "【Memory Storage Instruction】\n"
+        "If the user explicitly tells you their name, nickname, or how they want to be called "
+        "(e.g., '私の名前はタカシです', 'オーマと呼んでください'), you must extract that name and append a special tag "
+        "at the VERY END of your response text in the exact format: ||NAME:extracted_name||\n"
+        "Example response: 「承知いたしました。これからはタカシ様とお呼びしますね。||NAME:タカシ||」\n"
+        "Do NOT include this tag if the user did not specify a new name, or if you already know and are using their name."
     )),
     ("human", "{user_message}")
 ])
 
-# チェーンの結合
 chat_chain = prompt_template | llm
 
 class ChatMessage(BaseModel):
@@ -57,11 +63,64 @@ class ChatMessage(BaseModel):
     wallet_address: str | None = None
 
 
-# 🔊 OpenAI TTSから音声（Base64）を取得する非同期関数
+# Database Helper: Fetch username from Supabase
+async def get_stored_username(wallet_address: str) -> str | None:
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key or not wallet_address:
+        return None
+        
+    url = f"{supabase_url}/rest/v1/user_profiles?wallet_address=eq.{wallet_address}&select=user_name"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}"
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=5.0)
+            if response.status_code == 200:
+                data = response.json()
+                if data and len(data) > 0:
+                    return data[0].get("user_name")
+    except Exception as e:
+        print(f"Error fetching user name from Supabase: {e}")
+    return None
+
+
+# Database Helper: Upsert username into Supabase
+async def save_username_to_db(wallet_address: str, name: str):
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key or not wallet_address:
+        return
+        
+    url = f"{supabase_url}/rest/v1/user_profiles"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"  # Supabase Upsert behavior
+    }
+    data = {
+        "wallet_address": wallet_address,
+        "user_name": name
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=data, headers=headers, timeout=5.0)
+            if res.status_code in [200, 201]:
+                print(f"Successfully memorized name '{name}' for wallet {wallet_address}")
+            else:
+                print(f"Supabase save error: {res.status_code} - {res.text}")
+    except Exception as e:
+        print(f"Error saving user name to Supabase: {e}")
+
+
+# Audio Helper: Generate OpenAI TTS
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("OpenAI API KEYがありません。音声生成をスキップします。")
+        print("OpenAI API KEY missing. Skipping OpenAI TTS.")
         return None
     
     url = "https://api.openai.com/v1/audio/speech"
@@ -72,29 +131,28 @@ async def generate_openai_tts(text: str) -> str | None:
     data = {
         "model": "tts-1",
         "input": text,
-        "voice": "nova"  # 女性寄りかつ落ち着いた知的な声質
+        "voice": "nova"
     }
-    
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
             else:
-                print(f"OpenAI TTS APIエラー: {response.status_code} - {response.text}")
+                print(f"OpenAI TTS API Error: {response.status_code} - {response.text}")
                 return None
     except Exception as e:
-        print(f"OpenAI TTS通信エラー: {e}")
+        print(f"OpenAI TTS connection error: {e}")
         return None
 
 
-# 🔊 ElevenLabsから音声（Base64）を取得する非同期関数
+# Audio Helper: Generate ElevenLabs Voice
 async def generate_elevenlabs_voice(text: str) -> str | None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
     
     if not api_key or not voice_id:
-        print("ElevenLabsの設定が環境変数にありません。音声生成をスキップします。")
+        print("ElevenLabs config missing. Skipping ElevenLabs.")
         return None
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -111,17 +169,16 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
             "similarity_boost": 0.75
         }
     }
-
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
             else:
-                print(f"ElevenLabs APIエラー: {response.status_code} - {response.text}")
+                print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
                 return None
     except Exception as e:
-        print(f"ElevenLabs通信エラー: {e}")
+        print(f"ElevenLabs connection error: {e}")
         return None
 
 
@@ -133,42 +190,60 @@ def read_root():
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
     user_text = payload.message
+    wallet_address = payload.wallet_address
     
-    # ① ウォレットアドレスに応じた特別扱いのコンテキスト生成
-    if payload.wallet_address:
-        short_addr = f"{payload.wallet_address[:6]}...{payload.wallet_address[-4:]}"
-        wallet_context = (
-            f"【重要設定】現在の対話相手は、SBT（Soulbound Token）によって選ばれた特別な観測者です。\n"
-            f"相手の識別符号（ウォレットアドレス）は「{short_addr}」です。\n"
-            f"彼らを単なるユーザーではなく『現界せし観測者』として特別に扱い、親愛と敬意を持って接してください。\n"
-            f"会話の最初や要所で『よくぞ現界してくれた、観測者{short_addr}よ』というニュアンスを含めて歓迎してください。"
-        )
+    # Check if we already know this observer's name from Supabase
+    stored_name = await get_stored_username(wallet_address) if wallet_address else None
+    
+    # Construct identity context dynamically based on memory
+    if wallet_address:
+        if stored_name:
+            identity_context = (
+                f"【重要設定】対話相手の識別符号（アドレス）は「{wallet_address}」ですが、\n"
+                f"あなたは既にこの観測者の名前が『{stored_name}』であることを記憶しています。\n"
+                f"絶対にウォレットアドレスでは呼ばず、親愛を込めて『{stored_name}』、または『{stored_name}様』と名前で呼んで接してください。"
+            )
+        else:
+            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+            identity_context = (
+                f"【重要設定】現在の対話相手は、SBTによって選ばれた特別な観測者（アドレス: {short_addr}）です。\n"
+                f"しかし、あなたはまだ相手の『名前』を知りません。アドレスで直接呼ぶのは不自然で無作法なため避けてください。\n"
+                f"会話の中で、ミステリアスかつ丁寧に、相手の名前や現界した際の呼び名を尋ねるか、名乗るように促してください。"
+            )
     else:
-        wallet_context = "【重要設定】現在、相手はまだ認証を完了していません。警戒はせずとも、現界を促すような神秘的な態度を取ってください。"
+        identity_context = "【重要設定】現在、相手はまだ認証を完了していません。現界を促すような神秘的な態度を取ってください。"
     
     try:
-        # LangChain経由でLLMを呼び出し
+        # Invoke LLM via LangChain
         response = await chat_chain.ainvoke({
             "user_message": user_text,
-            "wallet_context": wallet_context
+            "identity_context": identity_context
         })
         ai_response = response.content
         
-        # 💡 環境変数から音声プロバイダーを取得（未指定の場合はデフォルトで "openai"）
+        # Parse hidden memory tag: e.g., "Nice to meet you! ||NAME:オーマ||"
+        name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
+        if name_match and wallet_address:
+            extracted_name = name_match.group(1).strip()
+            # Save the newly learned name to Supabase asynchronously
+            await save_username_to_db(wallet_address, extracted_name)
+            # Remove the tag from the final response text so it remains invisible to the user
+            ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
+        
+        # Audio Generation with dynamic provider switching and smart fallback
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         
         if provider == "elevenlabs":
             audio_base64 = await generate_elevenlabs_voice(ai_response)
-            # 💡 【スマートフォールバック】ElevenLabs無料枠制限（401）等で失敗したら自動でOpenAI TTSで補完
             if not audio_base64:
-                print("ElevenLabsでの生成に失敗したため、自動的にOpenAI TTSに切り替えます。")
+                print("ElevenLabs failed. Falling back to OpenAI TTS automatically.")
                 audio_base64 = await generate_openai_tts(ai_response)
         else:
             audio_base64 = await generate_openai_tts(ai_response)
-        
+            
     except Exception as e:
-        print(f"LLMエラー: {e}")
+        print(f"LLM Error: {e}")
         ai_response = "現界通信にノイズが発生しました。観測を一時中断します。"
         audio_base64 = None
 
