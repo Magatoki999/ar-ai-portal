@@ -22,17 +22,28 @@ export default function MindARViewer() {
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // 💡 [NEW] Audio Pipeline References for Smart Lip-Sync
+  // Audio Pipeline References for Smart Lip-Sync
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 💡 [NEW] References to track the avatar's face mesh and mouth morph shape
+  // References for Mouth Lip-Sync
   const faceMeshRef = useRef<any>(null);
   const mouthTargetIdxRef = useRef<number | null>(null);
 
-  // 1. Initialize Global Audio Instance on Mount (Prevents MediaElement Source duplication errors)
+  // 💡 [NEW] References for Blink & Natural Motion
+  const blinkMeshRef = useRef<any>(null);
+  const blinkTargetIdxRef = useRef<number | null>(null);
+  const avatarSceneRef = useRef<any>(null);
+
+  // 💡 [NEW] References for Magatoki Spawn Particles & Animation
+  const particlesRef = useRef<any>(null);
+  const particleVelocitiesRef = useRef<Float32Array | null>(null);
+  const spawnProgressRef = useRef<number>(0);
+  const isSpawningRef = useRef<boolean>(false);
+
+  // 1. Initialize Global Audio Instance on Mount
   useEffect(() => {
     audioInstanceRef.current = new Audio();
     return () => {
@@ -43,7 +54,7 @@ export default function MindARViewer() {
     };
   }, []);
 
-  // 2. Smoothly crossfade 3D model animations when AI state changes
+  // 2. Smoothly crossfade 3D model animations
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -58,7 +69,7 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
-  // 3. Initialize Web Speech API for voice recording
+  // 3. Initialize Web Speech API
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -84,13 +95,12 @@ export default function MindARViewer() {
     }
   }, []);
 
-  // 💡 [NEW] Safe Audio Context unlocker function required for mobile browsers
   const initAudioPipeline = (audioInstance: HTMLAudioElement) => {
     if (!audioContextRef.current) {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       const audioCtx = new AudioContextClass();
       const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 32; // Small size is optimal for basic amplitude calculations
+      analyser.fftSize = 32;
       
       const source = audioCtx.createMediaElementSource(audioInstance);
       source.connect(analyser);
@@ -138,43 +148,85 @@ export default function MindARViewer() {
 
       const anchor = mindarThree.addAnchor(0);
 
+      // 💡 [NEW] Setup Cyber Ink Particles for Magatoki Spawn Effect
+      const particleCount = 70;
+      const particleGeometry = new THREE.BufferGeometry();
+      const particlePositions = new Float32Array(particleCount * 3);
+      const particleVelocities = new Float32Array(particleCount * 3);
+
+      for (let i = 0; i < particleCount; i++) {
+        // Start clustered at the center anchor point
+        particlePositions[i * 3] = 0;
+        particlePositions[i * 3 + 1] = 0;
+        particlePositions[i * 3 + 2] = 0;
+
+        // Spread outwards and upwards
+        particleVelocities[i * 3] = (Math.random() - 0.5) * 0.6;
+        particleVelocities[i * 3 + 1] = Math.random() * 0.8 + 0.2; // Upward bias
+        particleVelocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
+      }
+
+      particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+      
+      const particleMaterial = new THREE.PointsMaterial({
+        color: 0x8b5cf6, // Magatoki Cyber Violet
+        size: 0.035,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending
+      });
+
+      const spawnParticles = new THREE.Points(particleGeometry, particleMaterial);
+      anchor.group.add(spawnParticles);
+      particlesRef.current = spawnParticles;
+      particleVelocitiesRef.current = particleVelocities;
+
+      // Setup DRACO decoder
       const dracoLoader = new DRACOLoader();
       dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
       const loader = new GLTFLoader();
       loader.setDRACOLoader(dracoLoader);
 
-      // Load asset via cache buster v6
-      loader.load("/avatar.glb?v=6", (gltf) => {
-        gltf.scene.scale.set(1.0, 1.0, 1.0);
+      // Load avatar asset with cache buster v7
+      loader.load("/avatar.glb?v=7", (gltf) => {
+        gltf.scene.scale.set(0, 0, 0); // Start at 0 for spawn animation
         gltf.scene.rotation.x = Math.PI / 2;
+        avatarSceneRef.current = gltf.scene;
 
         gltf.scene.traverse((child: any) => {
-          // 💡 [UPDATE: LIP-SYNC] Automatically locate the facial mesh and the 'Aa' vowel morph target
+          // Locate Mouth Target for Lip-Sync
           if (child.isMesh && child.morphTargetDictionary) {
-            // Scan common VRoid shape key layouts for mouth opening profiles
-            const candidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
-            for (const key of candidates) {
+            const mouthCandidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
+            for (const key of mouthCandidates) {
               if (child.morphTargetDictionary[key] !== undefined) {
                 faceMeshRef.current = child;
                 mouthTargetIdxRef.current = child.morphTargetDictionary[key];
                 break;
               }
             }
+
+            // 💡 [NEW] Locate Eye Close Target for Random Automatic Blinking
+            const blinkCandidates = ["blink", "Fcl_Eye_Close", "Eye_Close", "EYE_CLOSE"];
+            for (const key of blinkCandidates) {
+              if (child.morphTargetDictionary[key] !== undefined) {
+                blinkMeshRef.current = child;
+                blinkTargetIdxRef.current = child.morphTargetDictionary[key];
+                break;
+              }
+            }
           }
 
-          // 💡 [UPDATE: LIGHTING] Smart emissive filtration to fix hair over-brightness
+          // Smart lighting filter for hair vs face skin
           if (child.isMesh && child.material) {
             const materials = Array.isArray(child.material) ? child.material : [child.material];
             materials.forEach((mat) => {
-              // Discern if the mesh element corresponds to a hair configuration
               const isHair = child.name.toLowerCase().includes("hair") || (mat.name && mat.name.toLowerCase().includes("hair"));
-              
               if (mat.emissive) {
                 if (isHair) {
-                  mat.emissive.setHex(0x000000); // 髪の毛パーツは完全に発光を切り、白飛びを防止
+                  mat.emissive.setHex(0x000000); // 髪の白飛びを完全に防止
                 } else {
-                  mat.emissive.setHex(0x080808); // 肌や服は薄く発光させ、パキッとした黒いお髭影を防御
+                  mat.emissive.setHex(0x080808); // お髭影を柔らかくする補正
                 }
               }
               if (mat.roughness !== undefined) mat.roughness = 0.9;
@@ -197,37 +249,126 @@ export default function MindARViewer() {
         }
       });
 
-      anchor.onTargetFound = () => setSubtitle("召喚に成功しました。何か話しかけてください。");
-      anchor.onTargetLost = () => setSubtitle("ターゲットを見失いました。");
+      // 💡 [UPDATE] Trigger Cyber Ink Effect upon Target Detection
+      anchor.onTargetFound = () => {
+        setSubtitle("召喚に成功しました。何か話しかけてください。");
+        
+        // Reset spawn parameters
+        spawnProgressRef.current = 0;
+        isSpawningRef.current = true;
 
+        // Spark particles burst
+        if (particlesRef.current) {
+          particlesRef.current.material.opacity = 1.0;
+          const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
+          for (let i = 0; i < particleCount; i++) {
+            posArr[i * 3] = 0;
+            posArr[i * 3 + 1] = -0.2; // Start slightly below anchor line
+            posArr[i * 3 + 2] = 0;
+          }
+          particlesRef.current.geometry.attributes.position.needsUpdate = true;
+        }
+      };
+
+      anchor.onTargetLost = () => {
+        setSubtitle("ターゲットを見失いました。");
+        isSpawningRef.current = false;
+        if (avatarSceneRef.current) {
+          avatarSceneRef.current.scale.set(0, 0, 0); // Hide instantly on loss
+        }
+      };
+
+      // Internal states for local rendering calculations
       const clock = new Clock();
-      await mindarThree.start();
+      let blinkTimer = 0;
+      let isBlinking = false;
+      let blinkDuration = 0.14; // Speed of eyelid movement
+      let nextBlinkTime = 2.0 + Math.random() * 4.0; // Random interval between 2-6 seconds
 
       renderer.setAnimationLoop(() => {
         const delta = clock.getDelta();
+        const elapsedTime = clock.getElapsedTime();
+        
         if (mixerRef.current) mixerRef.current.update(delta);
         
-        // 💡 [UPDATE: REAL-TIME LIP-SYNC RUNTIME]
+        // 💡 [NEW: SPAWN ANIMATION LOGIC] Smoothly ease model scaling and elevation
+        if (isSpawningRef.current && avatarSceneRef.current) {
+          if (spawnProgressRef.current < 1.0) {
+            spawnProgressRef.current += delta * 1.8; // Reaches full form in ~0.5s
+            const progress = Math.min(spawnProgressRef.current, 1.0);
+            
+            // Cubic out easing curve
+            const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+            
+            avatarSceneRef.current.scale.set(easeOutCubic, easeOutCubic, easeOutCubic);
+          } else {
+            isSpawningRef.current = false;
+          }
+        }
+
+        // 💡 [NEW: BREATHING SIMULATION] Delicate sinusoidal hovering to add micro-life
+        if (avatarSceneRef.current && !isSpawningRef.current && spawnProgressRef.current >= 1.0) {
+          // Sinusoidal subtle idle float (Approx 1.2cm range)
+          avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
+        }
+
+        // 💡 [NEW: RANDOM BLINK LOGIC] Runs continuous intervals
+        if (blinkMeshRef.current && blinkTargetIdxRef.current !== null) {
+          blinkTimer += delta;
+          if (!isBlinking && blinkTimer >= nextBlinkTime) {
+            isBlinking = true;
+            blinkTimer = 0;
+          }
+          if (isBlinking) {
+            if (blinkTimer < blinkDuration) {
+              const progress = blinkTimer / blinkDuration;
+              const weight = Math.sin(progress * Math.PI); // Natural open-close curve
+              blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = weight;
+            } else {
+              blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = 0;
+              isBlinking = false;
+              blinkTimer = 0;
+              nextBlinkTime = 1.5 + Math.random() * 4.5; // Roll next blink timer
+            }
+          }
+        }
+
+        // 💡 [NEW: PARTICLES RUNTIME UPDATE] Fly outwards and dissolve
+        if (particlesRef.current && particleVelocitiesRef.current) {
+          const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
+          const vels = particleVelocitiesRef.current;
+          
+          for (let i = 0; i < particleCount; i++) {
+            posArr[i * 3] += vels[i * 3] * delta;
+            posArr[i * 3 + 1] += vels[i * 3 + 1] * delta;
+            posArr[i * 3 + 2] += vels[i * 3 + 2] * delta;
+            
+            // Apply slight mock gravity/friction pull to ink particles
+            vels[i * 3 + 1] -= delta * 0.2;
+          }
+          particlesRef.current.geometry.attributes.position.needsUpdate = true;
+          
+          // Slowly fade out opacity over runtime frames
+          if (particlesRef.current.material.opacity > 0) {
+            particlesRef.current.material.opacity -= delta * 1.4;
+          }
+        }
+
+        // REAL-TIME VOICE LIP-SYNC RUNTIME
         const audioInstance = audioInstanceRef.current;
         const isVoicePlaying = audioInstance && !audioInstance.paused;
 
         if (isVoicePlaying && analyserRef.current && freqDataRef.current && faceMeshRef.current && mouthTargetIdxRef.current !== null) {
           analyserRef.current.getByteFrequencyData(freqDataRef.current);
-          
-          // Calculate average amplitude across captured frames
           let totalAmplitude = 0;
           for (let i = 0; i < freqDataRef.current.length; i++) {
             totalAmplitude += freqDataRef.current[i];
           }
           const averageVolume = totalAmplitude / freqDataRef.current.length;
-          
-          // Map voice amplitude to morph weights, scaling up slightly for visual impact
           const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
           
-          // Inject real-time values into the Three.js mesh's morph array
           faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = morphWeight > 0.05 ? morphWeight : 0;
         } else if (faceMeshRef.current && mouthTargetIdxRef.current !== null) {
-          // Snap mouth shut when audio playback terminates or pauses
           faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = 0;
         }
 
@@ -268,11 +409,10 @@ export default function MindARViewer() {
 
     e.currentTarget.reset();
 
-    // 💡 Unlock audio context within the user's explicit tap scope
     const audioInstance = audioInstanceRef.current;
     if (audioInstance) {
       audioInstance.pause();
-      audioInstance.src = ""; // Flush previous track references
+      audioInstance.src = ""; 
       audioInstance.play().catch(() => {});
       initAudioPipeline(audioInstance);
     }
@@ -340,7 +480,6 @@ export default function MindARViewer() {
       }
     }
 
-    // Local standard mock fallback context
     setTimeout(() => {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
