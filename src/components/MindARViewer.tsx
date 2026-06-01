@@ -32,12 +32,12 @@ export default function MindARViewer() {
   const faceMeshRef = useRef<any>(null);
   const mouthTargetIdxRef = useRef<number | null>(null);
 
-  // 💡 [NEW] References for Blink & Natural Motion
+  // References for Blink & Natural Motion
   const blinkMeshRef = useRef<any>(null);
   const blinkTargetIdxRef = useRef<number | null>(null);
   const avatarSceneRef = useRef<any>(null);
 
-  // 💡 [NEW] References for Magatoki Spawn Particles & Animation
+  // References for Magatoki Spawn Particles & Animation
   const particlesRef = useRef<any>(null);
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
@@ -120,266 +120,261 @@ export default function MindARViewer() {
     let mindarThreeInstance: any = null;
 
     const start = async () => {
-      const THREE = await import("three");
-      const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
-      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-      const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
+      // 💡 [NEW] 全体を強力なエラーハンドリングで包み、スマホ上でのクラッシュを即座に通知
+      try {
+        const THREE = await import("three");
+        const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
 
-      const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
+        const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
 
-      const mindarThree = new MindARThree({
-        container: containerRef.current!,
-        imageTargetSrc: "/targets.mind",
-      });
-      mindarThreeInstance = mindarThree;
+        if (!containerRef.current) throw new Error("DOMコンテナが見つかりません。");
 
-      const { renderer, scene, camera } = mindarThree;
+        const mindarThree = new MindARThree({
+          container: containerRef.current,
+          imageTargetSrc: "/targets.mind",
+        });
+        mindarThreeInstance = mindarThree;
 
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.0; 
+        const { renderer, scene, camera } = mindarThree;
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
-      scene.add(ambientLight);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0; 
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); 
-      directionalLight.position.set(0, 2, 10); 
-      scene.add(directionalLight);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
+        scene.add(ambientLight);
 
-      const anchor = mindarThree.addAnchor(0);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); 
+        directionalLight.position.set(0, 2, 10); 
+        scene.add(directionalLight);
 
-      // 💡 [NEW] Setup Cyber Ink Particles for Magatoki Spawn Effect
-      const particleCount = 70;
-      const particleGeometry = new THREE.BufferGeometry();
-      const particlePositions = new Float32Array(particleCount * 3);
-      const particleVelocities = new Float32Array(particleCount * 3);
+        const anchor = mindarThree.addAnchor(0);
 
-      for (let i = 0; i < particleCount; i++) {
-        // Start clustered at the center anchor point
-        particlePositions[i * 3] = 0;
-        particlePositions[i * 3 + 1] = 0;
-        particlePositions[i * 3 + 2] = 0;
+        // Setup Cyber Ink Particles
+        const particleCount = 70;
+        const particleGeometry = new THREE.BufferGeometry();
+        const particlePositions = new Float32Array(particleCount * 3);
+        const particleVelocities = new Float32Array(particleCount * 3);
 
-        // Spread outwards and upwards
-        particleVelocities[i * 3] = (Math.random() - 0.5) * 0.6;
-        particleVelocities[i * 3 + 1] = Math.random() * 0.8 + 0.2; // Upward bias
-        particleVelocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
-      }
+        for (let i = 0; i < particleCount; i++) {
+          particlePositions[i * 3] = 0;
+          particlePositions[i * 3 + 1] = 0;
+          particlePositions[i * 3 + 2] = 0;
 
-      particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-      
-      const particleMaterial = new THREE.PointsMaterial({
-        color: 0x8b5cf6, // Magatoki Cyber Violet
-        size: 0.035,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending
-      });
+          particleVelocities[i * 3] = (Math.random() - 0.5) * 0.6;
+          particleVelocities[i * 3 + 1] = Math.random() * 0.8 + 0.2; 
+          particleVelocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
+        }
 
-      const spawnParticles = new THREE.Points(particleGeometry, particleMaterial);
-      anchor.group.add(spawnParticles);
-      particlesRef.current = spawnParticles;
-      particleVelocitiesRef.current = particleVelocities;
-
-      // Setup DRACO decoder
-      const dracoLoader = new DRACOLoader();
-      dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
-
-      const loader = new GLTFLoader();
-      loader.setDRACOLoader(dracoLoader);
-
-      // Load avatar asset with cache buster v7
-      loader.load("/avatar.glb?v=7", (gltf) => {
-        gltf.scene.scale.set(0, 0, 0); // Start at 0 for spawn animation
-        gltf.scene.rotation.x = Math.PI / 2;
-        avatarSceneRef.current = gltf.scene;
-
-        gltf.scene.traverse((child: any) => {
-          // Locate Mouth Target for Lip-Sync
-          if (child.isMesh && child.morphTargetDictionary) {
-            const mouthCandidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
-            for (const key of mouthCandidates) {
-              if (child.morphTargetDictionary[key] !== undefined) {
-                faceMeshRef.current = child;
-                mouthTargetIdxRef.current = child.morphTargetDictionary[key];
-                break;
-              }
-            }
-
-            // 💡 [NEW] Locate Eye Close Target for Random Automatic Blinking
-            const blinkCandidates = ["blink", "Fcl_Eye_Close", "Eye_Close", "EYE_CLOSE"];
-            for (const key of blinkCandidates) {
-              if (child.morphTargetDictionary[key] !== undefined) {
-                blinkMeshRef.current = child;
-                blinkTargetIdxRef.current = child.morphTargetDictionary[key];
-                break;
-              }
-            }
-          }
-
-          // Smart lighting filter for hair vs face skin
-          if (child.isMesh && child.material) {
-            const materials = Array.isArray(child.material) ? child.material : [child.material];
-            materials.forEach((mat) => {
-              const isHair = child.name.toLowerCase().includes("hair") || (mat.name && mat.name.toLowerCase().includes("hair"));
-              if (mat.emissive) {
-                if (isHair) {
-                  mat.emissive.setHex(0x000000); // 髪の白飛びを完全に防止
-                } else {
-                  mat.emissive.setHex(0x080808); // お髭影を柔らかくする補正
-                }
-              }
-              if (mat.roughness !== undefined) mat.roughness = 0.9;
-              if (mat.metalness !== undefined) mat.metalness = 0.0;
-            });
-          }
+        particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+        
+        const particleMaterial = new THREE.PointsMaterial({
+          color: 0x8b5cf6, 
+          size: 0.035,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending
         });
 
-        anchor.group.add(gltf.scene);
+        const spawnParticles = new THREE.Points(particleGeometry, particleMaterial);
+        anchor.group.add(spawnParticles);
+        particlesRef.current = spawnParticles;
+        particleVelocitiesRef.current = particleVelocities;
 
-        if (gltf.animations.length > 0) {
-          const mixer = new ThreeAnimationMixer(gltf.scene);
-          mixerRef.current = mixer;
-          actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
-          actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
-          actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
-          activeActionRef.current = actionsRef.current["idle"];
-          activeActionRef.current.play();
-        }
-      });
+        const loader = new GLTFLoader();
+        loader.setDRACOLoader(dracoLoader);
 
-      // 💡 [UPDATE] Trigger Cyber Ink Effect upon Target Detection
-      anchor.onTargetFound = () => {
-        setSubtitle("召喚に成功しました。何か話しかけてください。");
-        
-        // Reset spawn parameters
-        spawnProgressRef.current = 0;
-        isSpawningRef.current = true;
+        loader.load("/avatar.glb?v=8", (gltf) => {
+          gltf.scene.scale.set(0, 0, 0); 
+          gltf.scene.rotation.x = Math.PI / 2;
+          avatarSceneRef.current = gltf.scene;
 
-        // Spark particles burst
-        if (particlesRef.current) {
-          particlesRef.current.material.opacity = 1.0;
-          const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
-          for (let i = 0; i < particleCount; i++) {
-            posArr[i * 3] = 0;
-            posArr[i * 3 + 1] = -0.2; // Start slightly below anchor line
-            posArr[i * 3 + 2] = 0;
+          gltf.scene.traverse((child: any) => {
+            if (child.isMesh && child.morphTargetDictionary) {
+              const mouthCandidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
+              for (const key of mouthCandidates) {
+                if (child.morphTargetDictionary[key] !== undefined) {
+                  faceMeshRef.current = child;
+                  mouthTargetIdxRef.current = child.morphTargetDictionary[key];
+                  break;
+                }
+              }
+
+              const blinkCandidates = ["blink", "Fcl_Eye_Close", "Eye_Close", "EYE_CLOSE"];
+              for (const key of blinkCandidates) {
+                if (child.morphTargetDictionary[key] !== undefined) {
+                  blinkMeshRef.current = child;
+                  blinkTargetIdxRef.current = child.morphTargetDictionary[key];
+                  break;
+                }
+              }
+            }
+
+            if (child.isMesh && child.material) {
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((mat) => {
+                const isHair = child.name.toLowerCase().includes("hair") || (mat.name && mat.name.toLowerCase().includes("hair"));
+                if (mat.emissive) {
+                  if (isHair) {
+                    mat.emissive.setHex(0x000000); 
+                  } else {
+                    mat.emissive.setHex(0x080808); 
+                  }
+                }
+                if (mat.roughness !== undefined) mat.roughness = 0.9;
+                if (mat.metalness !== undefined) mat.metalness = 0.0;
+              });
+            }
+          });
+
+          anchor.group.add(gltf.scene);
+
+          if (gltf.animations.length > 0) {
+            const mixer = new ThreeAnimationMixer(gltf.scene);
+            mixerRef.current = mixer;
+            actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
+            actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
+            actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
+
+            activeActionRef.current = actionsRef.current["idle"];
+            activeActionRef.current.play();
           }
-          particlesRef.current.geometry.attributes.position.needsUpdate = true;
-        }
-      };
+        }, undefined, (error) => {
+          console.error("モデル読み込み失敗:", error);
+        });
 
-      anchor.onTargetLost = () => {
-        setSubtitle("ターゲットを見失いました。");
-        isSpawningRef.current = false;
-        if (avatarSceneRef.current) {
-          avatarSceneRef.current.scale.set(0, 0, 0); // Hide instantly on loss
-        }
-      };
+        anchor.onTargetFound = () => {
+          setSubtitle("召喚に成功しました。何か話しかけてください。");
+          spawnProgressRef.current = 0;
+          isSpawningRef.current = true;
 
-      // Internal states for local rendering calculations
-      const clock = new Clock();
-      let blinkTimer = 0;
-      let isBlinking = false;
-      let blinkDuration = 0.14; // Speed of eyelid movement
-      let nextBlinkTime = 2.0 + Math.random() * 4.0; // Random interval between 2-6 seconds
-
-      renderer.setAnimationLoop(() => {
-        const delta = clock.getDelta();
-        const elapsedTime = clock.getElapsedTime();
-        
-        if (mixerRef.current) mixerRef.current.update(delta);
-        
-        // 💡 [NEW: SPAWN ANIMATION LOGIC] Smoothly ease model scaling and elevation
-        if (isSpawningRef.current && avatarSceneRef.current) {
-          if (spawnProgressRef.current < 1.0) {
-            spawnProgressRef.current += delta * 1.8; // Reaches full form in ~0.5s
-            const progress = Math.min(spawnProgressRef.current, 1.0);
-            
-            // Cubic out easing curve
-            const easeOutCubic = 1 - Math.pow(1 - progress, 3);
-            
-            avatarSceneRef.current.scale.set(easeOutCubic, easeOutCubic, easeOutCubic);
-          } else {
-            isSpawningRef.current = false;
+          if (particlesRef.current) {
+            (particlesRef.current.material as any).opacity = 1.0;
+            const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
+            for (let i = 0; i < particleCount; i++) {
+              posArr[i * 3] = 0;
+              posArr[i * 3 + 1] = -0.2; 
+              posArr[i * 3 + 2] = 0;
+            }
+            particlesRef.current.geometry.attributes.position.needsUpdate = true;
           }
-        }
+        };
 
-        // 💡 [NEW: BREATHING SIMULATION] Delicate sinusoidal hovering to add micro-life
-        if (avatarSceneRef.current && !isSpawningRef.current && spawnProgressRef.current >= 1.0) {
-          // Sinusoidal subtle idle float (Approx 1.2cm range)
-          avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
-        }
-
-        // 💡 [NEW: RANDOM BLINK LOGIC] Runs continuous intervals
-        if (blinkMeshRef.current && blinkTargetIdxRef.current !== null) {
-          blinkTimer += delta;
-          if (!isBlinking && blinkTimer >= nextBlinkTime) {
-            isBlinking = true;
-            blinkTimer = 0;
+        anchor.onTargetLost = () => {
+          setSubtitle("ターゲットを見失いました。");
+          isSpawningRef.current = false;
+          if (avatarSceneRef.current) {
+            avatarSceneRef.current.scale.set(0, 0, 0); 
           }
-          if (isBlinking) {
-            if (blinkTimer < blinkDuration) {
-              const progress = blinkTimer / blinkDuration;
-              const weight = Math.sin(progress * Math.PI); // Natural open-close curve
-              blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = weight;
+        };
+
+        const clock = new Clock();
+        let blinkTimer = 0;
+        let isBlinking = false;
+        let blinkDuration = 0.14; 
+        let nextBlinkTime = 2.0 + Math.random() * 4.0; 
+
+        // 💡 カメラデバイスの起動リクエスト
+        await mindarThree.start();
+
+        renderer.setAnimationLoop(() => {
+          const delta = clock.getDelta();
+          const elapsedTime = clock.getElapsedTime();
+          
+          if (mixerRef.current) mixerRef.current.update(delta);
+          
+          if (isSpawningRef.current && avatarSceneRef.current) {
+            if (spawnProgressRef.current < 1.0) {
+              spawnProgressRef.current += delta * 1.8; 
+              const progress = Math.min(spawnProgressRef.current, 1.0);
+              const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+              avatarSceneRef.current.scale.set(easeOutCubic, easeOutCubic, easeOutCubic);
             } else {
-              blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = 0;
-              isBlinking = false;
-              blinkTimer = 0;
-              nextBlinkTime = 1.5 + Math.random() * 4.5; // Roll next blink timer
+              isSpawningRef.current = false;
             }
           }
-        }
 
-        // 💡 [NEW: PARTICLES RUNTIME UPDATE] Fly outwards and dissolve
-        if (particlesRef.current && particleVelocitiesRef.current) {
-          const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
-          const vels = particleVelocitiesRef.current;
-          
-          for (let i = 0; i < particleCount; i++) {
-            posArr[i * 3] += vels[i * 3] * delta;
-            posArr[i * 3 + 1] += vels[i * 3 + 1] * delta;
-            posArr[i * 3 + 2] += vels[i * 3 + 2] * delta;
+          if (avatarSceneRef.current && !isSpawningRef.current && spawnProgressRef.current >= 1.0) {
+            avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
+          }
+
+          if (blinkMeshRef.current && blinkTargetIdxRef.current !== null) {
+            blinkTimer += delta;
+            if (!isBlinking && blinkTimer >= nextBlinkTime) {
+              isBlinking = true;
+              blinkTimer = 0;
+            }
+            if (isBlinking) {
+              if (blinkTimer < blinkDuration) {
+                const progress = blinkTimer / blinkDuration;
+                const weight = Math.sin(progress * Math.PI); 
+                blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = weight;
+              } else {
+                blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = 0;
+                isBlinking = false;
+                blinkTimer = 0;
+                nextBlinkTime = 1.5 + Math.random() * 4.5; 
+              }
+            }
+          }
+
+          if (particlesRef.current && particleVelocitiesRef.current) {
+            const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
+            const vels = particleVelocitiesRef.current;
             
-            // Apply slight mock gravity/friction pull to ink particles
-            vels[i * 3 + 1] -= delta * 0.2;
+            for (let i = 0; i < particleCount; i++) {
+              posArr[i * 3] += vels[i * 3] * delta;
+              posArr[i * 3 + 1] += vels[i * 3 + 1] * delta;
+              posArr[i * 3 + 2] += vels[i * 3 + 2] * delta;
+              vels[i * 3 + 1] -= delta * 0.2;
+            }
+            particlesRef.current.geometry.attributes.position.needsUpdate = true;
+            
+            if ((particlesRef.current.material as any).opacity > 0) {
+              (particlesRef.current.material as any).opacity -= delta * 1.4;
+            }
           }
-          particlesRef.current.geometry.attributes.position.needsUpdate = true;
-          
-          // Slowly fade out opacity over runtime frames
-          if (particlesRef.current.material.opacity > 0) {
-            particlesRef.current.material.opacity -= delta * 1.4;
+
+          const audioInstance = audioInstanceRef.current;
+          const isVoicePlaying = audioInstance && !audioInstance.paused;
+
+          if (isVoicePlaying && analyserRef.current && freqDataRef.current && faceMeshRef.current && mouthTargetIdxRef.current !== null) {
+            analyserRef.current.getByteFrequencyData(freqDataRef.current);
+            let totalAmplitude = 0;
+            for (let i = 0; i < freqDataRef.current.length; i++) {
+              totalAmplitude += freqDataRef.current[i];
+            }
+            const averageVolume = totalAmplitude / freqDataRef.current.length;
+            const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
+            
+            faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = morphWeight > 0.05 ? morphWeight : 0;
+          } else if (faceMeshRef.current && mouthTargetIdxRef.current !== null) {
+            faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = 0;
           }
-        }
 
-        // REAL-TIME VOICE LIP-SYNC RUNTIME
-        const audioInstance = audioInstanceRef.current;
-        const isVoicePlaying = audioInstance && !audioInstance.paused;
+          renderer.render(scene, camera);
+        });
 
-        if (isVoicePlaying && analyserRef.current && freqDataRef.current && faceMeshRef.current && mouthTargetIdxRef.current !== null) {
-          analyserRef.current.getByteFrequencyData(freqDataRef.current);
-          let totalAmplitude = 0;
-          for (let i = 0; i < freqDataRef.current.length; i++) {
-            totalAmplitude += freqDataRef.current[i];
-          }
-          const averageVolume = totalAmplitude / freqDataRef.current.length;
-          const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
-          
-          faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = morphWeight > 0.05 ? morphWeight : 0;
-        } else if (faceMeshRef.current && mouthTargetIdxRef.current !== null) {
-          faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = 0;
-        }
-
-        renderer.render(scene, camera);
-      });
+      } catch (initError: any) {
+        // 💡 [NEW] エラーが起きたら即座に画面表示とポップアップで通知
+        console.error("MindAR起動失敗:", initError);
+        const errMsg = initError?.message || String(initError);
+        setSubtitle(`システム初期化エラー: ${errMsg}`);
+        alert(`🚨 ARカメラ起動エラー:\n${errMsg}\n\n※HTTPS環境、またはカメラ権限ブロックを確認してください。`);
+      }
     };
 
     start();
 
     return () => {
-      if (mindarThreeInstance) mindarThreeInstance.stop();
+      if (mindarThreeInstance) {
+        try { mindarThreeInstance.stop(); } catch(e){}
+      }
     };
   }, []);
 
@@ -480,11 +475,12 @@ export default function MindARViewer() {
       }
     }
 
+    // Mock
     setTimeout(() => {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("次の指示を待っています。");
+        setSubtitle("次の指示を待っています.");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
