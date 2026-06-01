@@ -6,6 +6,12 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
+// 💡 複数メッシュや左右分離キーに対応するための構造定義
+interface MorphTargetRef {
+  mesh: any;
+  idxs: number[];
+}
+
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -28,13 +34,11 @@ export default function MindARViewer() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // References for Mouth Lip-Sync
-  const faceMeshRef = useRef<any>(null);
-  const mouthTargetIdxRef = useRef<number | null>(null);
+  // 💡 [UPDATE] 自動スキャンされた口（リップシンク）の参照リスト
+  const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
 
-  // References for Blink & Natural Motion
-  const blinkMeshRef = useRef<any>(null);
-  const blinkTargetIdxRef = useRef<number | null>(null);
+  // 💡 [UPDATE] 自動スキャンされた瞬き（Blink）の参照リスト
+  const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
   // References for Magatoki Spawn Particles & Animation
@@ -120,7 +124,6 @@ export default function MindARViewer() {
     let mindarThreeInstance: any = null;
 
     const start = async () => {
-      // 💡 [NEW] 全体を強力なエラーハンドリングで包み、スマホ上でのクラッシュを即座に通知
       try {
         const THREE = await import("three");
         const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
@@ -189,29 +192,61 @@ export default function MindARViewer() {
         const loader = new GLTFLoader();
         loader.setDRACOLoader(dracoLoader);
 
-        loader.load("/avatar.glb?v=8", (gltf) => {
+        // 💡 ログ収集用の配列
+        const discoveredBlinkKeys: string[] = [];
+        const discoveredMouthKeys: string[] = [];
+        const localBlinkTargets: MorphTargetRef[] = [];
+        const localMouthTargets: MorphTargetRef[] = [];
+
+        loader.load("/avatar.glb?v=9", (gltf) => {
           gltf.scene.scale.set(0, 0, 0); 
           gltf.scene.rotation.x = Math.PI / 2;
           avatarSceneRef.current = gltf.scene;
 
           gltf.scene.traverse((child: any) => {
+            // 💡 [NEW] 大文字小文字・部分一致・左右分離を全自動スキャンする仕組み
             if (child.isMesh && child.morphTargetDictionary) {
-              const mouthCandidates = ["aa", "Fcl_Mth_A", "Mouth_A", "A", "Oto_A"];
-              for (const key of mouthCandidates) {
-                if (child.morphTargetDictionary[key] !== undefined) {
-                  faceMeshRef.current = child;
-                  mouthTargetIdxRef.current = child.morphTargetDictionary[key];
-                  break;
-                }
-              }
+              const bIdxs: number[] = [];
+              const mIdxs: number[] = [];
 
-              const blinkCandidates = ["blink", "Fcl_Eye_Close", "Eye_Close", "EYE_CLOSE"];
-              for (const key of blinkCandidates) {
-                if (child.morphTargetDictionary[key] !== undefined) {
-                  blinkMeshRef.current = child;
-                  blinkTargetIdxRef.current = child.morphTargetDictionary[key];
-                  break;
+              Object.keys(child.morphTargetDictionary).forEach((key) => {
+                const lowKey = key.toLowerCase();
+                
+                // 瞬き候補（blink, eyeblink, close, eye_close などのキーワードを網羅）
+                if (
+                  lowKey === "blink" || 
+                  lowKey === "eyeblink" ||
+                  lowKey === "close" ||
+                  lowKey.includes("eye_close") || 
+                  lowKey.includes("eye-close") ||
+                  lowKey.includes("blink_") ||
+                  lowKey.includes("blinkleft") ||
+                  lowKey.includes("blinkright")
+                ) {
+                  bIdxs.push(child.morphTargetDictionary[key]);
+                  if (!discoveredBlinkKeys.includes(key)) discoveredBlinkKeys.push(key);
                 }
+
+                // 口（あ）の候補（aa, a, mouth_a, vowel_a などを網羅）
+                if (
+                  lowKey === "aa" || 
+                  lowKey === "a" || 
+                  lowKey === "vowel_a" ||
+                  lowKey === "oto_a" ||
+                  lowKey.includes("mouth_a") || 
+                  lowKey.includes("mth_a") ||
+                  lowKey.includes("mouth_open_a")
+                ) {
+                  mIdxs.push(child.morphTargetDictionary[key]);
+                  if (!discoveredMouthKeys.includes(key)) discoveredMouthKeys.push(key);
+                }
+              });
+
+              if (bIdxs.length > 0) {
+                localBlinkTargets.push({ mesh: child, idxs: bIdxs });
+              }
+              if (mIdxs.length > 0) {
+                localMouthTargets.push({ mesh: child, idxs: mIdxs });
               }
             }
 
@@ -232,6 +267,15 @@ export default function MindARViewer() {
             }
           });
 
+          // グローバル参照へ保存
+          blinkTargetsRef.current = localBlinkTargets;
+          mouthTargetsRef.current = localMouthTargets;
+
+          // 💡 スマホの画面に検出されたキーをデバッグ表示して見える化
+          const blinkLog = discoveredBlinkKeys.length > 0 ? discoveredBlinkKeys.join("/") : "未検出";
+          const mouthLog = discoveredMouthKeys.length > 0 ? discoveredMouthKeys.join("/") : "未検出";
+          setSubtitle(`アシェル召喚準備完了。\n[検出瞬きキー: ${blinkLog}] [検出口キー: ${mouthLog}]`);
+
           anchor.group.add(gltf.scene);
 
           if (gltf.animations.length > 0) {
@@ -249,7 +293,7 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          setSubtitle("召喚に成功しました。何か話しかけてください。");
+          setSubtitle("アシェルを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -279,7 +323,6 @@ export default function MindARViewer() {
         let blinkDuration = 0.14; 
         let nextBlinkTime = 2.0 + Math.random() * 4.0; 
 
-        // 💡 カメラデバイスの起動リクエスト
         await mindarThree.start();
 
         renderer.setAnimationLoop(() => {
@@ -303,7 +346,8 @@ export default function MindARViewer() {
             avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
           }
 
-          if (blinkMeshRef.current && blinkTargetIdxRef.current !== null) {
+          // 💡 [UPDATE: AUTOMATIC MULTI-BLINK RUNTIME] 検出されたすべての瞬きキーにウェイトを注入
+          if (blinkTargetsRef.current.length > 0) {
             blinkTimer += delta;
             if (!isBlinking && blinkTimer >= nextBlinkTime) {
               isBlinking = true;
@@ -313,9 +357,17 @@ export default function MindARViewer() {
               if (blinkTimer < blinkDuration) {
                 const progress = blinkTimer / blinkDuration;
                 const weight = Math.sin(progress * Math.PI); 
-                blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = weight;
+                blinkTargetsRef.current.forEach((target) => {
+                  target.idxs.forEach((idx) => {
+                    target.mesh.morphTargetInfluences[idx] = weight;
+                  });
+                });
               } else {
-                blinkMeshRef.current.morphTargetInfluences[blinkTargetIdxRef.current] = 0;
+                blinkTargetsRef.current.forEach((target) => {
+                  target.idxs.forEach((idx) => {
+                    target.mesh.morphTargetInfluences[idx] = 0;
+                  });
+                });
                 isBlinking = false;
                 blinkTimer = 0;
                 nextBlinkTime = 1.5 + Math.random() * 4.5; 
@@ -340,10 +392,11 @@ export default function MindARViewer() {
             }
           }
 
+          // 💡 [UPDATE: MULTI-MOUTH LIP-SYNC RUNTIME] 
           const audioInstance = audioInstanceRef.current;
           const isVoicePlaying = audioInstance && !audioInstance.paused;
 
-          if (isVoicePlaying && analyserRef.current && freqDataRef.current && faceMeshRef.current && mouthTargetIdxRef.current !== null) {
+          if (isVoicePlaying && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
             let totalAmplitude = 0;
             for (let i = 0; i < freqDataRef.current.length; i++) {
@@ -351,21 +404,29 @@ export default function MindARViewer() {
             }
             const averageVolume = totalAmplitude / freqDataRef.current.length;
             const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
-            
-            faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = morphWeight > 0.05 ? morphWeight : 0;
-          } else if (faceMeshRef.current && mouthTargetIdxRef.current !== null) {
-            faceMeshRef.current.morphTargetInfluences[mouthTargetIdxRef.current] = 0;
+            const finalWeight = morphWeight > 0.05 ? morphWeight : 0;
+
+            mouthTargetsRef.current.forEach((target) => {
+              target.idxs.forEach((idx) => {
+                target.mesh.morphTargetInfluences[idx] = finalWeight;
+              });
+            });
+          } else if (mouthTargetsRef.current.length > 0) {
+            mouthTargetsRef.current.forEach((target) => {
+              target.idxs.forEach((idx) => {
+                target.mesh.morphTargetInfluences[idx] = 0;
+              });
+            });
           }
 
           renderer.render(scene, camera);
         });
 
       } catch (initError: any) {
-        // 💡 [NEW] エラーが起きたら即座に画面表示とポップアップで通知
         console.error("MindAR起動失敗:", initError);
         const errMsg = initError?.message || String(initError);
         setSubtitle(`システム初期化エラー: ${errMsg}`);
-        alert(`🚨 ARカメラ起動エラー:\n${errMsg}\n\n※HTTPS環境、またはカメラ権限ブロックを確認してください。`);
+        alert(`🚨 ARカメラ起動エラー:\n${errMsg}`);
       }
     };
 
@@ -526,7 +587,7 @@ export default function MindARViewer() {
 
         <div className="w-full space-y-3 pointer-events-auto mb-4">
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
-            <p className="text-sm font-medium leading-relaxed transition-all duration-300">
+            <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line">
               {subtitle}
             </p>
           </div>
