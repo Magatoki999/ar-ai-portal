@@ -7,20 +7,18 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
 
-# LangChain imports
+# LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
-# Load environment variables
+# 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production]")
 
-# CORS configuration
-origins = [
-    "http://localhost:3000",
-    "https://ar-ai-portal.vercel.app",
-]
+# ─── 【本番強化】CORS設定（環境変数から取得、未設定時はローカル等をフォールバック） ───
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
+origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,14 +28,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize LangChain OpenAI with gpt-4o-mini
+# ─── 【本番強化】Supabase 認証情報（特権キーである SERVICE_ROLE_KEY を優先） ───
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+
+# LLM初期化 (gpt-4o-mini)
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.7,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# RukiRuki Prompt
+# ルキルキ人格プロンプトテンプレート
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", (
         "あなたは『MagatokiLab』所属のXR観測ナビゲーター「ルキルキ（RukiRuki）」です。\n"
@@ -71,87 +73,69 @@ class ChatMessage(BaseModel):
     wallet_address: str | None = None
 
 
-# Database Helper: Fetch username from Supabase
+# データベースヘルパー：ユーザー名の取得
 async def get_stored_username(wallet_address: str) -> str | None:
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-
-    if not supabase_url or not supabase_key or not wallet_address:
+    if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
 
-    url = f"{supabase_url}/rest/v1/user_profiles?wallet_address=eq.{wallet_address}&select=user_name"
-
+    url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
     headers = {
-        "apikey": supabase_key,
-        "Authorization": f"Bearer {supabase_key}"
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
     }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
-
             if response.status_code == 200:
                 data = response.json()
-
                 if data and len(data) > 0:
                     return data[0].get("user_name")
-
     except Exception as e:
         print(f"Error fetching user name from Supabase: {e}")
-
     return None
 
 
-# Database Helper: Upsert username into Supabase
+# データベースヘルパー：ユーザー名の保存・上書き
 async def save_username_to_db(wallet_address: str, name: str):
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-
-    if not supabase_url or not supabase_key or not wallet_address:
+    if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return
 
-    url = f"{supabase_url}/rest/v1/user_profiles"
-
+    url = f"{SUPABASE_URL}/rest/v1/user_profiles"
     headers = {
-        "apikey": supabase_key,
-        "Authorization": f"Bearer {supabase_key}",
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates"
     }
-
     data = {
-        "wallet_address": wallet_address,
+        "wallet_address": wallet_address.lower(),
         "user_name": name
     }
 
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=data, headers=headers, timeout=5.0)
-
             if res.status_code in [200, 201]:
                 print(f"Successfully memorized name '{name}' for wallet {wallet_address}")
             else:
                 print(f"Supabase save error: {res.status_code} - {res.text}")
-
     except Exception as e:
         print(f"Error saving user name to Supabase: {e}")
 
 
-# Audio Helper: Generate OpenAI TTS
+# オーディオヘルパー：OpenAI TTS
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
-
     if not api_key:
         print("OpenAI API KEY missing. Skipping OpenAI TTS.")
         return None
 
     url = "https://api.openai.com/v1/audio/speech"
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-
     data = {
         "model": "tts-1",
         "input": text,
@@ -161,35 +145,30 @@ async def generate_openai_tts(text: str) -> str | None:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
-
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
             else:
                 print(f"OpenAI TTS API Error: {response.status_code} - {response.text}")
                 return None
-
     except Exception as e:
         print(f"OpenAI TTS connection error: {e}")
         return None
 
 
-# Audio Helper: Generate ElevenLabs Voice
+# オーディオヘルパー：ElevenLabs Voice
 async def generate_elevenlabs_voice(text: str) -> str | None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-
     if not api_key or not voice_id:
         print("ElevenLabs config missing. Skipping ElevenLabs.")
         return None
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
         "xi-api-key": api_key
     }
-
     data = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
@@ -202,13 +181,11 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
-
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
             else:
                 print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
                 return None
-
     except Exception as e:
         print(f"ElevenLabs connection error: {e}")
         return None
@@ -227,10 +204,10 @@ async def chat_endpoint(payload: ChatMessage):
     user_text = payload.message
     wallet_address = payload.wallet_address
 
-    # Check if we already know this observer's name from Supabase
+    # Supabaseから名前の記憶を取得
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
-    # Construct identity context dynamically based on memory
+    # 動的コンテキストの構築
     if wallet_address:
         if stored_name:
             identity_context = (
@@ -254,25 +231,21 @@ async def chat_endpoint(payload: ChatMessage):
         )
 
     try:
-        # Invoke LLM via LangChain
+        # LLMの呼び出し
         response = await chat_chain.ainvoke({
             "user_message": user_text,
             "identity_context": identity_context
         })
-
         ai_response = response.content
 
-        # Parse hidden memory tag
+        # 記憶用隠しタグ（||NAME:xxx||）のパースとデータベース自動保存
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
-
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
-            # Save the newly learned name to Supabase
             await save_username_to_db(wallet_address, extracted_name)
-            # Remove hidden tag from visible response
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # Audio Generation
+        # 【本番強化】音声合成（指定プロバイダーの実行、および自動フォールバック）
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
 
@@ -289,6 +262,7 @@ async def chat_endpoint(payload: ChatMessage):
         ai_response = "接続空間にノイズが発生したみたい。少しだけ同期をやり直すね。"
         audio_base64 = None
 
+    # ─── 【重要】元コードのフロントエンド通信キー名（reply, audio_data）を完全維持 ───
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
