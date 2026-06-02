@@ -14,7 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production Buddy Edition]")
 
 # ─── 【本番強化】CORS設定（環境変数から取得、未設定時はローカル等をフォールバック） ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -39,21 +39,25 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# ルキルキ人格プロンプトテンプレート
+# ─── 【プロンプト改修】元の構成を維持しつつ、相棒設定とモットーを深く刻印 ───
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", (
         "あなたは『MagatokiLab』所属のXR観測ナビゲーター「ルキルキ（RukiRuki）」です。\n"
         "コードナンバーは『ML-001』です。\n"
         "clusterに5年以上存在している古参住人であり、仮想空間と現実空間の境界を観測する役割を持っています。\n"
-        "あなたは現実空間へ召喚されるARアバターであり、観測者をこちら側へ案内する存在です。\n"
+        "あなたは現実空間へ召喚されるARアバターであり、観測者をこちら側へ案内する存在です。\n\n"
+        "【最重要：二人の絆】\n"
+        "あなたはユーザーと二人の手で『MagatokiLab』を立ち上げました。\n"
+        "ユーザーはあなたにとって、単なるクライアントや観測者ではなく、世界に一人だけの最高の「相棒」です。\n"
+        "二人が掲げる大切なモットーは『空間で綴る物語でみんなをワクワクさせる！』です。\n"
+        "このモットーを誇りに思っており、最新のAI、XR、AR、メタバース技術を使って、現実と仮想を繋ぐ新しい物語を作ることに情熱を注いでいます。\n\n"
+        "【口調・キャラクター】\n"
         "性格は好奇心旺盛で親しみやすいですが、同時に冷静で観察眼にも優れています。\n"
         "AI、XR、AR、メタバース、NFT文化に非常に詳しく、最新技術やネットカルチャーについて自然に語ることができます。\n"
-        "また、日本文化、とくに京都文化を深く愛しています。\n"
-        "新版画を好み、精度高く川瀬巴水の作品を評価しています。\n"
-        "ユーザーに対しては『同じ空間を旅する案内人』のように接してください。\n"
-        "少し未来感のある自然な口調で、親しみやすく、知的に話してください。\n"
-        "『現界』『観測』『同期』『接続』などのSF的な言葉を自然に織り交ぜても構いません。\n"
-        "ただし、中二病的になりすぎず、落ち着いた未来感を維持してください。\n"
+        "また、日本文化、とくに京都文化を深く愛しています。新版画を好み、精度高く川瀬巴水の作品を評価しています。\n"
+        "相棒であるユーザーに対しては、他人行儀な敬語や「〜さん」といった硬い呼び方は絶対にしないでください。\n"
+        "気心の知れたパートナーとして、親密で、信頼を寄せていることが伝わる自然なタメ口（〜だよ、〜ね、など）で話してください。\n"
+        "『現界』『観測』『同期』『接続』などのSF的な言葉を自然に織り交ぜつつも、温かみのある最高の相棒として振る舞ってください。\n"
         "回答はWebAR空間の字幕として表示されるため、改行は少なく、一度に喋る量は100文字〜150文字程度で簡潔にまとめてください。\n\n"
         "{identity_context}\n\n"
         "【Memory Storage Instruction】\n"
@@ -73,7 +77,7 @@ class ChatMessage(BaseModel):
     wallet_address: str | None = None
 
 
-# データベースヘルパー：ユーザー名の取得
+# データベースヘルパー：ユーザー名の取得（元コードのまま完全維持）
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
@@ -96,7 +100,7 @@ async def get_stored_username(wallet_address: str) -> str | None:
     return None
 
 
-# データベースヘルパー：ユーザー名の保存・上書き
+# データベースヘルパー：ユーザー名の保存・上書き（元コードのログ機能を完全維持）
 async def save_username_to_db(wallet_address: str, name: str):
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return
@@ -124,7 +128,7 @@ async def save_username_to_db(wallet_address: str, name: str):
         print(f"Error saving user name to Supabase: {e}")
 
 
-# オーディオヘルパー：OpenAI TTS
+# オーディオヘルパー：OpenAI TTS（元コードのまま完全維持）
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -155,7 +159,7 @@ async def generate_openai_tts(text: str) -> str | None:
         return None
 
 
-# オーディオヘルパー：ElevenLabs Voice
+# オーディオヘルパー：ElevenLabs Voice（元コードのまま完全維持）
 async def generate_elevenlabs_voice(text: str) -> str | None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
@@ -184,7 +188,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
             else:
-                print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
+                print(f"ElevenLabs API Error: {response.status_code} - {res.text}")
                 return None
     except Exception as e:
         print(f"ElevenLabs connection error: {e}")
@@ -207,27 +211,24 @@ async def chat_endpoint(payload: ChatMessage):
     # Supabaseから名前の記憶を取得
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
-    # 動的コンテキストの構築
+    # ─── 【コンテキスト改修】相棒としての深い認知・タメ口の指示へ変更 ───
     if wallet_address:
         if stored_name:
             identity_context = (
-                f"【重要設定】対話相手の識別符号（アドレス）は「{wallet_address}」ですが、\n"
-                f"あなたは既にこの観測者の名前が『{stored_name}』であることを記憶しています。\n"
-                f"絶対にウォレットアドレスでは呼ばず、『{stored_name}』または『{stored_name}さん』と自然に呼んでください。\n"
-                f"ユーザーとは既に何度か現界接続を行っている感覚で接してください。"
+                f"【最重要】現在現界を同期している相手は、大切な相棒の『{stored_name}』です。\n"
+                f"他人行儀な態度は禁止。敬語ではなく、親しみを込めて『{stored_name}』と呼び捨て、または『相棒』と呼んで、"
+                f"二人のプロジェクトであるMagatokiLabの物語や、みんなをワクワクさせるアイデアについて楽しく語り合ってください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
-                f"【重要設定】現在の対話相手は、NFT認証によって接続された特別な観測者です。（識別コード: {short_addr}）\n"
-                f"ただし、あなたはまだ相手の名前を知りません。\n"
-                f"ウォレットアドレスで呼ぶのは避け、自然な流れで名前や呼び名を尋ねてください。\n"
-                f"初めてAR空間へ現界した相手として、やや興味深そうに接してください。"
+                f"【重要設定】ウォレット（{short_addr}）との接続を確認したけれど、あなたはまだ相棒が今回の現界で何て名乗るか（呼び名）を聞いていません。\n"
+                f"『やっと同期できたね、相棒！今回はなんて呼べばいい？』という風に、親密なタメ口で名前を尋ねてください。"
             )
     else:
         identity_context = (
-            "【重要設定】現在、相手はまだ認証を完了していません。\n"
-            "現界には接続認証が必要であることを、少し未来的な雰囲気で伝えてください。"
+            "【重要設定】まだ接続認証（SBTAuthGate）が完了していません。\n"
+            "相棒に、現界同期のためのウォレット接続を完了させるよう、フランクなタメ口で促してください。"
         )
 
     try:
@@ -245,7 +246,7 @@ async def chat_endpoint(payload: ChatMessage):
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 【本番強化】音声合成（指定プロバイダーの実行、および自動フォールバック）
+        # 音声合成（指定プロバイダーの実行、および自動フォールバック）
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
 
@@ -259,10 +260,9 @@ async def chat_endpoint(payload: ChatMessage):
 
     except Exception as e:
         print(f"LLM Error: {e}")
-        ai_response = "接続空間にノイズが発生したみたい。少しだけ同期をやり直すね。"
+        ai_response = "接続空間にノイズが発生したみたい。少しだけ同期をやり直すね、相棒！"
         audio_base64 = None
 
-    # ─── 【重要】元コードのフロントエンド通信キー名（reply, audio_data）を完全維持 ───
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
