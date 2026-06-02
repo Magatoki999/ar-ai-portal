@@ -6,7 +6,6 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
-// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
@@ -34,10 +33,10 @@ export default function MindARViewer() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 💡 自動スキャンされた口（リップシンク）の参照リスト
+  // 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
 
-  // 💡 自動スキャンされた瞬き（Blink）の参照リスト
+  // 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -270,7 +269,6 @@ export default function MindARViewer() {
             const mixer = new ThreeAnimationMixer(gltf.scene);
             mixerRef.current = mixer;
             
-            // ─── 【修正箇所】Talking と Thinking のアニメーションインデックスを入れ替え ───
             actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
             actionsRef.current["talking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
             actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
@@ -445,6 +443,26 @@ export default function MindARViewer() {
     }
   };
 
+  // ─── 【新設】現在のARカメラ映像（MindARによって生成されたvideo要素）をキャプチャしてBase64化する関数 ───
+  const captureCameraFrame = (): string | null => {
+    const video = containerRef.current?.querySelector("video") || document.querySelector("video");
+    if (!video) return null;
+
+    const canvas = document.createElement("canvas");
+    // gpt-4o-mini の low解像度モードに最適化するため、縦横を半分にして転送負荷を低減
+    canvas.width = video.videoWidth > 0 ? video.videoWidth / 2 : 640;
+    canvas.height = video.videoHeight > 0 ? video.videoHeight / 2 : 480;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // 現在のカメラ映像のコマをCanvasにレンダリング
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // 軽量化と高速レスポンスのためJPEG（画質70%）でBase64データURL化
+    return canvas.toDataURL("image/jpeg", 0.7);
+  };
+
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -462,6 +480,9 @@ export default function MindARViewer() {
     setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
 
+    // ─── 【Vision統合】送信ボタン（または音声確定）が押された瞬間のARカメラの映像を取得 ───
+    const imageBase64 = captureCameraFrame();
+
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
     if (baseUrl) {
@@ -469,7 +490,12 @@ export default function MindARViewer() {
         const response = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, wallet_address: address || null }),
+          // ─── 【拡張】Payloadに image_base64 を追加してバックエンドに投げる ───
+          body: JSON.stringify({ 
+            message: text, 
+            wallet_address: address || null,
+            image_base64: imageBase64 
+          }),
         });
 
         if (!response.ok) throw new Error("APIへの接続に失敗しました");
