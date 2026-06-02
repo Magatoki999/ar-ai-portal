@@ -15,9 +15,13 @@ export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
-  const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
+  const [subtitle, setSubtitle] = useState<string>("[SYS_READY] CAMERA STREAM STANDBY...");
   const [isListening, setIsListening] = useState<boolean>(false);
   
+  // ─── 【新設】SF時計用のステート ───
+  const [timeString, setTimeString] = useState<string>("");
+  const [dateString, setDateString] = useState<string>("");
+
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
@@ -33,10 +37,7 @@ export default function MindARViewer() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
-
-  // 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -45,6 +46,31 @@ export default function MindARViewer() {
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
+
+  // ─── 【新設】SFリアルタイム時計の駆動ループ ───
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      
+      // 時間形式: 23:04:15
+      const hrs = String(now.getHours()).padStart(2, '0');
+      const mins = String(now.getMinutes()).padStart(2, '0');
+      const secs = String(now.getSeconds()).padStart(2, '0');
+      setTimeString(`${hrs}:${mins}:${secs}`);
+
+      // 日付形式: 2026.06.02 [TUE]
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const date = String(now.getDate()).padStart(2, '0');
+      const days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+      const dayName = days[now.getDay()];
+      setDateString(`${year}.${month}.${date} [${dayName}]`);
+    };
+
+    updateClock();
+    const timerId = setInterval(updateClock, 1000);
+    return () => clearInterval(timerId);
+  }, []);
 
   // 1. Initialize Global Audio Instance on Mount
   useEffect(() => {
@@ -83,7 +109,7 @@ export default function MindARViewer() {
 
       recognition.onstart = () => {
         setIsListening(true);
-        setSubtitle("（音声認識中...お話しください）");
+        setSubtitle(">>> [AUDIO_INPUT] VOICE CAPTURING...");
       };
       recognition.onend = () => setIsListening(false);
       recognition.onresult = (event: any) => {
@@ -173,7 +199,7 @@ export default function MindARViewer() {
         particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
         
         const particleMaterial = new THREE.PointsMaterial({
-          color: 0x8b5cf6, 
+          color: 0x06b6d4, // シアンに変更してSF感を強化
           size: 0.035,
           transparent: true,
           opacity: 0,
@@ -233,12 +259,8 @@ export default function MindARViewer() {
                 }
               });
 
-              if (bIdxs.length > 0) {
-                localBlinkTargets.push({ mesh: child, idxs: bIdxs });
-              }
-              if (mIdxs.length > 0) {
-                localMouthTargets.push({ mesh: child, idxs: mIdxs });
-              }
+              if (bIdxs.length > 0) localBlinkTargets.push({ mesh: child, idxs: bIdxs });
+              if (mIdxs.length > 0) localMouthTargets.push({ mesh: child, idxs: mIdxs });
             }
 
             if (child.isMesh && child.material) {
@@ -246,11 +268,7 @@ export default function MindARViewer() {
               materials.forEach((mat) => {
                 const isHair = child.name.toLowerCase().includes("hair") || (mat.name && mat.name.toLowerCase().includes("hair"));
                 if (mat.emissive) {
-                  if (isHair) {
-                    mat.emissive.setHex(0x000000); 
-                  } else {
-                    mat.emissive.setHex(0x080808); 
-                  }
+                  mat.emissive.setHex(isHair ? 0x000000 : 0x080808);
                 }
                 if (mat.roughness !== undefined) mat.roughness = 0.9;
                 if (mat.metalness !== undefined) mat.metalness = 0.0;
@@ -261,14 +279,14 @@ export default function MindARViewer() {
           blinkTargetsRef.current = localBlinkTargets;
           mouthTargetsRef.current = localMouthTargets;
 
-          setSubtitle("ルキルキ召喚完了。");
-
+          setSubtitle("[SYS_INFO] RUKIRUKI MODULE INITIALIZED.");
           anchor.group.add(gltf.scene);
 
           if (gltf.animations.length > 0) {
             const mixer = new ThreeAnimationMixer(gltf.scene);
             mixerRef.current = mixer;
             
+            // ─── 【維持】ユーザー様の最新アニメーションインデックス ───
             actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
             actionsRef.current["talking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
             actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
@@ -281,7 +299,7 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
+          setSubtitle(">>> [LINK_ESTABLISHED] RUKIRUKI SYNCED.");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -298,7 +316,7 @@ export default function MindARViewer() {
         };
 
         anchor.onTargetLost = () => {
-          setSubtitle("ターゲットを見失いました。");
+          setSubtitle(">>> [LINK_LOST] SEARCHING TARGET MARKER...");
           isSpawningRef.current = false;
           if (avatarSceneRef.current) {
             avatarSceneRef.current.scale.set(0, 0, 0); 
@@ -345,15 +363,11 @@ export default function MindARViewer() {
                 const progress = blinkTimer / blinkDuration;
                 const weight = Math.sin(progress * Math.PI); 
                 blinkTargetsRef.current.forEach((target) => {
-                  target.idxs.forEach((idx) => {
-                    target.mesh.morphTargetInfluences[idx] = weight;
-                  });
+                  target.idxs.forEach((idx) => { target.mesh.morphTargetInfluences[idx] = weight; });
                 });
               } else {
                 blinkTargetsRef.current.forEach((target) => {
-                  target.idxs.forEach((idx) => {
-                    target.mesh.morphTargetInfluences[idx] = 0;
-                  });
+                  target.idxs.forEach((idx) => { target.mesh.morphTargetInfluences[idx] = 0; });
                 });
                 isBlinking = false;
                 blinkTimer = 0;
@@ -385,23 +399,17 @@ export default function MindARViewer() {
           if (isVoicePlaying && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
             let totalAmplitude = 0;
-            for (let i = 0; i < freqDataRef.current.length; i++) {
-              totalAmplitude += freqDataRef.current[i];
-            }
+            for (let i = 0; i < freqDataRef.current.length; i++) { totalAmplitude += freqDataRef.current[i]; }
             const averageVolume = totalAmplitude / freqDataRef.current.length;
             const morphWeight = Math.min((averageVolume / 110) * 1.5, 1.0);
             const finalWeight = morphWeight > 0.05 ? morphWeight : 0;
 
             mouthTargetsRef.current.forEach((target) => {
-              target.idxs.forEach((idx) => {
-                target.mesh.morphTargetInfluences[idx] = finalWeight;
-              });
+              target.idxs.forEach((idx) => { target.mesh.morphTargetInfluences[idx] = finalWeight; });
             });
           } else if (mouthTargetsRef.current.length > 0) {
             mouthTargetsRef.current.forEach((target) => {
-              target.idxs.forEach((idx) => {
-                target.mesh.morphTargetInfluences[idx] = 0;
-              });
+              target.idxs.forEach((idx) => { target.mesh.morphTargetInfluences[idx] = 0; });
             });
           }
 
@@ -411,7 +419,7 @@ export default function MindARViewer() {
       } catch (initError: any) {
         console.error("MindAR起動失敗:", initError);
         const errMsg = initError?.message || String(initError);
-        setSubtitle(`システム初期化エラー: ${errMsg}`);
+        setSubtitle(`[CRITICAL_ERR] INITIALIZATION FAILED: ${errMsg}`);
         alert(`🚨 ARカメラ起動エラー:\n${errMsg}`);
       }
     };
@@ -443,23 +451,18 @@ export default function MindARViewer() {
     }
   };
 
-  // ─── 【新設】現在のARカメラ映像（MindARによって生成されたvideo要素）をキャプチャしてBase64化する関数 ───
+  // ─── 【追加】Vision用のカメラ映像JPEGキャプチャロジック ───
   const captureCameraFrame = (): string | null => {
     const video = containerRef.current?.querySelector("video") || document.querySelector("video");
     if (!video) return null;
 
     const canvas = document.createElement("canvas");
-    // gpt-4o-mini の low解像度モードに最適化するため、縦横を半分にして転送負荷を低減
     canvas.width = video.videoWidth > 0 ? video.videoWidth / 2 : 640;
     canvas.height = video.videoHeight > 0 ? video.videoHeight / 2 : 480;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-
-    // 現在のカメラ映像のコマをCanvasにレンダリング
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // 軽量化と高速レスポンスのためJPEG（画質70%）でBase64データURL化
     return canvas.toDataURL("image/jpeg", 0.7);
   };
 
@@ -477,12 +480,11 @@ export default function MindARViewer() {
       initAudioPipeline(audioInstance);
     }
 
-    setSubtitle(`思考中... 「${text}」`);
+    setSubtitle(`>>> [PROCESSING] COMPUTE QUANTUM LOGIC...`);
     setAiStatus("thinking");
 
-    // ─── 【Vision統合】送信ボタン（または音声確定）が押された瞬間のARカメラの映像を取得 ───
+    // カメラの現在のフレームを取得
     const imageBase64 = captureCameraFrame();
-
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
     if (baseUrl) {
@@ -490,11 +492,10 @@ export default function MindARViewer() {
         const response = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // ─── 【拡張】Payloadに image_base64 を追加してバックエンドに投げる ───
           body: JSON.stringify({ 
             message: text, 
             wallet_address: address || null,
-            image_base64: imageBase64 
+            image_base64: imageBase64  // ─── 【追加】画像をバックエンドへ送信 ───
           }),
         });
 
@@ -513,14 +514,12 @@ export default function MindARViewer() {
             const binaryString = window.atob(data.audio_data);
             const len = binaryString.length;
             const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
+            for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
             const blob = new Blob([bytes], { type: "audio/mpeg" });
             const audioUrl = URL.createObjectURL(blob);
 
             audioInstance.onended = () => {
-              setSubtitle("次の指示を待っています。");
+              setSubtitle(">>> [STANDBY] AWAITING NEXT TELEMETRY INPUT...");
               setAiStatus("idle");
               URL.revokeObjectURL(audioUrl); 
             };
@@ -533,21 +532,21 @@ export default function MindARViewer() {
             console.error("音声再生エラー。フォールバック処理を行います:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("次の指示を待っています。");
+              setSubtitle(">>> [STANDBY] PIPELINE FALLBACK COMPLETED.");
               setAiStatus("idle");
             }, 5000);
           }
         } else {
           setAiStatus("talking");
           setTimeout(() => {
-            setSubtitle("次の指示を待っています。");
+            setSubtitle(">>> [STANDBY] AWAITING NEXT TELEMETRY INPUT...");
             setAiStatus("idle");
           }, 5000);
         }
         return;
       } catch (error) {
         console.error("通信エラー:", error);
-        setSubtitle("バックエンドとの通信に失敗しました。");
+        setSubtitle("[ERR] QUANTUM LINK TIMEOUT. SIGNAL BLOCKED.");
         setAiStatus("idle");
         return;
       }
@@ -555,13 +554,11 @@ export default function MindARViewer() {
 
     // Mock テスト環境用
     setTimeout(() => {
-      if (inputRef.current) {
-        inputRef.current.value = "";
-      }
-      setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
+      if (inputRef.current) { inputRef.current.value = ""; }
+      setSubtitle(`[MOCK_SYS] RECEIVE: "${text}"`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("次の指示を待っています.");
+        setSubtitle(">>> [STANDBY] AWAITING NEXT TELEMETRY INPUT...");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
@@ -576,51 +573,70 @@ export default function MindARViewer() {
           height: 100vh !important;
           object-fit: cover !important;
           position: fixed !important;
-          top: 0 !important;
-          left: 0 !important;
-          }
+          top: 0 !important; left: 0 !important;
+        }
       `}} />
 
       <div
         ref={containerRef}
         className="mindar-full-container"
         style={{
-          position: "fixed",
-          top: 0, left: 0, width: "100vw", height: "100vh",
+          position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh",
           overflow: "hidden", zIndex: 1, backgroundColor: "#000",
         }}
       />
 
-      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
+      {/* ─── SF調に磨き上げたオーバーレイUI ─── */}
+      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         
-        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
-          <span className="text-xs font-semibold flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
-            STATUS: {aiStatus.toUpperCase()}
+        {/* 上部ヘッダー：サイバーボーダーとスキャン状態 */}
+        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md px-4 py-3 rounded-xl text-white border border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.15)]">
+          <span className="text-xs font-bold flex items-center gap-2.5 tracking-widest text-cyan-400">
+            <span className={`h-2 w-2 rounded-full shadow-[0_0_8px_currentColor] ${aiStatus === "thinking" ? "bg-yellow-400 text-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-cyan-400 text-cyan-400 animate-ping" : "bg-purple-500 text-purple-500"}`} />
+            MAGATOKI_SYS: {aiStatus.toUpperCase()}
           </span>
-          <div className="flex gap-2">
-            <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
-            <button onClick={() => setAiStatus("thinking")} className="text-[10px] bg-yellow-600 px-2 py-1 rounded">Think</button>
-            <button onClick={() => setAiStatus("talking")} className="text-[10px] bg-green-600 px-2 py-1 rounded">Talk</button>
+          <div className="text-[9px] text-gray-400 flex gap-3 tracking-wider">
+            <span>LINK: <span className="text-green-400">SECURE</span></span>
+            <span>FPS: 60</span>
           </div>
         </div>
 
-        <div className="w-full space-y-3 pointer-events-auto mb-4">
-          <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
-            <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line">
+        {/* 右上隅：SFリアルタイムクロック & システムメタデータ */}
+        <div className="absolute top-20 right-4 text-right font-mono text-[10px] text-cyan-400 tracking-widest space-y-0.5 bg-black/50 px-3 py-2 rounded-lg border border-cyan-500/20 backdrop-blur-sm pointer-events-auto shadow-md">
+          <div className="text-gray-500 text-[8px] border-b border-cyan-500/20 pb-0.5 mb-1 text-center font-bold">GATEWAY TELEMETRY</div>
+          <div>NODE_STABLE: 99.4%</div>
+          <div className="text-gray-300">{dateString}</div>
+          <div className="text-xs font-bold text-cyan-300 text-shadow-cyan animate-pulse tracking-normal">{timeString} <span className="text-[9px] font-normal text-cyan-500">JST</span></div>
+        </div>
+
+        {/* 下部：字幕コンテナと入力ブロック */}
+        <div className="w-full space-y-3.5 pointer-events-auto mb-4">
+          
+          {/* 字幕エリア：光るサイバーフレーム */}
+          <div className="relative bg-black/75 backdrop-blur-xl px-5 py-4.5 rounded-2xl text-white border border-purple-500/30 shadow-[0_0_20px_rgba(139,92,246,0.15)] min-h-[80px] flex items-center">
+            {/* 角のL字装飾 */}
+            <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-cyan-400 rounded-tl" />
+            <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-cyan-400 rounded-tr" />
+            <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-cyan-400 rounded-bl" />
+            <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-cyan-400 rounded-br" />
+            
+            <p className="text-xs font-medium leading-relaxed tracking-wider text-gray-100 whitespace-pre-line w-full">
               {subtitle}
             </p>
           </div>
 
+          {/* 入力フォーム */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
             <button
               type="button"
               onClick={toggleListening}
-              className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto ${
-                isListening ? "bg-red-600 text-white animate-pulse" : "bg-gray-800 text-white border border-white/10 hover:bg-gray-700"
+              className={`px-4.5 py-3.5 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all border ${
+                isListening 
+                  ? "bg-red-600/20 text-red-400 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)] animate-pulse" 
+                  : "bg-black/70 text-cyan-400 border-cyan-500/40 hover:bg-cyan-950/40"
               }`}
             >
-              {isListening ? "🛑" : "🎙️"}
+              {isListening ? "SYNC" : "🎙️"}
             </button>
 
             <input 
@@ -628,15 +644,16 @@ export default function MindARViewer() {
               type="text" 
               name="message"
               disabled={aiStatus === "thinking"}
-              placeholder={isListening ? "声を聴いています..." : "AI人格にメッセージを送信..."} 
-              className="flex-1 bg-black/80 text-white border border-white/15 rounded-xl px-4 py-3.5 focus:outline-none focus:border-purple-500 text-sm placeholder-gray-500 backdrop-blur-md disabled:opacity-70 disabled:cursor-not-allowed"
+              placeholder={isListening ? "<< LISTENING AUDIO STREAM >>" : "INPUT COMMAND TO RUKIRUKI..."} 
+              className="flex-1 bg-black/80 text-cyan-200 border border-purple-500/30 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-400 text-xs tracking-wider placeholder-gray-600 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed shadow-inner"
             />
+            
             <button 
               type="submit" 
               disabled={aiStatus === "thinking"}
-              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-5 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-transform disabled:opacity-50"
+              className="bg-gradient-to-r from-purple-700 to-cyan-700 hover:from-purple-600 hover:to-cyan-600 text-white font-bold px-6 py-3.5 rounded-xl text-xs tracking-widest border border-cyan-400/20 shadow-md active:scale-95 transition-transform disabled:opacity-40"
             >
-              送信
+              EXEC
             </button>
           </form>
         </div>
