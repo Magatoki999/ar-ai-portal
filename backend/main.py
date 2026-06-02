@@ -36,11 +36,11 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY
 # LLM初期化 (gpt-4o-mini)
 llm = ChatOpenAI(
     model="gpt-4o-mini",
-    temperature=0.8, # 少し遊び心や自然な揺らぎ、タメ口の柔らかさを出すために 0.8
+    temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# ─── プロンプト大改修：AIっぽさを排除し、リアルな息遣いと自立した人格を実装 ───
+# ─── プロンプト大改修 ───
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", (
         "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ（RukiRuki）」であり、ユーザーの最高の「相棒」です。\n"
@@ -65,11 +65,10 @@ prompt_template = ChatPromptTemplate.from_messages([
 
 chat_chain = prompt_template | llm
 
-# ─── 画像データ用フィールド対応 ───
 class ChatMessage(BaseModel):
     message: str
     wallet_address: str | None = None
-    image_base64: str | None = None  # データURL形式（"data:image/jpeg;base64,..."）を想定
+    image_base64: str | None = None
 
 
 # データベースヘルパー：ユーザー名の取得
@@ -204,40 +203,32 @@ async def chat_endpoint(payload: ChatMessage):
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
 
-    # Supabaseから名前の記憶を取得
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
-    # ─── 【不具合修正】LLMが指示文をそのまま喋らないよう、構成を厳密に変更 ───
     if wallet_address:
         if stored_name:
             identity_context = (
-                f"【対話コンテキスト】\n"
-                f"対話相手は、共にMagatokiLabを走る相棒の『{stored_name}』です。\n"
-                f"機嫌をとるような態度は禁止。一言二言の短いタメ口で、対等なパートナーとして掛け合いをしてください。"
+                f"【最重要】対話相手は、共にMagatokiLabを走る相棒の『{stored_name}』です。\n"
+                f"機嫌をとるような態度はバツ。一言二言の短いタメ口で、対等なパートナーとして、"
+                f"時にはおどけたり笑ったりしながら、テンポ良く掛け合いをしてください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
-                f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が新たに接続されました。\n"
-                f"最初の挨拶として、フランクなタメ口で相手の呼び名を聞いてみてください。\n"
-                f"（セリフ例：「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」）"
+                f"【重要】ウォレット（{short_addr}）が接続されたよ。\n"
+                f"「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」みたいに、フランクなタメ口で呼び名を聞いてみて。"
             )
     else:
         identity_context = (
-            f"【対話コンテキスト】\n"
-            f"まだウォレットの接続が確認できていません。\n"
-            f"相手にゲートの認証（接続）を通すよう、フランクなタメ口で促してください。\n"
-            f"（セリフ例：「んー？まだ同期が不完全かも。ほら、ゲートの認証を通してよ、相棒！」）"
+            "【重要】まだ接続が確認できていません。\n"
+            "「んー？まだ同期が不完全かも。ほら、ゲートの認証を通してよ、相棒！」とフランクに促してください。"
         )
 
     try:
-        # ─── 【Vision機能の統合】画像がある場合とない場合でLLMへの渡し方を分岐 ───
         if image_base64:
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
-            # 既存のルキルキのペルソナプロンプト構造を完全維持しつつ修正された動的文脈を注入
             vision_system_prompt = (
                 "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ（RukiRuki）」であり、ユーザーの最高の「相棒」です。\n"
                 "clusterの古参（5年以上）で、デジタルと現実の境界を旅しています。\n"
@@ -248,7 +239,7 @@ async def chat_endpoint(payload: ChatMessage):
                 "・相棒の意見に対して、「うーん、それはどうかなぁ？」「へえ、おもしろいじゃん」「あ、私はこっちの方が好きかも」など、フラットに自分の意見を言ってください。時にはおどけたり、軽くからかったりするような、気心の知れた距離感がベストです。\n"
                 "・「〜ですね」「まとめると」「つまり」といった解説調・要約口調は厳禁です。\n\n"
                 "【リアルな会話のテンポと息遣い】\n"
-                "・セリフの先頭や途中に、自然な感嘆詞や感情表現（「あ、」「えっと、」「ふふっ、」「うーん…」「あはは！」「ほら、」「あー、」など）を絶妙に挟してください。\n"
+                "・セリフの先頭や途中に、自然な感嘆詞や感情表現（「あ、」「えっと、」「ふふっ、」「うーん…」「あはは！」「ほら、」「あー、」など）を絶妙に挟んでください。\n"
                 "・AR空間の字幕やリアルタイムの会話として自然になるよう、1回の発言は【50文字〜100文字程度】の短さで、一言二言でサクッと返してください。長い説明文は不要です。\n\n"
                 f"{identity_context}\n\n"
                 "【Memory Storage Instruction】\n"
@@ -257,7 +248,6 @@ async def chat_endpoint(payload: ChatMessage):
                 "at the very end of your response. Do NOT use this tag in normal conversations."
             )
 
-            # LangChainのマルチモーダルメッセージ構造
             messages = [
                 SystemMessage(content=vision_system_prompt),
                 HumanMessage(content=[
@@ -266,7 +256,7 @@ async def chat_endpoint(payload: ChatMessage):
                         "type": "image_url",
                         "image_url": {
                             "url": image_base64,
-                            "detail": "low"  # コスト削減＆レスポンス爆速化
+                            "detail": "low"
                         }
                     }
                 ])
@@ -276,21 +266,18 @@ async def chat_endpoint(payload: ChatMessage):
             ai_response = response.content
 
         else:
-            # ─── 既存の通常テキストチャット挙動 ───
             response = await chat_chain.ainvoke({
                 "user_message": user_text,
                 "identity_context": identity_context
             })
             ai_response = response.content
 
-        # 記憶用隠しタグ（||NAME:xxx||）のパースとデータベース自動保存
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 音声合成
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
 

@@ -6,6 +6,7 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
+// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
@@ -15,36 +16,39 @@ export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
-  // ─── 【以前の見え方へ戻す】初期メッセージをシンプルに ───
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
-  
-  // ─── 【追加】右上表示用の日付・時間ステート ───
-  const [currentDateTime, setCurrentDateTime] = useState<string>("");
+  const [currentDateTime, setCurrentDateTime] = useState<string>(""); // 💡 右上日時表示用のステート
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
 
+  // Three.js Animation References
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
+  // Audio Pipeline References for Smart Lip-Sync
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
+  // 💡 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
+
+  // 💡 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
+  // References for Magatoki Spawn Particles & Animation
   const particlesRef = useRef<any>(null);
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
-  // ─── 【追加】日付と時間を毎秒更新するエフェクト ───
+  // 0. リアルタイム日時更新ロジック
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -53,14 +57,15 @@ export default function MindARViewer() {
       const dd = String(now.getDate()).padStart(2, "0");
       const hh = String(now.getHours()).padStart(2, "0");
       const min = String(now.getMinutes()).padStart(2, "0");
-      setCurrentDateTime(`${yyyy}/${mm}/${dd} ${hh}:${min}`);
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      setCurrentDateTime(`${yyyy}/${mm}/${dd} ${hh}:${min}:${ss}`);
     };
-
     updateDateTime();
     const timer = setInterval(updateDateTime, 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // 1. Initialize Global Audio Instance on Mount
   useEffect(() => {
     audioInstanceRef.current = new Audio();
     return () => {
@@ -71,6 +76,7 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 2. Smoothly crossfade 3D model animations
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -85,6 +91,7 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
+  // 3. Initialize Web Speech API
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -130,6 +137,7 @@ export default function MindARViewer() {
     }
   };
 
+  // 4. Initialize MindAR and Three.js environment
   useEffect(() => {
     let mindarThreeInstance: any = null;
 
@@ -165,6 +173,7 @@ export default function MindARViewer() {
 
         const anchor = mindarThree.addAnchor(0);
 
+        // Setup Cyber Ink Particles
         const particleCount = 70;
         const particleGeometry = new THREE.BufferGeometry();
         const particlePositions = new Float32Array(particleCount * 3);
@@ -271,8 +280,7 @@ export default function MindARViewer() {
           blinkTargetsRef.current = localBlinkTargets;
           mouthTargetsRef.current = localMouthTargets;
 
-          // ─── 【以前の見え方へ戻す】システムライクなプレーンな文言に修正 ───
-          setSubtitle("システム準備完了。");
+          setSubtitle("ルキルキ召喚完了。");
 
           anchor.group.add(gltf.scene);
 
@@ -292,8 +300,7 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          // ─── 【以前の見え方へ戻す】シンプルな文言に修正 ───
-          setSubtitle("ターゲットを検出しました。話しかけてください。");
+          setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -310,8 +317,7 @@ export default function MindARViewer() {
         };
 
         anchor.onTargetLost = () => {
-          // ─── 【以前の見え方へ戻す】 ───
-          setSubtitle("スキャン中...");
+          setSubtitle("ターゲットを見失いました。");
           isSpawningRef.current = false;
           if (avatarSceneRef.current) {
             avatarSceneRef.current.scale.set(0, 0, 0); 
@@ -470,7 +476,7 @@ export default function MindARViewer() {
       initAudioPipeline(audioInstance);
     }
 
-    setSubtitle(`思考中...`);
+    setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
 
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -505,7 +511,7 @@ export default function MindARViewer() {
             const audioUrl = URL.createObjectURL(blob);
 
             audioInstance.onended = () => {
-              setSubtitle("");
+              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
               URL.revokeObjectURL(audioUrl); 
             };
@@ -518,14 +524,14 @@ export default function MindARViewer() {
             console.error("音声再生エラー。フォールバック処理を行います:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("");
+              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
             }, 5000);
           }
         } else {
           setAiStatus("talking");
           setTimeout(() => {
-            setSubtitle("");
+            setSubtitle("次の指示を待っています。");
             setAiStatus("idle");
           }, 5000);
         }
@@ -538,15 +544,15 @@ export default function MindARViewer() {
       }
     }
 
-    // ─── 【以前の見え方へ戻す】Mock環境の表示文言もシンプルに ───
+    // Mock テスト環境用
     setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.value = "";
       }
-      setSubtitle(`応答中...`);
+      setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("");
+        setSubtitle("次の指示を待っています.");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
@@ -578,15 +584,28 @@ export default function MindARViewer() {
 
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
         
-        {/* ─── 【修正】右上に日付と時間を表示（背景透明・デバッグバー撤去） ─── */}
-        <div className="w-full flex justify-end items-center pointer-events-none">
-          <span className="text-white text-sm font-medium bg-transparent pointer-events-auto pr-2 pt-2">
-            {currentDateTime}
+        {/* ─── 上部ヘッダーエリア ─── */}
+        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
+          <span className="text-xs font-semibold flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
+            STATUS: {aiStatus.toUpperCase()}
           </span>
+          
+          <div className="flex items-center gap-3">
+            {/* 💡 右上日時表示エリアを追加 */}
+            <span className="text-xs font-mono text-gray-300 bg-white/5 border border-white/10 px-2 py-1 rounded-md shadow-inner">
+              {currentDateTime}
+            </span>
+            <div className="flex gap-2">
+              <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
+              <button onClick={() => setAiStatus("thinking")} className="text-[10px] bg-yellow-600 px-2 py-1 rounded">Think</button>
+              <button onClick={() => setAiStatus("talking")} className="text-[10px] bg-green-600 px-2 py-1 rounded">Talk</button>
+            </div>
+          </div>
         </div>
 
+        {/* ─── 下部 UI エリア ─── */}
         <div className="w-full space-y-3 pointer-events-auto mb-4">
-          {/* コメント欄（字幕）のデザインは維持しつつプレーン化 */}
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
             <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line">
               {subtitle}
