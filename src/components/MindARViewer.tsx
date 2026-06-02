@@ -262,7 +262,6 @@ export default function MindARViewer() {
           blinkTargetsRef.current = localBlinkTargets;
           mouthTargetsRef.current = localMouthTargets;
 
-          // 💡 不要なデバッグテキストを削除し、「ルキルキ召喚完了。」に統一
           setSubtitle("ルキルキ召喚完了。");
 
           anchor.group.add(gltf.scene);
@@ -270,9 +269,11 @@ export default function MindARViewer() {
           if (gltf.animations.length > 0) {
             const mixer = new ThreeAnimationMixer(gltf.scene);
             mixerRef.current = mixer;
+            
+            // ─── 【修正箇所】Talking と Thinking のアニメーションインデックスを入れ替え ───
             actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
-            actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
-            actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
+            actionsRef.current["talking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
+            actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
 
             activeActionRef.current = actionsRef.current["idle"];
             activeActionRef.current.play();
@@ -282,7 +283,6 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          // 💡 キャラクター名をルキルキに修正
           setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
@@ -451,8 +451,6 @@ export default function MindARViewer() {
     const text = formData.get("message") as string;
     if (!text.trim()) return;
 
-    // ❌ ここでの即時リセット(e.currentTarget.reset())を廃止（Thinking中も文字を残す）
-
     const audioInstance = audioInstanceRef.current;
     if (audioInstance) {
       audioInstance.pause();
@@ -461,7 +459,6 @@ export default function MindARViewer() {
       initAudioPipeline(audioInstance);
     }
 
-    // 💡 認識された言葉を「思考中」の文字と一緒に明示
     setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
 
@@ -479,7 +476,6 @@ export default function MindARViewer() {
 
         const data = await response.json();
         
-        // ⭕ レスポンスが正常に返ってきた段階で、入力欄の文字をクリアする
         if (inputRef.current) {
           inputRef.current.value = "";
         }
@@ -527,7 +523,6 @@ export default function MindARViewer() {
         console.error("通信エラー:", error);
         setSubtitle("バックエンドとの通信に失敗しました。");
         setAiStatus("idle");
-        // 💡 失敗した場合は、打ち直せるようにあえてテキストを残したままにします
         return;
       }
     }
@@ -540,7 +535,7 @@ export default function MindARViewer() {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("次の指示を待っています。");
+        setSubtitle("次の指示を待っています.");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
@@ -557,7 +552,7 @@ export default function MindARViewer() {
           position: fixed !important;
           top: 0 !important;
           left: 0 !important;
-        }
+          }
       `}} />
 
       <div
@@ -602,7 +597,6 @@ export default function MindARViewer() {
               {isListening ? "🛑" : "🎙️"}
             </button>
 
-            {/* 💡 disabled={aiStatus === "thinking"} を付与し、思考中は入力欄をロック（文字は見えたまま） */}
             <input 
               ref={inputRef}
               type="text" 
