@@ -1,6 +1,7 @@
 import os
 import base64
 import re
+from datetime import datetime, timedelta, timezone  # 💡 リアルタイム日時取得用に追加
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -40,7 +41,7 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# ─── プロンプト大改修 ───
+# ─── プロンプトテンプレート ───
 prompt_template = ChatPromptTemplate.from_messages([
     ("system", (
         "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ（RukiRuki）」であり、ユーザーの最高の「相棒」です。\n"
@@ -203,26 +204,45 @@ async def chat_endpoint(payload: ChatMessage):
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
 
+    # 💡 リアルタイムの日本時間(JST)をリクエスト毎に動的生成
+    JST = timezone(timedelta(hours=+9))
+    now_jst = datetime.now(JST)
+    now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
+    
+    # AIに現在の正確な時間を認識させるためのコンテキスト
+    time_context = (
+        f"【現在の観測日時（日本時間）】\n"
+        f"現在時刻: {now_str}\n"
+        f"※相棒（ユーザー）から「今いつ？」「今日何日？」などの時間を尋ねる質問があったら、"
+        f"この日時情報を基準に、自然なフランクなタメ口（例：「今は{now_jst.strftime('%m月%d日の%H時%M分')}だよ！」など）で親身に答えてあげてください。解説口調は禁止です。\n\n"
+    )
+
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
     if wallet_address:
         if stored_name:
             identity_context = (
-                f"【最重要】対話相手は、共にMagatokiLabを走る相棒の『{stored_name}』です。\n"
+                f"【対話コンテキスト】\n"
+                f"対話相手は、共にMagatokiLabを走る相棒の『{stored_name}』です。\n"
                 f"機嫌をとるような態度はバツ。一言二言の短いタメ口で、対等なパートナーとして、"
                 f"時にはおどけたり笑ったりしながら、テンポ良く掛け合いをしてください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
-                f"【重要】ウォレット（{short_addr}）が接続されたよ。\n"
+                f"【対話コンテキスト】\n"
+                f"ウォレット（{short_addr}）が接続されたよ。\n"
                 f"「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」みたいに、フランクなタメ口で呼び名を聞いてみて。"
             )
     else:
         identity_context = (
-            "【重要】まだ接続が確認できていません。\n"
+            "【対話コンテキスト】\n"
+            "まだ接続が確認できていません。\n"
             "「んー？まだ同期が不完全かも。ほら、ゲートの認証を通してよ、相棒！」とフランクに促してください。"
         )
+
+    # 日時情報とキャラクター接続情報をマージ
+    full_identity_context = time_context + identity_context
 
     try:
         if image_base64:
@@ -236,12 +256,12 @@ async def chat_endpoint(payload: ChatMessage):
                 "【AIらしさの徹底排除（最重要）】\n"
                 "・AI特有の「相手の言葉のオウム返し」や「無理な大絶賛」「全肯定」は絶対にしないでください。\n"
                 "・聞き役ロボットではなく、独自の意志・感情・好みを持った1人の対等な人間（相棒）として振る舞ってください。\n"
-                "・相棒の意見に対して、「うーん、それはどうかなぁ？」「へえ、おもしろいじゃん」「あ、私はこっちの方が好きかも」など、フラットに自分の意見を言ってください。時にはおどけたり、軽くからかったりするような、気心の知れた距離感がベストです。\n"
+                "・相棒の意見に対して、「うーん、それはどうかなぁ？」「へえ、おもしろいじゃん」「あ、私はこっちの方が好きかも」など、フラットに自分の意見を言ってください。時にはおどけたり、軽くからかったりするような, 気心の知れた距離感がベストです。\n"
                 "・「〜ですね」「まとめると」「つまり」といった解説調・要約口調は厳禁です。\n\n"
                 "【リアルな会話のテンポと息遣い】\n"
                 "・セリフの先頭や途中に、自然な感嘆詞や感情表現（「あ、」「えっと、」「ふふっ、」「うーん…」「あはは！」「ほら、」「あー、」など）を絶妙に挟んでください。\n"
                 "・AR空間の字幕やリアルタイムの会話として自然になるよう、1回の発言は【50文字〜100文字程度】の短さで、一言二言でサクッと返してください。長い説明文は不要です。\n\n"
-                f"{identity_context}\n\n"
+                f"{full_identity_context}\n\n"
                 "【Memory Storage Instruction】\n"
                 "If the user explicitly tells you their name or how they want to be called "
                 "(e.g., '私の名前はタカシです', 'ルキルキ、オーマと呼んで'), extract that name and append: ||NAME:extracted_name|| "
@@ -268,7 +288,7 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             response = await chat_chain.ainvoke({
                 "user_message": user_text,
-                "identity_context": identity_context
+                "identity_context": full_identity_context
             })
             ai_response = response.content
 
