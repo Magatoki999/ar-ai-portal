@@ -14,9 +14,9 @@ from langchain_core.prompts import ChatPromptTemplate
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [True Buddy Edition]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production]")
 
-# CORS設定
+# ─── 【本番強化】CORS設定（環境変数から取得、未設定時はローカル等をフォールバック） ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
@@ -28,14 +28,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Supabase 認証情報
+# ─── 【本番強化】Supabase 認証情報（特権キーである SERVICE_ROLE_KEY を優先） ───
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
 # LLM初期化 (gpt-4o-mini)
 llm = ChatOpenAI(
     model="gpt-4o-mini",
-    temperature=0.8, # ─── 【調整】少し遊び心や自然な揺らぎを出すために0.7から0.8に微増 ───
+    temperature=0.8, # ─── 【調整】少し遊び心や自然な揺らぎ、タメ口の柔らかさを出すために 0.8 に引き上げ ───
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
@@ -73,8 +73,13 @@ class ChatMessage(BaseModel):
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
+
     url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
@@ -87,10 +92,11 @@ async def get_stored_username(wallet_address: str) -> str | None:
     return None
 
 
-# データベースヘルパー：ユーザー名の保存
+# データベースヘルパー：ユーザー名の保存・上書き
 async def save_username_to_db(wallet_address: str, name: str):
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return
+
     url = f"{SUPABASE_URL}/rest/v1/user_profiles"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -98,7 +104,11 @@ async def save_username_to_db(wallet_address: str, name: str):
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates"
     }
-    data = {"wallet_address": wallet_address.lower(), "user_name": name}
+    data = {
+        "wallet_address": wallet_address.lower(),
+        "user_name": name
+    }
+
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=data, headers=headers, timeout=5.0)
@@ -113,15 +123,29 @@ async def save_username_to_db(wallet_address: str, name: str):
 # オーディオヘルパー：OpenAI TTS
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: return None
+    if not api_key:
+        print("OpenAI API KEY missing. Skipping OpenAI TTS.")
+        return None
+
     url = "https://api.openai.com/v1/audio/speech"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    data = {"model": "tts-1", "input": text, "voice": "nova"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "tts-1",
+        "input": text,
+        "voice": "nova"
+    }
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
+            else:
+                print(f"OpenAI TTS API Error: {response.status_code} - {response.text}")
+                return None
     except Exception as e:
         print(f"OpenAI TTS connection error: {e}")
         return None
@@ -131,19 +155,33 @@ async def generate_openai_tts(text: str) -> str | None:
 async def generate_elevenlabs_voice(text: str) -> str | None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    if not api_key or not voice_id: return None
+    if not api_key or not voice_id:
+        print("ElevenLabs config missing. Skipping ElevenLabs.")
+        return None
+
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key}
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": api_key
+    }
     data = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
     }
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
+            else:
+                print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
+                return None
     except Exception as e:
         print(f"ElevenLabs connection error: {e}")
         return None
@@ -151,7 +189,10 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 
 @app.get("/")
 def read_root():
-    return {"status": "healthy", "message": "RukiRuki XR Gateway Online"}
+    return {
+        "status": "healthy",
+        "message": "RukiRuki XR Gateway Online"
+    }
 
 
 @app.post("/api/chat")
@@ -159,9 +200,10 @@ async def chat_endpoint(payload: ChatMessage):
     user_text = payload.message
     wallet_address = payload.wallet_address
 
+    # Supabaseから名前の記憶を取得
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
-    # ─── 【動的コンテキスト改修】ルキルキとしての自然なスタンスの指示 ───
+    # ─── 【動的コンテキスト改修】アドレスによる機械的説明を排除し、フランクなスタンスへ ───
     if wallet_address:
         if stored_name:
             identity_context = (
@@ -182,24 +224,28 @@ async def chat_endpoint(payload: ChatMessage):
         )
 
     try:
+        # LLMの呼び出し
         response = await chat_chain.ainvoke({
             "user_message": user_text,
             "identity_context": identity_context
         })
         ai_response = response.content
 
+        # 記憶用隠しタグ（||NAME:xxx||）のパースとデータベース自動保存
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
+        # 音声合成（指定プロバイダーの実行、および自動フォールバック）
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
 
         if provider == "elevenlabs":
             audio_base64 = await generate_elevenlabs_voice(ai_response)
             if not audio_base64:
+                print("ElevenLabs failed. Falling back to OpenAI TTS automatically.")
                 audio_base64 = await generate_openai_tts(ai_response)
         else:
             audio_base64 = await generate_openai_tts(ai_response)
