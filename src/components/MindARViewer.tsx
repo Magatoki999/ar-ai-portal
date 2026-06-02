@@ -6,14 +6,10 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
-// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
 }
-
-// 💡 スマホの自動再生ブロックを回避するための無音WAVデータ
-const SILENT_AUDIO_SRC = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
 
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,16 +27,13 @@ export default function MindARViewer() {
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // Audio Pipeline References for Smart Lip-Sync
-  const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
+  // 💡 [RENEWAL] Web Audio API Pipeline (HTMLMediaElementを完全廃止)
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null); // 現在再生中の音声ノード
   
-  // 💡 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
-
-  // 💡 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -50,18 +43,7 @@ export default function MindARViewer() {
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
-  // 1. Initialize Global Audio Instance on Mount
-  useEffect(() => {
-    audioInstanceRef.current = new Audio();
-    return () => {
-      if (audioInstanceRef.current) {
-        audioInstanceRef.current.pause();
-        audioInstanceRef.current = null;
-      }
-    };
-  }, []);
-
-  // 2. Smoothly crossfade 3D model animations
+  // Smoothly crossfade 3D model animations
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -76,7 +58,30 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
-  // 3. Initialize Web Speech API
+  // 💡 [RENEWAL] ユーザーのタップイベント時に同期してAudioContextのロックを安全に解除する関数
+  const initAudioPipeline = () => {
+    if (!audioContextRef.current) {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32;
+      
+      // Analyserノードを最終出力（スピーカー）に同期接続
+      analyser.connect(audioCtx.destination);
+      
+      audioContextRef.current = audioCtx;
+      analyserRef.current = analyser;
+      freqDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+    }
+    if (audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume();
+    }
+  };
+
+  // 💡 [NEW] 音声認識クロージャによる古いステート参照のバグを防ぐためのRefパターン
+  const sendMessageRef = useRef<((text: string) => Promise<void>) | null>(null);
+
+  // Initialize Web Speech API
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -94,35 +99,17 @@ export default function MindARViewer() {
         const transcript = event.results[0][0].transcript;
         if (inputRef.current) {
           inputRef.current.value = transcript;
-          const form = inputRef.current.form;
-          if (form) form.requestSubmit();
+        }
+        // 最新のコンテキストを保持した送信関数を実行（自動送信）
+        if (sendMessageRef.current) {
+          sendMessageRef.current(transcript);
         }
       };
       recognitionRef.current = recognition;
     }
   }, []);
 
-  const initAudioPipeline = (audioInstance: HTMLAudioElement) => {
-    if (!audioContextRef.current) {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioContextClass();
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 32;
-      
-      const source = audioCtx.createMediaElementSource(audioInstance);
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
-      
-      audioContextRef.current = audioCtx;
-      analyserRef.current = analyser;
-      freqDataRef.current = new Uint8Array(analyser.frequencyBinCount);
-    }
-    if (audioContextRef.current.state === "suspended") {
-      audioContextRef.current.resume();
-    }
-  };
-
-  // 4. Initialize MindAR and Three.js environment
+  // Initialize MindAR and Three.js environment
   useEffect(() => {
     let mindarThreeInstance: any = null;
 
@@ -271,7 +258,6 @@ export default function MindARViewer() {
 
           const blinkLog = discoveredBlinkKeys.length > 0 ? discoveredBlinkKeys.join("/") : "未検出";
           const mouthLog = discoveredMouthKeys.length > 0 ? discoveredMouthKeys.join("/") : "未検出";
-          // 💡 [UPDATE] アシェルからルキルキに変更
           setSubtitle(`ルキルキ召喚準備完了。\n[検出瞬きキー: ${blinkLog}] [検出口キー: ${mouthLog}]`);
 
           anchor.group.add(gltf.scene);
@@ -292,7 +278,6 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          // 💡 [UPDATE] アシェルからルキルキに変更
           setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
@@ -391,8 +376,8 @@ export default function MindARViewer() {
             }
           }
 
-          const audioInstance = audioInstanceRef.current;
-          const isVoicePlaying = audioInstance && !audioInstance.paused;
+          // 💡 [RENEWAL: WEBAUDIO-BASED LIP-SYNC] AudioBufferSourceが存在するかどうかで口パク判定
+          const isVoicePlaying = audioSourceRef.current !== null;
 
           if (isVoicePlaying && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
@@ -446,34 +431,20 @@ export default function MindARViewer() {
     if (isListening) {
       recognitionRef.current.stop();
     } else {
-      const audioInstance = audioInstanceRef.current;
-      if (audioInstance) {
-        // 💡 [FIX] 2回目以降の無音再生時に前回の終了イベントが誤発火するのを防ぐため、明示的にクリア
-        audioInstance.onended = null;
-        audioInstance.src = SILENT_AUDIO_SRC;
-        audioInstance.play().catch(() => {});
-        initAudioPipeline(audioInstance);
-      }
+      // 💡 タップした瞬間（ユーザージェスチャー内）にオーディオコンテキストをアクティブにする
+      initAudioPipeline();
       recognitionRef.current.start();
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const text = formData.get("message") as string;
+  // 💡 [RENEWAL] バックエンドへメッセージを送信するメイン処理（手動・自動共通）
+  const sendMessage = async (text: string) => {
     if (!text.trim()) return;
 
-    e.currentTarget.reset();
-
-    const audioInstance = audioInstanceRef.current;
-    if (audioInstance) {
-      audioInstance.pause();
-      // 💡 [FIX] 前回のイベントハンドラを確実にクリアして、無音再生時の誤発火を完全に防止
-      audioInstance.onended = null;
-      audioInstance.src = SILENT_AUDIO_SRC; 
-      audioInstance.play().catch(() => {});
-      initAudioPipeline(audioInstance);
+    // 前回の音声が残っていれば即座に破棄（停止）
+    if (audioSourceRef.current) {
+      try { audioSourceRef.current.stop(); } catch(e){}
+      audioSourceRef.current = null;
     }
 
     setSubtitle("思考中...");
@@ -494,30 +465,50 @@ export default function MindARViewer() {
         const data = await response.json();
         setSubtitle(data.reply);
 
-        if (data.audio_data && audioInstance) {
+        if (data.audio_data && audioContextRef.current && analyserRef.current) {
           try {
+            // base64バイナリをArrayBufferへ復元
             const binaryString = window.atob(data.audio_data);
             const len = binaryString.length;
             const bytes = new Uint8Array(len);
             for (let i = 0; i < len; i++) {
               bytes[i] = binaryString.charCodeAt(i);
             }
-            const blob = new Blob([bytes], { type: "audio/mpeg" });
-            const audioUrl = URL.createObjectURL(blob);
 
-            // 💡 本番音声音声が終了したときのイベントハンドラを設定
-            audioInstance.onended = () => {
-              setSubtitle("次の指示を待っています。");
-              setAiStatus("idle");
-              URL.revokeObjectURL(audioUrl); 
+            const audioCtx = audioContextRef.current;
+            
+            // 安全対策：もしサスペンド状態なら再度解除を試みる
+            if (audioCtx.state === "suspended") {
+              await audioCtx.resume();
+            }
+
+            // Web Audio APIの超高速デコーダーに流し込む
+            const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer);
+
+            // ソースノード（再生機）を動的に生成
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            
+            // リップシンク用のアナライザーノードに接続
+            source.connect(analyserRef.current);
+
+            // 再生終了時の処理
+            source.onended = () => {
+              if (audioSourceRef.current === source) {
+                setSubtitle("次の指示を待っています。");
+                setAiStatus("idle");
+                audioSourceRef.current = null;
+              }
             };
 
-            audioInstance.src = audioUrl;
+            audioSourceRef.current = source;
             setAiStatus("talking");
-            await audioInstance.play();
+            
+            // 💡 ロック解除済みのAudioContext上にあるため、非同期通信の後でも100%確実に即時再生されます
+            source.start(0);
 
           } catch (audioError) {
-            console.error("音声再生エラー。フォールバック処理を行います:", audioError);
+            console.error("音声デコード・再生エラー:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
               setSubtitle("次の指示を待っています。");
@@ -549,6 +540,23 @@ export default function MindARViewer() {
         setAiStatus("idle");
       }, 5000);
     }, 2000);
+  };
+
+  // 送信処理の最新インスタンスをRefへ常にバインド（クロージャ対策）
+  sendMessageRef.current = sendMessage;
+
+  // 手動で文字を入力して「送信」ボタンを押したときのハンドラ
+  const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const text = formData.get("message") as string;
+    if (!text.trim()) return;
+
+    e.currentTarget.reset();
+    
+    // タップの瞬間にオーディオパイプラインのロック解除を叩く
+    initAudioPipeline();
+    sendMessage(text);
   };
 
   return (
@@ -596,7 +604,7 @@ export default function MindARViewer() {
             </p>
           </div>
 
-          <form onSubmit={handleSendMessage} className="flex gap-2">
+          <form onSubmit={handleFormSubmit} className="flex gap-2">
             <button
               type="button"
               onClick={toggleListening}
