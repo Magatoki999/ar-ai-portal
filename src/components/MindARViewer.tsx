@@ -6,7 +6,6 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
-// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
@@ -28,16 +27,13 @@ export default function MindARViewer() {
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // Audio Pipeline References for Smart Lip-Sync
+  // Audio Pipeline References
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 💡 [UPDATE] 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
-
-  // 💡 [UPDATE] 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -192,7 +188,6 @@ export default function MindARViewer() {
         const loader = new GLTFLoader();
         loader.setDRACOLoader(dracoLoader);
 
-        // 💡 ログ収集用の配列
         const discoveredBlinkKeys: string[] = [];
         const discoveredMouthKeys: string[] = [];
         const localBlinkTargets: MorphTargetRef[] = [];
@@ -204,15 +199,12 @@ export default function MindARViewer() {
           avatarSceneRef.current = gltf.scene;
 
           gltf.scene.traverse((child: any) => {
-            // 💡 [NEW] 大文字小文字・部分一致・左右分離を全自動スキャンする仕組み
             if (child.isMesh && child.morphTargetDictionary) {
               const bIdxs: number[] = [];
               const mIdxs: number[] = [];
 
               Object.keys(child.morphTargetDictionary).forEach((key) => {
                 const lowKey = key.toLowerCase();
-                
-                // 瞬き候補（blink, eyeblink, close, eye_close などのキーワードを網羅）
                 if (
                   lowKey === "blink" || 
                   lowKey === "eyeblink" ||
@@ -227,7 +219,6 @@ export default function MindARViewer() {
                   if (!discoveredBlinkKeys.includes(key)) discoveredBlinkKeys.push(key);
                 }
 
-                // 口（あ）の候補（aa, a, mouth_a, vowel_a などを網羅）
                 if (
                   lowKey === "aa" || 
                   lowKey === "a" || 
@@ -267,33 +258,42 @@ export default function MindARViewer() {
             }
           });
 
-          // グローバル参照へ保存
           blinkTargetsRef.current = localBlinkTargets;
           mouthTargetsRef.current = localMouthTargets;
 
-          // 💡 スマホの画面に検出されたキーをデバッグ表示して見える化
+          // 💡 [修正] キャラクター名をルキルキに変更
           const blinkLog = discoveredBlinkKeys.length > 0 ? discoveredBlinkKeys.join("/") : "未検出";
           const mouthLog = discoveredMouthKeys.length > 0 ? discoveredMouthKeys.join("/") : "未検出";
-          setSubtitle(`アシェル召喚準備完了。\n[検出瞬きキー: ${blinkLog}] [検出口キー: ${mouthLog}]`);
+          setSubtitle(`ルキルキ召喚準備完了。\n[検出瞬きキー: ${blinkLog}] [検出口キー: ${mouthLog}]`);
 
           anchor.group.add(gltf.scene);
 
           if (gltf.animations.length > 0) {
             const mixer = new ThreeAnimationMixer(gltf.scene);
             mixerRef.current = mixer;
-            actionsRef.current["idle"] = mixer.clipAction(gltf.animations[0]);
-            actionsRef.current["talking"] = mixer.clipAction(gltf.animations[1] || gltf.animations[0]);
-            actionsRef.current["thinking"] = mixer.clipAction(gltf.animations[2] || gltf.animations[0]);
 
+            // 💡 [修正] インデックス固定をやめ、Blenderのアクション名（名前）で検索（逆転バグ回避）
+            const idleClip = THREE.AnimationClip.findByName(gltf.animations, "idle") || gltf.animations[0];
+            const talkingClip = THREE.AnimationClip.findByName(gltf.animations, "talking") || gltf.animations[1] || gltf.animations[0];
+            const thinkingClip = THREE.AnimationClip.findByName(gltf.animations, "thinking") || gltf.animations[2] || gltf.animations[0];
+
+            actionsRef.current["idle"] = mixer.clipAction(idleClip);
+            actionsRef.current["talking"] = mixer.clipAction(talkingClip);
+            actionsRef.current["thinking"] = mixer.clipAction(thinkingClip);
+
+            // 💡 [修正] 初回Idleでの瞬き不具合対策：確実にウェイトを1にして初期化クリーン再生
             activeActionRef.current = actionsRef.current["idle"];
-            activeActionRef.current.play();
+            if (activeActionRef.current) {
+              activeActionRef.current.reset().setEffectiveWeight(1).play();
+            }
           }
         }, undefined, (error) => {
           console.error("モデル読み込み失敗:", error);
         });
 
         anchor.onTargetFound = () => {
-          setSubtitle("アシェルを現実世界に固定しました。話しかけてください。");
+          // 💡 [修正] キャラクター名をルキルキに変更
+          setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -346,7 +346,6 @@ export default function MindARViewer() {
             avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
           }
 
-          // 💡 [UPDATE: AUTOMATIC MULTI-BLINK RUNTIME] 検出されたすべての瞬きキーにウェイトを注入
           if (blinkTargetsRef.current.length > 0) {
             blinkTimer += delta;
             if (!isBlinking && blinkTimer >= nextBlinkTime) {
@@ -392,7 +391,6 @@ export default function MindARViewer() {
             }
           }
 
-          // 💡 [UPDATE: MULTI-MOUTH LIP-SYNC RUNTIME] 
           const audioInstance = audioInstanceRef.current;
           const isVoicePlaying = audioInstance && !audioInstance.paused;
 
@@ -450,8 +448,8 @@ export default function MindARViewer() {
     } else {
       const audioInstance = audioInstanceRef.current;
       if (audioInstance) {
-        audioInstance.play().catch(() => {});
-        initAudioPipeline(audioInstance);
+        // 💡 [修正] マイク開始時に前回の音声再生を「一時停止」させて、音声入力の暴走を防ぐ
+        audioInstance.pause();
       }
       recognitionRef.current.start();
     }
