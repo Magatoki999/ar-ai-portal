@@ -11,7 +11,7 @@ interface MorphTargetRef {
   idxs: number[];
 }
 
-// 💡 【最適化】時計部分だけを隔離した軽量コンポーネント
+// 💡 昨日の最適化：時計部分だけを隔離した軽量コンポーネント
 // 1秒ごとに更新されますが、再レンダリングはこの数字部分のみに限定されるため負荷はゼロです。
 function DigitalClock() {
   const [timeStr, setTimeStr] = useState("----/--/-- --:--:--");
@@ -25,16 +25,11 @@ function DigitalClock() {
       const hours = String(now.getHours()).padStart(2, "0");
       const minutes = String(now.getMinutes()).padStart(2, "0");
       const seconds = String(now.getSeconds()).padStart(2, "0");
-      
-      // デフォルトはチクタク動く秒表示あり（SF・デジタル観測感を演出）
       setTimeStr(`${year}/${month}/${date} ${hours}:${minutes}:${seconds}`);
-
-      // ※もし秒表示が不要になった場合は、下の行のコメントアウトを解除し、上の行を消してください。
-      // setTimeStr(`${year}/${month}/${date} ${hours}:${minutes}`);
     };
 
     updateDateTime();
-    const intervalId = setInterval(updateDateTime, 1000); // 内部的には1秒周期で正確に監視
+    const intervalId = setInterval(updateDateTime, 1000);
     return () => clearInterval(intervalId);
   }, []);
 
@@ -51,6 +46,9 @@ export default function MindARViewer() {
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
+  
+  // 💡 【本日対応】デバイスの現在位置（緯度・経度）を保持するState
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -88,7 +86,26 @@ export default function MindARViewer() {
     };
   }, []);
 
-  // 2. Smoothly crossfade 3D model animations
+  // 💡 【本日対応】マウント時にブラウザのGPS機能から位置情報の取得を要求
+  useEffect(() => {
+    if (typeof window !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setCoords({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+          console.log("位置情報を取得しました:", position.coords.latitude, position.coords.longitude);
+        },
+        (error) => {
+          console.warn("位置情報の取得に失敗または拒否されました:", error);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+  }, []);
+
+  // 3. Smoothly crossfade 3D model animations
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -103,7 +120,7 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
-  // 3. Initialize Web Speech API
+  // 4. Initialize Web Speech API
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -149,7 +166,7 @@ export default function MindARViewer() {
     }
   };
 
-  // 4. Initialize MindAR and Three.js environment
+  // 5. Initialize MindAR and Three.js environment
   useEffect(() => {
     let mindarThreeInstance: any = null;
 
@@ -497,7 +514,13 @@ export default function MindARViewer() {
         const response = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, wallet_address: address || null }),
+          body: JSON.stringify({ 
+            message: text, 
+            wallet_address: address || null,
+            // 💡 【本日対応】バックエンドへ現在の位置情報（緯度・経度）をパラメータに載せて送信
+            latitude: coords?.lat || null,
+            longitude: coords?.lng || null
+          }),
         });
 
         if (!response.ok) throw new Error("APIへの接続に失敗しました");
@@ -560,7 +583,7 @@ export default function MindARViewer() {
       if (inputRef.current) {
         inputRef.current.value = "";
       }
-      setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
+      setSubtitle(`【本番フロントテスト】「${text}」を受信。位置: ${coords ? `${coords.lat}, ${coords.lng}` : "未取得"}`);
       setAiStatus("talking");
       setTimeout(() => {
         setSubtitle("次の指示を待っています。");
@@ -601,9 +624,8 @@ export default function MindARViewer() {
             <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
             STATUS: {aiStatus.toUpperCase()}
           </span>
-          
-          {/* 💡 右側に小さく隔離型デジタル時計とデバッグボタンを配置 */}
           <div className="flex items-center gap-3">
+            {/* 💡 最適化されたデジタル時計コンポーネントを復活 */}
             <DigitalClock />
             <div className="flex gap-2">
               <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
