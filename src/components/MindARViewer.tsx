@@ -6,10 +6,43 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
-// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
+}
+
+// 💡 【最適化】時計部分だけを隔離した軽量コンポーネント
+// 1秒ごとに更新されますが、再レンダリングはこの数字部分のみに限定されるため負荷はゼロです。
+function DigitalClock() {
+  const [timeStr, setTimeStr] = useState("----/--/-- --:--:--");
+
+  useEffect(() => {
+    const updateDateTime = () => {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const date = String(now.getDate()).padStart(2, "0");
+      const hours = String(now.getHours()).padStart(2, "0");
+      const minutes = String(now.getMinutes()).padStart(2, "0");
+      const seconds = String(now.getSeconds()).padStart(2, "0");
+      
+      // デフォルトはチクタク動く秒表示あり（SF・デジタル観測感を演出）
+      setTimeStr(`${year}/${month}/${date} ${hours}:${minutes}:${seconds}`);
+
+      // ※もし秒表示が不要になった場合は、下の行のコメントアウトを解除し、上の行を消してください。
+      // setTimeStr(`${year}/${month}/${date} ${hours}:${minutes}`);
+    };
+
+    updateDateTime();
+    const intervalId = setInterval(updateDateTime, 1000); // 内部的には1秒周期で正確に監視
+    return () => clearInterval(intervalId);
+  }, []);
+
+  return (
+    <span className="text-[11px] font-mono opacity-80 bg-white/5 px-2 py-1 rounded border border-white/5 tracking-wider">
+      {timeStr}
+    </span>
+  );
 }
 
 export default function MindARViewer() {
@@ -18,8 +51,7 @@ export default function MindARViewer() {
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
-  const [currentDateTime, setCurrentDateTime] = useState<string>(""); // 💡 右上日時表示用のステート
-
+  
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
@@ -35,10 +67,7 @@ export default function MindARViewer() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 💡 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
-
-  // 💡 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -47,23 +76,6 @@ export default function MindARViewer() {
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
-
-  // 0. リアルタイム日時更新ロジック
-  useEffect(() => {
-    const updateDateTime = () => {
-      const now = new Date();
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, "0");
-      const dd = String(now.getDate()).padStart(2, "0");
-      const hh = String(now.getHours()).padStart(2, "0");
-      const min = String(now.getMinutes()).padStart(2, "0");
-      const ss = String(now.getSeconds()).padStart(2, "0");
-      setCurrentDateTime(`${yyyy}/${mm}/${dd} ${hh}:${min}:${ss}`);
-    };
-    updateDateTime();
-    const timer = setInterval(updateDateTime, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // 1. Initialize Global Audio Instance on Mount
   useEffect(() => {
@@ -281,7 +293,6 @@ export default function MindARViewer() {
           mouthTargetsRef.current = localMouthTargets;
 
           setSubtitle("ルキルキ召喚完了。");
-
           anchor.group.add(gltf.scene);
 
           if (gltf.animations.length > 0) {
@@ -552,7 +563,7 @@ export default function MindARViewer() {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("次の指示を待っています.");
+        setSubtitle("次の指示を待っています。");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
@@ -584,18 +595,16 @@ export default function MindARViewer() {
 
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-sans">
         
-        {/* ─── 上部ヘッダーエリア ─── */}
+        {/* ─── ヘッダーUI（STATUSバー） ─── */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/50 backdrop-blur-md p-3 rounded-xl text-white border border-white/10">
           <span className="text-xs font-semibold flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-green-400 animate-ping" : "bg-blue-400"}`} />
             STATUS: {aiStatus.toUpperCase()}
           </span>
           
+          {/* 💡 右側に小さく隔離型デジタル時計とデバッグボタンを配置 */}
           <div className="flex items-center gap-3">
-            {/* 💡 右上日時表示エリアを追加 */}
-            <span className="text-xs font-mono text-gray-300 bg-white/5 border border-white/10 px-2 py-1 rounded-md shadow-inner">
-              {currentDateTime}
-            </span>
+            <DigitalClock />
             <div className="flex gap-2">
               <button onClick={() => setAiStatus("idle")} className="text-[10px] bg-gray-700 px-2 py-1 rounded">Idle</button>
               <button onClick={() => setAiStatus("thinking")} className="text-[10px] bg-yellow-600 px-2 py-1 rounded">Think</button>
@@ -604,7 +613,6 @@ export default function MindARViewer() {
           </div>
         </div>
 
-        {/* ─── 下部 UI エリア ─── */}
         <div className="w-full space-y-3 pointer-events-auto mb-4">
           <div className="bg-black/70 backdrop-blur-lg p-4 rounded-2xl text-white text-center min-h-[70px] flex items-center justify-center border border-white/10 shadow-xl">
             <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line">
