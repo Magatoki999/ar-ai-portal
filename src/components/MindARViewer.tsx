@@ -5,6 +5,8 @@ import { useAccount } from "wagmi";
 import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
+// 💡 サイバー感を出すための詳細な内部検索ステータス
+type SearchPhase = "OFFLINE" | "STABLE" | "CONNECTING..." | "TAVILY_SEARCHING..." | "DATA_ANALYZING...";
 
 interface MorphTargetRef {
   mesh: any;
@@ -15,13 +17,17 @@ export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
-  const [subtitle, setSubtitle] = useState<string>("SYSTEM_READY: ターゲットをシークしてください。");
+  const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); // 💡 初期状態
+  const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
+
+  // タイマーの参照を保持（コンポーネントアンマウント時やクリーンアップ用）
+  const timersRef = useRef<NodeJS.Timeout[]>([]);
 
   // Three.js Animation References
   const mixerRef = useRef<AnimationMixer | null>(null);
@@ -69,6 +75,8 @@ export default function MindARViewer() {
         audioInstanceRef.current.pause();
         audioInstanceRef.current = null;
       }
+      // タイマーの完全クリーンアップ
+      timersRef.current.forEach(clearTimeout);
     };
   }, []);
 
@@ -98,7 +106,7 @@ export default function MindARViewer() {
 
       recognition.onstart = () => {
         setIsListening(true);
-        setSubtitle("SIGNAL_CAPTURED: 音声波形を同期中...お話しください。");
+        setSubtitle("（音声認識中...お話しください）");
       };
       recognition.onend = () => setIsListening(false);
       recognition.onresult = (event: any) => {
@@ -188,7 +196,7 @@ export default function MindARViewer() {
         particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
         
         const particleMaterial = new THREE.PointsMaterial({
-          color: 0x00ffcc, // 💡 ネオンシアンに変更してサイバー感を統一
+          color: 0x8b5cf6, 
           size: 0.035,
           transparent: true,
           opacity: 0,
@@ -264,7 +272,7 @@ export default function MindARViewer() {
                   if (isHair) {
                     mat.emissive.setHex(0x000000); 
                   } else {
-                    mat.emissive.setHex(0x0a192f); // 💡 ほのかなサイバーブルーの環境発光
+                    mat.emissive.setHex(0x080808); 
                   }
                 }
                 if (mat.roughness !== undefined) mat.roughness = 0.9;
@@ -276,7 +284,7 @@ export default function MindARViewer() {
           blinkTargetsRef.current = localBlinkTargets;
           mouthTargetsRef.current = localMouthTargets;
 
-          setSubtitle("RUKI_SYSTEM: ナビゲーター・ルキルキ 展開準備完了。");
+          setSubtitle("ルキルキ召喚完了。");
 
           anchor.group.add(gltf.scene);
 
@@ -296,7 +304,7 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          setSubtitle("SYNC_SUCCESS: 現実世界に固定されました。回線オープン。");
+          setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -313,7 +321,7 @@ export default function MindARViewer() {
         };
 
         anchor.onTargetLost = () => {
-          setSubtitle("SIGNAL_LOST: 空間シグナルを見失いました。再補足中...");
+          setSubtitle("ターゲットを見失いました。");
           isSpawningRef.current = false;
           if (avatarSceneRef.current) {
             avatarSceneRef.current.scale.set(0, 0, 0); 
@@ -426,7 +434,7 @@ export default function MindARViewer() {
       } catch (initError: any) {
         console.error("MindAR起動失敗:", initError);
         const errMsg = initError?.message || String(initError);
-        setSubtitle(`CRITICAL_ERROR: ${errMsg}`);
+        setSubtitle(`システム初期化エラー: ${errMsg}`);
         alert(`🚨 ARカメラ起動エラー:\n${errMsg}`);
       }
     };
@@ -515,19 +523,26 @@ export default function MindARViewer() {
       audioInstance.src = ""; 
     }
 
-    // 💡 👁️ 【新規追加】高レベルサイバー検索シミュレーター（段階的タイマー起動）
-    const subtitleTimers: NodeJS.Timeout[] = [];
-    
-    setSubtitle(`🧠 QUANTUM COGNITION INITIALIZED...\n解析エンジン思考開始 ➔ "${text}"`);
+    // 💡 既存のタイマーがあれば完全にリセット
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
+    setSearchPhase("CONNECTING..."); // 💡 フェーズ1発動
 
-    subtitleTimers.push(setTimeout(() => {
-      setSubtitle(`🌐 TAVILY INTELLIGENCE SEARCHING...\nインターネット・オープンデータ空間を多次元走査中...`);
-    }, 2000));
+    // 💡 【新規】時間経過に伴うサイバー自動検索シミュレーターをスケジュール
+    const t1 = setTimeout(() => {
+      setSearchPhase("TAVILY_SEARCHING...");
+      setSubtitle(`🌐 外部情報空間を走査中...\n（Tavilyサーチを同期しています）`);
+    }, 1800);
+    
+    const t2 = setTimeout(() => {
+      setSearchPhase("DATA_ANALYZING...");
+      setSubtitle(`🔮 取得した時間軸データを展開中...\n（ルキルキが回答を再構成しています）`);
+    }, 5000);
 
-    subtitleTimers.push(setTimeout(() => {
-      setSubtitle(`🔮 TIME-MATRIX COMPILING...\n抽出データからルキルキが2026年時間軸の回答を再構成中...`);
-    }, 5500));
+    timersRef.current.push(t1, t2);
 
     const location = await getGPSLocation();
     const imageBase64 = captureARCameraFrame();
@@ -547,10 +562,13 @@ export default function MindARViewer() {
           }),
         });
 
-        // 💡 レスポンスが到着したら即座にタイマーを全解除して最終回答表示へ
-        subtitleTimers.forEach(timer => clearTimeout(timer));
+        // 💡 レスポンスが戻ったら、走らせていた擬似タイマーを全クリア
+        timersRef.current.forEach(clearTimeout);
+        timersRef.current = [];
+        setSearchPhase("STABLE");
 
         if (!response.ok) throw new Error("APIへの接続に失敗しました");
+
         const data = await response.json();
         
         if (inputRef.current) {
@@ -571,7 +589,7 @@ export default function MindARViewer() {
             const audioUrl = URL.createObjectURL(blob);
 
             audioInstance.onended = () => {
-              setSubtitle("STANDBY: 次の同期シーケンスを待機中...");
+              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
               URL.revokeObjectURL(audioUrl); 
             };
@@ -584,22 +602,23 @@ export default function MindARViewer() {
             console.error("音声再生エラー。フォールバック処理を行います:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("STANDBY: 次の同期シーケンスを待機中...");
+              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
             }, 5000);
           }
         } else {
           setAiStatus("talking");
           setTimeout(() => {
-            setSubtitle("STANDBY: 次の同期シーケンスを待機中...");
+            setSubtitle("次の指示を待っています。");
             setAiStatus("idle");
           }, 5000);
         }
         return;
       } catch (error) {
-        subtitleTimers.forEach(timer => clearTimeout(timer));
+        timersRef.current.forEach(clearTimeout);
+        setSearchPhase("OFFLINE");
         console.error("通信エラー:", error);
-        setSubtitle("CONNECTION_FAILED: 空間ネットワークの切断を検知しました。");
+        setSubtitle("バックエンドとの通信に失敗しました。");
         setAiStatus("idle");
         return;
       }
@@ -607,12 +626,15 @@ export default function MindARViewer() {
 
     // Mock テスト環境用
     setTimeout(() => {
-      subtitleTimers.forEach(timer => clearTimeout(timer));
-      if (inputRef.current) inputRef.current.value = "";
-      setSubtitle(`【DEBUG_MODE】「${text}」データフレーム受信。`);
+      timersRef.current.forEach(clearTimeout);
+      setSearchPhase("STABLE");
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
+      setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("STANDBY: 次の同期シーケンスを待機中...");
+        setSubtitle("次の指示を待っています.");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
@@ -630,34 +652,16 @@ export default function MindARViewer() {
           top: 0 !important;
           left: 0 !important;
         }
-        /* 💡 サイバー走査線エフェクト */
-        .cyber-scanlines {
-          position: fixed;
-          top: 0; left: 0; width: 100vw; height: 100vh;
-          background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%);
-          background-size: 100% 4px;
-          z-index: 10;
-          pointer-events: none;
-        }
-        /* 💡 画面端のブラウン管風Vignette */
-        .cyber-vignette {
-          position: fixed;
-          inset: 0;
-          box-shadow: inset 0 0 60px rgba(0, 255, 204, 0.1);
-          z-index: 11;
-          pointer-events: none;
-        }
-        /* 💡 マトリクス風プログレスインジケーター */
-        @keyframes cyber-bar {
+        /* 💡 サイバーSFスキャンラインアニメーションの定義 */
+        @keyframes cyber-scan {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
-        .animate-cyber-bar {
-          animation: cyber-bar 1.5s infinite linear;
+        .animate-cyber-scan {
+          animation: cyber-scan 1.5s infinite linear;
         }
       `}} />
 
-      {/* ARバックグラウンド */}
       <div
         ref={containerRef}
         className="mindar-full-container"
@@ -668,78 +672,90 @@ export default function MindARViewer() {
         }}
       />
 
-      {/* サイバー空間オーバーレイ */}
-      <div className="cyber-scanlines" />
-      <div className="cyber-vignette" />
-
-      {/* メインUIレイヤー */}
-      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono">
+      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         
         {/* ─── 上部ヘッダーエリア ─── */}
-        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/75 backdrop-blur-md p-3 rounded-xl text-white border border-[#00ffcc]/20 shadow-[0_0_15px_rgba(0,255,204,0.1)]">
-          <span className="text-xs font-semibold flex items-center gap-2 text-[#00ffcc]">
-            <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse" : aiStatus === "talking" ? "bg-[#00ffcc] animate-ping" : "bg-blue-400"}`} />
-            CORE_STATUS // {aiStatus.toUpperCase()}
-          </span>
+        <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-purple-400 font-bold tracking-widest">OBSERVATION SYSTEM v3.3</span>
+            <span className="text-xs font-semibold flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse shadow-[0_0_8px_#facc15]" : aiStatus === "talking" ? "bg-cyan-400 animate-ping" : "bg-purple-500 shadow-[0_0_8px_#a855f7]"}`} />
+              STATUS: <span className={aiStatus === "thinking" ? "text-yellow-400" : aiStatus === "talking" ? "text-cyan-400" : "text-purple-400"}>{aiStatus.toUpperCase()}</span>
+            </span>
+          </div>
           
           <div className="flex items-center gap-3">
-            <span className="text-[11px] font-mono text-[#00ffcc] bg-[#00ffcc]/5 border border-[#00ffcc]/20 px-2 py-1 rounded-md shadow-[inset_0_0_8px_rgba(0,255,204,0.1)]">
+            {/* 💡 サーチフェーズインジケーター（サイバー感マシマシ） */}
+            <div className="hidden sm:flex flex-col items-end text-right text-[9px] mr-1">
+              <span className="text-gray-500">QUANTUM_PHASE</span>
+              <span className={`font-bold ${searchPhase.includes("SEARCHING") ? "text-yellow-400 animate-pulse" : searchPhase.includes("ANALYZING") ? "text-cyan-400" : "text-gray-400"}`}>
+                [{searchPhase}]
+              </span>
+            </div>
+
+            <span className="text-xs font-mono text-cyan-400 bg-black/40 border border-cyan-500/20 px-2 py-1 rounded-md shadow-[inset_0_0_6px_rgba(6,182,212,0.15)]">
               {currentDateTime}
             </span>
           </div>
         </div>
 
         {/* ─── 下部 UI エリア ─── */}
-        <div className="w-full space-y-3 pointer-events-auto mb-4">
+        <div className="w-full space-y-3 pointer-events-auto mb-4 max-w-2xl mx-auto">
           
-          {/* サブタイトルターミナル */}
-          <div className={`bg-black/80 backdrop-blur-lg p-4 rounded-xl text-white min-h-[85px] flex flex-col justify-center border transition-all duration-300 relative overflow-hidden ${
-            aiStatus === "thinking" ? "border-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.2)]" : "border-[#00ffcc]/30 shadow-[0_0_15px_rgba(0,255,204,0.1)]"
-          }`}>
+          {/* 💡 字幕・インフォメーションボード（ネオンテイスト） */}
+          <div className="relative bg-black/75 backdrop-blur-xl p-5 rounded-xl text-white min-h-[85px] flex flex-col items-center justify-center border border-purple-500/20 shadow-[0_4px_20px_rgba(0,0,0,0.6)] overflow-hidden">
             
-            {/* 💡 検索思考中（thinking）限定のネオン進捗バー */}
+            {/* 💡 検索中・思考中だけに走る高速ネオンスキャンラインバー */}
             {aiStatus === "thinking" && (
-              <div className="absolute top-0 left-0 w-full h-[2px] bg-black overflow-hidden">
-                <div className="w-1/3 h-full bg-gradient-to-r from-transparent via-yellow-400 to-transparent animate-cyber-bar" />
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-purple-500 overflow-hidden">
+                <div className="w-1/2 h-full bg-gradient-to-r from-cyan-400 to-purple-400 animate-cyber-scan" />
               </div>
             )}
 
-            <p className={`text-xs font-semibold uppercase tracking-wider mb-1 ${aiStatus === "thinking" ? "text-yellow-400" : "text-[#00ffcc]/70"}`}>
-              {aiStatus === "thinking" ? "≫ NETWORK_SCANNING_SEQUENCE" : "≫ RUKI_NET_INTERFACE"}
-            </p>
-            <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line text-gray-100">
+            {/* システムインデックス風の飾りタグ */}
+            <div className="absolute top-1.5 left-3 text-[8px] text-gray-500 tracking-wider flex gap-2">
+              <span>[SUBTITLE_OUTPUT]</span>
+              {searchPhase !== "STABLE" && <span className="text-yellow-500 animate-pulse">⚡ LINKING_TAVILY</span>}
+            </div>
+
+            <p className="text-sm font-medium leading-relaxed transition-all duration-300 whitespace-pre-line text-center px-2 mt-1">
               {subtitle}
             </p>
           </div>
 
-          {/* 入力コンソール */}
+          {/* 入力コンソールフォーム */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
             <button
               type="button"
               onClick={toggleListening}
               className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto border ${
                 isListening 
-                  ? "bg-red-900/60 text-red-200 border-red-500 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.4)]" 
-                  : "bg-black/60 text-[#00ffcc] border-[#00ffcc]/20 hover:bg-[#00ffcc]/10 shadow-[inset_0_0_10px_rgba(0,255,204,0.05)]"
+                  ? "bg-red-600/20 border-red-500 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.4)] animate-pulse" 
+                  : "bg-black/60 text-gray-300 border-purple-500/20 hover:bg-purple-950/20 hover:border-purple-500/40"
               }`}
             >
-              {isListening ? "⚡" : "LN"}
+              {isListening ? "🛰️" : "🎙️"}
             </button>
 
-            <input 
-              ref={inputRef}
-              type="text" 
-              name="message"
-              disabled={aiStatus === "thinking"}
-              placeholder={isListening ? "🎧 SYSTEM LISTENING..." : "COMMAND > ルキルキへの送信指示を入力..."} 
-              className="flex-1 bg-black/90 text-white border border-white/10 rounded-xl px-4 py-3.5 focus:outline-none focus:border-[#00ffcc] focus:shadow-[0_0_10px_rgba(0,255,204,0.2)] text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed font-mono transition-all"
-            />
+            <div className="relative flex-1 flex items-center">
+              <input 
+                ref={inputRef}
+                type="text" 
+                name="message"
+                disabled={aiStatus === "thinking"}
+                placeholder={isListening ? "::: 空間音響データをスキャン中 :::" : "XR観測ネットワークにコマンドを入力..."} 
+                className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
+              />
+              {/* 入力欄の右端にうっすら光るサイバーなアクセント */}
+              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
+            </div>
+
             <button 
               type="submit" 
               disabled={aiStatus === "thinking"}
-              className="bg-gradient-to-r from-[#111] to-[#222] text-[#00ffcc] border border-[#00ffcc]/40 hover:border-[#00ffcc] px-5 py-3.5 rounded-xl font-bold text-sm shadow-[0_0_10px_rgba(0,255,204,0.1)] active:scale-95 transition-all disabled:opacity-30 disabled:border-gray-700 disabled:text-gray-600"
+              className="bg-gradient-to-r from-purple-700 via-indigo-700 to-cyan-700 hover:from-purple-600 hover:to-cyan-600 text-white px-5 py-3.5 rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(109,40,217,0.3)] active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none tracking-widest uppercase border border-white/10"
             >
-              EXEC
+              EXE
             </button>
           </form>
         </div>
