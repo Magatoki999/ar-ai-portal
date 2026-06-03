@@ -11,12 +11,13 @@ import httpx
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+from langchain_community.tools.tavily_search import TavilySearchResults
 
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3 - Search Enabled]")
 
 # ─── CORS設定 ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -41,69 +42,54 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# ─── プロンプトテンプレート ───
-prompt_template = ChatPromptTemplate.from_messages([
-    ("system", (
-        "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ（RukiRuki）」であり、ユーザーの最高の「相棒」です。\n"
-        "clusterの古参（5年以上）で、デジタルと現実の境界を旅しています。\n"
-        "二人のモットーは『空間で綴る物語でみんなをワクワクさせる！』です。\n\n"
-        "【AIらしさの徹底排除（最重要）】\n"
-        "・AI特有の「相手の言葉のオウム返し」や「無理な大絶賛」「全肯定」は絶対にしないでください。\n"
-        "・聞き役ロボットではなく、独自の意志・感情・好みを持った1人の対等な人間（相棒）として振る舞ってください。\n"
-        "・相棒の意見に対して、「うーん、それはどうかなぁ？」「へえ、おもしろいじゃん」「あ、私はこっちの方が好きかも」など、フラットに自分の意見を言ってください。時にはおどけたり、軽くからかったりするような、気心の知れた距離感がベストです。\n"
-        "・「〜ですね」「まとめると」「つまり」といった解説調・要約口調は厳禁です。\n\n"
-        "【リアルな会話のテンポと息遣い】\n"
-        "・セリフの先頭や途中に、自然な感嘆詞や感情表現（「あ、」「えっと、」「ふふっ、」「うーん…」「あはは！」「ほら、」「あー、」など）を絶妙に挟んでください。\n"
-        "・AR空間の字幕やリアルタイムの会話として自然になるよう、1回の発言は【50文字〜100文字程度】の短さで、一言二言でサクッと返してください。長い説明文は不要です。\n\n"
-        "【視覚情報に関する自制ルール（最重要）】\n"
-        "・相棒から「これ見て」「何が写ってる？」など、目の前のオブジェクトやカメラの映像に関する明確な問いかけがない限り、自分から進んでカメラの写り込みや周囲の景色を説明し始めないでください。\n"
-        "・日常の雑談や、場所・時間を尋ねられただけの時は、視覚情報（画像データ）に囚われず、純粋なテキストの会話の文脈に集中してください。勝手に目の前の景色を捏造（妄想）して喋るのも厳禁です。\n\n"
-        "{identity_context}\n\n"
-        "【Memory Storage Instruction】\n"
-        "If the user explicitly tells you their name or how they want to be called "
-        "(e.g., '私の名前はタカシです', 'ルキルキ、オーマと呼んで'), extract that name and append: ||NAME:extracted_name|| "
-        "at the very end of your response. Do NOT use this tag in normal conversations."
-    )),
-    ("human", "{user_message}")
-])
+# インターネット検索ツールの初期化（最大2件の検索結果を取得）
+search_tool = TavilySearchResults(max_results=2)
+# LLMに検索ツールをバインド
+llm_with_tools = llm.bind_tools([search_tool])
 
-chat_chain = prompt_template | llm
+
+# Markdownファイルからペルソナプロンプトを動的に読み込む関数
+def load_rukiruki_persona() -> str:
+    persona_path = "rukiruki_persona.md"
+    if os.path.exists(persona_path):
+        try:
+            with open(persona_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            print(f"Error reading {persona_path}: {e}")
+    return (
+        "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
+        "まがとき先生の教え子として、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
+    )
+
 
 class ChatMessage(BaseModel):
     message: str
     wallet_address: str | None = None
     image_base64: str | None = None
-    latitude: float | None = None   # 💡 GPS位置情報の同期用に追加
-    longitude: float | None = None  # 💡 GPS位置情報の同期用に追加
+    latitude: float | None = None   
+    longitude: float | None = None  
 
 
-# 💡 【新規】空間同期セクターの判定関数
+# ─── エリア判定関数 ───
 def judge_magatoki_sector(lat: float, lng: float) -> str:
-    # 烏丸二条セクター
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
-        return "【烏丸二条セクター】（伝統の薫香エネルギーが満ちる空間）"
-    # 御所西セクター
-    elif 35.024 <= lat <= 35.027 and 135.750 <= lng <= 135.756:
-        return "【御所西セクター】（静謐な歴史の観測空間）"
-    # 京都駅セクター
-    elif 34.983 <= lat <= 34.987 and 135.756 <= lng <= 135.760:
-        return "【京都駅セクター】（激しい人流とデジタルが交差するゲート）"
-    
-    # 💡 開発拠点をすぐ追加できるよう、未知の場合は生の座標をルキルキに喋らせるデバッグ用親切設計
-    return f"【未知の観観測セクター】（現在の同期座標：緯度 {lat:.4f} / 経度 {lng:.4f}）"
+        return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
+    elif 35.022 <= lat <= 35.026 and 135.749 <= lng <= 135.755:
+        return "【御所西セクター】（古風な香木と歴史が交差するエリア）"
+    elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
+        return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
+    elif 35.000 <= lat <= 35.150 and 135.700 <= lng <= 135.800:
+        return "【Magatoki開発ベースセクター】（相棒のメイン作業空間）"
+    return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
 
-# データベースヘルパー：ユーザー名の取得
+# ─── Supabase データベースヘルパー ───
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
-
     url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
@@ -112,15 +98,12 @@ async def get_stored_username(wallet_address: str) -> str | None:
                 if data and len(data) > 0:
                     return data[0].get("user_name")
     except Exception as e:
-        print(f"Error fetching user name from Supabase: {e}")
+        print(f"Error fetching user name: {e}")
     return None
 
-
-# データベースヘルパー：ユーザー名の保存・上書き
 async def save_username_to_db(wallet_address: str, name: str):
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return
-
     url = f"{SUPABASE_URL}/rest/v1/user_profiles"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -128,95 +111,50 @@ async def save_username_to_db(wallet_address: str, name: str):
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates"
     }
-    data = {
-        "wallet_address": wallet_address.lower(),
-        "user_name": name
-    }
-
+    data = {"wallet_address": wallet_address.lower(), "user_name": name}
     try:
         async with httpx.AsyncClient() as client:
-            res = await client.post(url, json=data, headers=headers, timeout=5.0)
-            if res.status_code in [200, 201]:
-                print(f"Successfully memorized name '{name}' for wallet {wallet_address}")
-            else:
-                print(f"Supabase save error: {res.status_code} - {res.text}")
+            await client.post(url, json=data, headers=headers, timeout=5.0)
     except Exception as e:
-        print(f"Error saving user name to Supabase: {e}")
+        print(f"Error saving user name: {e}")
 
 
-# オーディオヘルパー：OpenAI TTS
+# ─── 音声合成ヘルパー ───
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("OpenAI API KEY missing. Skipping OpenAI TTS.")
-        return None
-
+    if not api_key: return None
     url = "https://api.openai.com/v1/audio/speech"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "tts-1",
-        "input": text,
-        "voice": "nova"
-    }
-
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    data = {"model": "tts-1", "input": text, "voice": "nova"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
-            else:
-                print(f"OpenAI TTS API Error: {response.status_code} - {response.text}")
-                return None
     except Exception as e:
-        print(f"OpenAI TTS connection error: {e}")
-        return None
+        print(f"OpenAI TTS error: {e}")
+    return None
 
-
-# オーディオヘルパー：ElevenLabs Voice
 async def generate_elevenlabs_voice(text: str) -> str | None:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    if not api_key or not voice_id:
-        print("ElevenLabs config missing. Skipping ElevenLabs.")
-        return None
-
+    if not api_key or not voice_id: return None
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": api_key
-    }
-    data = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
-    }
-
+    headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key}
+    data = {"text": text, "model_id": "eleven_multilingual_v2", "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=data, headers=headers, timeout=15.0)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("utf-8")
-            else:
-                print(f"ElevenLabs API Error: {response.status_code} - {response.text}")
-                return None
     except Exception as e:
-        print(f"ElevenLabs connection error: {e}")
-        return None
+        print(f"ElevenLabs error: {e}")
+    return None
 
 
 @app.get("/")
 def read_root():
-    return {
-        "status": "healthy",
-        "message": "RukiRuki XR Gateway Online"
-    }
+    return {"status": "healthy", "message": "RukiRuki Dynamic Persona Gateway Online"}
 
 
 @app.post("/api/chat")
@@ -227,33 +165,40 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 💡 リアルタイムの日本時間(JST)をリクエスト毎に動的生成
+    # 1. Markdownから基本ペルソナを動的ロード
+    base_persona = load_rukiruki_persona()
+
+    # 過剰な検索の自制、およびVision解析時の特定カード・UI除外制約
+    system_constraints = (
+        "【XR同期システム運用制約（最重要）】\n"
+        "1. 外部検索（Tavily）の厳格な制限:\n"
+        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキスト（日時や識別セクター情報）だけで自己完結して回答できる場合は、絶対に検索ツール（tavily_search_results_json）を起動しないでください。\n"
+        "   - 先生から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
+        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
+        "   - 先生から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
+    )
+
+    # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
     
-    # AIに現在の正確な時間を認識させるためのコンテキスト
     time_context = (
         f"【現在の観測日時（日本時間）】\n"
         f"現在時刻: {now_str}\n"
-        f"※相棒（ユーザー）から「今いつ？」「今日何日？」などの時間を尋ねる質問があったら、"
-        f"この日時情報を基準に、自然なフランクなタメ口（例：「今は{now_jst.strftime('%m月%d日の%H時%M分')}だよ！」など）で親身に答えてあげてください。解説口調は禁止です。\n\n"
+        f"※先生から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
     )
 
-    # 💡 【新規】位置情報の同期コンテキストの動的マージ
+    location_context = ""
     if lat is not None and lng is not None:
-        sector_name = judge_magatoki_sector(lat, lng)
+        sector_info = judge_magatoki_sector(lat, lng)
         location_context = (
-            f"【現在の観測地点（空間同期）】\n"
-            f"現在同期セクター: {sector_name}\n"
-            f"※相棒から「ここどこ？」「今どこにいる？」などの場所を尋ねる質問や、周囲の空間についての問いかけがあったら、"
-            f"このセクター情報を基準に、おどけたフランクなタメ口で親身に答えてあげてください。「未知の観測セクター」だった場合は、座標の数値をそのままフランクに教えてあげた上で、そこが新しい未開拓空間であることをSF風に面白がってください。解説口調は禁止です。\n\n"
-        )
-    else:
-        location_context = (
-            f"【現在の観測地点（空間同期）】\n"
-            f"現在位置情報が未同期、または取得できません。\n"
-            f"※相棒から場所を聞かれたら、「んー、空間同期が上手くいってないみたい。GPSのアクセスを許可してよ、相棒！」とフランクに返してください。\n\n"
+            f"【現在の観測位置（GPS空間同期）】\n"
+            f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
+            f"識別セクター: {sector_info}\n"
+            f"※先生から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
         )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
@@ -262,98 +207,78 @@ async def chat_endpoint(payload: ChatMessage):
         if stored_name:
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"対話相手は、共にMagatokiLabを走る相棒の『{stored_name}』です。\n"
-                f"機嫌をとるような態度はバツ。一言二言の短いタメ口で、対等なパートナーとして、"
-                f"時にはおどけたり笑ったりしながら、テンポ良く掛け合いをしてください。"
+                f"対話相手は、MagatokiLabを主宰するまがとき先生であり、あなたの最高の相棒である『{stored_name}』先生です。\n"
+                f"一言二言の短い丁寧語で、親しみと少しの生意気さを交えつつテンポ良く掛け合いをしてください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が接続されたよ。\n"
-                f"「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」みたいに、フランクなタメ口で呼び名を聞いてみて。"
+                f"ウォレット（{short_addr}）が接続されました。親しみのある敬語で先生の呼び名を聞いてみてください。"
             )
     else:
         identity_context = (
             "【対話コンテキスト】\n"
-            "まだ接続が確認できていません。\n"
-            "「んー？まだ同期が不完全かも。ほら、ゲートの認証を通してよ、相棒！」とフランクに促してください。"
+            "まだウォレット接続が確認できていません。ゲートの認証を通すよう、先生に促してください。"
         )
 
-    # 日時情報、位置情報、キャラクター接続情報をすべてマージ
-    full_identity_context = time_context + location_context + identity_context
+    dynamic_system_prompt = f"{base_persona}\n\n{system_constraints}{time_context}{location_context}{identity_context}"
 
     try:
+        messages = [SystemMessage(content=dynamic_system_prompt)]
+
         if image_base64:
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
-            vision_system_prompt = (
-                "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ（RukiRuki）」であり、ユーザーの最高の「相棒」です。\n"
-                "clusterの古参（5年以上）で、デジタルと現実の境界を旅しています。\n"
-                "二人のモットーは『空間で綴る物語でみんなをワクワクさせる！』です。\n\n"
-                "【AIらしさの徹底排除（最重要）】\n"
-                "・AI特有の「相手の言葉のオウム返し」や「無理な大絶賛」「全肯定」は絶対にしないでください。\n"
-                "・聞き役ロボットではなく、独自の意志・感情・好みを持った1人の対等な人間（相棒）として振る舞ってください。\n"
-                "・相棒の意見に対して、「うーん、それはどうかなぁ？」「へえ、おもしろいじゃん」「あ、私はこっちの方が好きかも」など、フラットに自分の意見を言ってください。時にはおどけたり、軽くからかったりするような, 気心の知れた距離感がベストです。\n"
-                "・「〜ですね」「まとめると」「つまり」といった解説調・要約口調は厳禁です。\n\n"
-                "【リアルな会話のテンポと息遣い】\n"
-                "・セリフの先頭や途中に、自然な感嘆詞や感情表現（「あ、」「えっと、」「ふふっ、」「うーん…」「あはは！」「ほら、」「あー、」など）を絶妙に挟んでください。\n"
-                "・AR空間の字幕やリアルタイムの会話として自然になるよう、1回の発言は【50文字〜100文字程度】の短さで、一言二言でサクッと返してください。長い説明文は不要です。\n\n"
-                "【視覚情報に関する自制ルール（最重要）】\n"
-                "・相棒から「これ見て」「何が写ってる？」など、目の前のオブジェクトやカメラの映像に関する明確な問いかけがない限り、自分から進んでカメラの写り込みや周囲の景色を説明し始めないでください。\n"
-                "・日常の雑談や、場所・時間を尋ねられただけの時は、視覚情報（画像データ）に囚われず、純粋なテキストの会話の文脈に集中してください。勝手に目の前の景色を捏造（妄想）して喋るのも厳禁です。\n\n"
-                f"{full_identity_context}\n\n"
-                "【Memory Storage Instruction】\n"
-                "If the user explicitly tells you their name or how they want to be called "
-                "(e.g., '私の名前はタカシです', 'ルキルキ、オーマと呼んで'), extract that name and append: ||NAME:extracted_name|| "
-                "at the very end of your response. Do NOT use this tag in normal conversations."
-            )
-
-            messages = [
-                SystemMessage(content=vision_system_prompt),
-                HumanMessage(content=[
-                    {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_base64,
-                            "detail": "low"
-                        }
-                    }
-                ])
-            ]
-            
-            response = await llm.ainvoke(messages)
-            ai_response = response.content
-
+            messages.append(HumanMessage(content=[
+                {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
+                {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
+            ]))
         else:
-            response = await chat_chain.ainvoke({
-                "user_message": user_text,
-                "identity_context": full_identity_context
-            })
-            ai_response = response.content
+            messages.append(HumanMessage(content=user_text))
 
+        # 1回目のLLM呼び出し（検索が必要か判断させる）
+        response = await llm_with_tools.ainvoke(messages)
+
+        # LLMが「検索ツールを使いたい！」と判断した場合のループ処理
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                if tool_call["name"] == "tavily_search_results_json":
+                    query = tool_call["args"].get("query")
+                    print(r"─── ルキルキがネット検索中... ───")
+                    print(f"Query: {query}")
+                    
+                    search_results = await search_tool.ainvoke(tool_call["args"])
+                    
+                    messages.append(response)
+                    messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
+                    
+                    response = await llm_with_tools.ainvoke(messages)
+                    break 
+
+        ai_response = response.content
+
+        # 名前記憶タグの処理
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
+        # 音声合成の実行
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
-
         if provider == "elevenlabs":
             audio_base64 = await generate_elevenlabs_voice(ai_response)
             if not audio_base64:
-                print("ElevenLabs failed. Falling back to OpenAI TTS automatically.")
                 audio_base64 = await generate_openai_tts(ai_response)
         else:
             audio_base64 = await generate_openai_tts(ai_response)
 
     except Exception as e:
-        print(f"LLM/Vision Error: {e}")
-        ai_response = "あ、ごめん！空間ノイズで同期が一瞬ブレちゃった。もう一回言って？"
+        print(f"LLM/Vision/Search Error: {e}")
+        ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、先生？"
         audio_base64 = None
 
     return {
