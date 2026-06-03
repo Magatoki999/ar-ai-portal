@@ -20,7 +20,7 @@ export default function MindARViewer() {
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
-  const [isTargetFound, setIsTargetFound] = useState<boolean>(false); // 💡 ターゲットの捕捉状態を管理
+  const [isTargetFound, setIsTargetFound] = useState<boolean>(false); 
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -141,6 +141,7 @@ export default function MindARViewer() {
   // 4. MindAR & Three.js メイン初期化
   useEffect(() => {
     let mindarThreeInstance: any = null;
+    let localRenderer: any = null; // 💡 アンマウント時のクリーンアップ用参照
 
     const start = async () => {
       try {
@@ -159,6 +160,7 @@ export default function MindARViewer() {
         mindarThreeInstance = mindarThree;
 
         const { renderer, scene, camera } = mindarThree;
+        localRenderer = renderer; // 💡 参照を保持
 
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -257,7 +259,6 @@ export default function MindARViewer() {
           }
         });
 
-        // 💡 ターゲット捕捉時
         anchor.onTargetFound = () => {
           setIsTargetFound(true); 
           setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
@@ -274,15 +275,14 @@ export default function MindARViewer() {
           }
         };
 
-        // 💡 ターゲット紛失時
         anchor.onTargetLost = () => {
           setIsTargetFound(false); 
           setSubtitle("（カメラをターゲットにかざしてください）");
           isSpawningRef.current = false;
           if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
           
-          // 音声認識中だった場合は安全にセッションを強制終了
-          if (recognitionRef.current && isListening) {
+          // 💡 古いStateに縛られないよう、isListening条件を撤廃して安全に強制停止を走らせる
+          if (recognitionRef.current) {
             try { recognitionRef.current.stop(); } catch(e){}
           }
         };
@@ -297,7 +297,6 @@ export default function MindARViewer() {
           const elapsedTime = clock.getElapsedTime();
           if (mixerRef.current) mixerRef.current.update(delta);
           
-          // スポーンイージング
           if (isSpawningRef.current && avatarSceneRef.current) {
             if (spawnProgressRef.current < 1.0) {
               spawnProgressRef.current += delta * 1.8; 
@@ -313,7 +312,6 @@ export default function MindARViewer() {
             avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
           }
 
-          // 自動瞬き制御
           if (blinkTargetsRef.current.length > 0) {
             blinkTimer += delta;
             if (!isBlinking && blinkTimer >= nextBlinkTime) { isBlinking = true; blinkTimer = 0; }
@@ -328,7 +326,6 @@ export default function MindARViewer() {
             }
           }
 
-          // パーティクルアニメーション更新
           if (particlesRef.current && particleVelocitiesRef.current) {
             const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
             const vels = particleVelocitiesRef.current;
@@ -340,7 +337,6 @@ export default function MindARViewer() {
             if ((particlesRef.current.material as any).opacity > 0) (particlesRef.current.material as any).opacity -= delta * 1.4;
           }
 
-          // 精密リアルタイムリップシンク
           const audioInstance = audioInstanceRef.current;
           if (audioInstance && !audioInstance.paused && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
@@ -363,10 +359,18 @@ export default function MindARViewer() {
     };
 
     start();
-    return () => { if (mindarThreeInstance) { try { mindarThreeInstance.stop(); } catch(e){} } };
+    
+    // 💡 クリーンアップ関数を強固にし、アニメーションループのゾンビ化を完全に防ぐ
+    return () => { 
+      if (localRenderer) {
+        try { localRenderer.setAnimationLoop(null); } catch(e){}
+      }
+      if (mindarThreeInstance) { 
+        try { mindarThreeInstance.stop(); } catch(e){} 
+      } 
+    };
   }, []);
 
-  // 高精度GPSデータの取得
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) { resolve(null); return; }
@@ -470,7 +474,6 @@ export default function MindARViewer() {
     }
   };
 
-  // 💡 思考中、またはターゲット紛失時は完全にインタラクションをシャットアウト
   const isControlDisabled = !isTargetFound || aiStatus === "thinking";
 
   return (
@@ -537,6 +540,7 @@ export default function MindARViewer() {
             </button>
 
             <div className="relative flex-1 flex items-center">
+              {/* 💡 Tailwindの末尾のborder重複クラスをきれいにクリーンアップ */}
               <input 
                 ref={inputRef}
                 type="text" 
@@ -547,7 +551,7 @@ export default function MindARViewer() {
                     ? "::: ターゲットを見失っています :::" 
                     : isListening ? "::: 空間音響データをスキャン中 :::" : "XR観測ネットワークにコマンドを入力..."
                 } 
-                className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)] border-purple-500/10"
+                className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
               />
               <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${!isTargetFound ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
             </div>
