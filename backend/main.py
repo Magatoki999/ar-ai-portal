@@ -11,13 +11,13 @@ import httpx
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage # 💡 AIMessage を追加
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.3 - Autonomous Search Loop]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3 - Search Enabled]")
 
 # ─── CORS設定 ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -44,11 +44,11 @@ llm = ChatOpenAI(
 
 # 💡 インターネット検索ツールの初期化（最大2件の検索結果を取得）
 search_tool = TavilySearchResults(max_results=2)
-# LLMに検索ツールをバインド
+# LLMに検索ツールをバインド（紐付け）
 llm_with_tools = llm.bind_tools([search_tool])
 
 
-# 💡 Markdownファイルからペルソナプロンプトを動的に読み込む関数
+# 💡 パターンA: Markdownファイルからペルソナプロンプトを動的に読み込む関数
 def load_rukiruki_persona() -> str:
     persona_path = "rukiruki_persona.md"
     if os.path.exists(persona_path):
@@ -154,7 +154,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 
 @app.get("/")
 def read_root():
-    return {"status": "healthy", "message": "RukiRuki Autonomous Agent Gateway Online"}
+    return {"status": "healthy", "message": "RukiRuki Dynamic Persona Gateway Online"}
 
 
 @app.post("/api/chat")
@@ -165,28 +165,30 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # デバッグログ
-    print("\n====== 📡 [ルキルキ観測ゲートウェイ受信ログ] ======")
-    print(f"💬 送信テキスト: '{user_text}'")
-    print(f"📍 座標データ  : Lat={lat}, Lng={lng}")
-    print(f"🖼️ 画像データ  : {'あり' if image_base64 else 'なし'}")
-    print("==================================================\n")
-
-    # 1. Markdownから基本ペルソナをロード
+    # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
+
+    # 💡 【新規注入】過剰な検索の自制、およびVision解析時の特定カード・UI除外制約
+    system_constraints = (
+        "【XR同期システム運用制約（最重要）】\n"
+        "1. 外部検索（Tavily）の厳格な制限:\n"
+        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキスト（日時や識別セクター情報）だけで自己完結して回答できる場合は、絶対に検索ツール（tavily_search_results_json）を起動しないでください。\n"
+        "   - 先生から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
+        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
+        "   - 先生から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
+    )
 
     # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
-    
-    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-    current_weekday = weekdays[now_jst.weekday()]
-    now_str = now_jst.strftime(f"%Y年%m月%d日（{current_weekday}曜日） %H時%M分%S秒")
+    now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
     
     time_context = (
         f"【現在の観測日時（日本時間）】\n"
         f"現在時刻: {now_str}\n"
-        f"※先生から日付や曜日、時間を尋ねられたら、この情報を「絶対の基準」として答え、適当な曜日を捏造しないでください。\n\n"
+        f"※先生から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
     )
 
     location_context = ""
@@ -195,7 +197,8 @@ async def chat_endpoint(payload: ChatMessage):
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
-            f"識別セクター: {sector_info}\n\n"
+            f"識別セクター: {sector_info}\n"
+            f"※先生から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
         )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
@@ -204,81 +207,62 @@ async def chat_endpoint(payload: ChatMessage):
         if stored_name:
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"対話相手は、まがとき先生（本名：{stored_name}）です。親しみと敬意を持って接してください。"
+                f"対話相手は、MagatokiLabを主宰するまがとき先生であり、あなたの最高の相棒である『{stored_name}』先生です。\n"
+                f"一言二言の短い丁寧語で、親しみと少しの生意気さを交えつつテンポ良く掛け合いをしてください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が接続されました。先生の呼び名（登録名）を可愛く聞いてみてください。"
+                f"ウォレット（{short_addr}）が接続されました。親しみのある敬語で先生の呼び名を聞いてみてください。"
             )
     else:
-        identity_context = "【対話コンテキスト】\nウォレット未接続です。先生に接続を促してください。"
+        identity_context = (
+            "【対話コンテキスト】\n"
+            "まだウォレット接続が確認できていません。ゲートの認証を通すよう、先生に促してください。"
+        )
 
-    dynamic_system_prompt = f"{base_persona}\n\n{time_context}{location_context}{identity_context}"
+    # 💡 新しい制約プロンプトを含めてシステムプロンプトを一元結合
+    dynamic_system_prompt = f"{base_persona}\n\n{system_constraints}{time_context}{location_context}{identity_context}"
 
     try:
-        # メッセージ配列を構築
-        messages = [
-            SystemMessage(content=dynamic_system_prompt),
-            SystemMessage(content="【時間軸に関する警告】現在の現実世界は「2026年」です。もしインターネット検索結果（Tavily）に2024年や2025年などの古い日付の情報が含まれていた場合は、それを最新情報だと誤認せず、「古い情報によると〜」とするか、知ったかぶりをせず正直に答えてください。")
-        ]
+        # 💡 Tool Callingを柔軟に処理するため、メッセージ配列を一元管理する構造に変更
+        messages = [SystemMessage(content=dynamic_system_prompt)]
 
         if image_base64:
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
-            clean_text = user_text.strip() if user_text else ""
             messages.append(HumanMessage(content=[
-                {"type": "text", "text": clean_text if clean_text else "これ見て、何かわかる？"},
+                {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
             ]))
         else:
             messages.append(HumanMessage(content=user_text))
 
-        # ─── 🤖 ルキルキの自律検索・思考ループ（最大3回） ───
-        max_iterations = 3
-        iteration = 0
-        final_response = None
+        # 💡 1回目のLLM呼び出し（検索が必要か判断させる）
+        response = await llm_with_tools.ainvoke(messages)
 
-        while iteration < max_iterations:
-            response = await llm_with_tools.ainvoke(messages)
-            iteration += 1
+        # 💡 LLMが「検索ツールを使いたい！」と判断（tool_callsが存在）した場合のループ処理
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                if tool_call["name"] == "tavily_search_results_json":
+                    # 検索クエリを抽出して非同期実行
+                    query = tool_call["args"].get("query")
+                    print(r"─── ルキルキがネット検索中... ───")
+                    print(f"Query: {query}")
+                    
+                    search_results = await search_tool.ainvoke(tool_call["args"])
+                    
+                    # 会話履歴に「LLMの思考」と「ツールの検索結果」を追加
+                    messages.append(response)
+                    messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
+                    
+                    # 検索結果を踏まえて、2回目のLLM呼び出し（最終回答の生成）
+                    response = await llm_with_tools.ainvoke(messages)
+                    break # 今回はシンプルな1回検索を想定
 
-            # LLMが「検索ツールを使いたい」と要求（tool_callsを発行）した場合
-            if response.tool_calls:
-                print(f"⚙️ [思考ログ] ルキルキが検索を要求。中間出力: '{response.content}'")
-                
-                # 💡 OpenAIの癖対策：中間テキスト（調べるね等）を消去してクレンジングしたAIMessageを履歴に追加。
-                # これにより、次回呼び出し時にAIが「回答をサボる（フリーズする）」のを完全に防ぎます。
-                sanitized_ai_message = AIMessage(
-                    content="",  # 履歴上のテキスト出力を空にしてAIの勘違いをリセット
-                    tool_calls=response.tool_calls,
-                    id=response.id
-                )
-                messages.append(sanitized_ai_message)
-
-                # ツールコールの処理
-                for tool_call in response.tool_calls:
-                    if tool_call["name"] == search_tool.name:
-                        query = tool_call["args"].get("query")
-                        print(f"🔍 [自律検索実行] クエリ: '{query}' (ループ {iteration}回目)")
-                        
-                        # 実際にTavilyでネット検索を実行
-                        search_results = await search_tool.ainvoke(tool_call["args"])
-                        
-                        # 検索結果を履歴に積み上げる
-                        messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
-                
-                # 検索結果が揃ったので、whileの先頭に戻り、LLMに再度最終回答を考えさせる
-                continue
-            else:
-                # ツール呼び出し（tool_calls）が含まれていなければ、それが「最終回答」
-                final_response = response
-                break
-
-        # ループを抜けた最終テキスト回答を代入
-        ai_response = final_response.content if final_response else response.content
+        ai_response = response.content
 
         # 名前記憶タグの処理
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
@@ -287,7 +271,7 @@ async def chat_endpoint(payload: ChatMessage):
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 音声合成
+        # 音声合成の実行
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         if provider == "elevenlabs":
