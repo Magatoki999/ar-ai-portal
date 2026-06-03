@@ -5,7 +5,7 @@ import { useAccount } from "wagmi";
 import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
-// 💡 サイバー感を出すための詳細な内部検索ステータス
+// サイバー感を出すための詳細な内部検索ステータス
 type SearchPhase = "OFFLINE" | "STABLE" | "CONNECTING..." | "TAVILY_SEARCHING..." | "DATA_ANALYZING...";
 
 interface MorphTargetRef {
@@ -17,7 +17,8 @@ export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
-  const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); // 💡 初期状態
+  const [isTargetTracking, setIsTargetTracking] = useState<boolean>(false); // 💡 【新規】ターゲット追跡状態フラグ
+  const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); 
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
@@ -26,7 +27,7 @@ export default function MindARViewer() {
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
 
-  // タイマーの参照を保持（コンポーネントアンマウント時やクリーンアップ用）
+  // タイマーの参照を保持
   const timersRef = useRef<NodeJS.Timeout[]>([]);
 
   // Three.js Animation References
@@ -49,6 +50,13 @@ export default function MindARViewer() {
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
+
+  // 💡 【新規】カードロスト状態とルキルキの発話状態を監視し、字幕を初期状態へ安全に戻す自動制御
+  useEffect(() => {
+    if (!isTargetTracking && aiStatus === "idle") {
+      setSubtitle("（カメラをターゲットにかざしてください）");
+    }
+  }, [isTargetTracking, aiStatus]);
 
   // 0. リアルタイム日時更新ロジック
   useEffect(() => {
@@ -75,7 +83,6 @@ export default function MindARViewer() {
         audioInstanceRef.current.pause();
         audioInstanceRef.current = null;
       }
-      // タイマーの完全クリーンアップ
       timersRef.current.forEach(clearTimeout);
     };
   }, []);
@@ -304,6 +311,7 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
+          setIsTargetTracking(true); // 💡 【新規】追跡状態をON
           setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
@@ -321,7 +329,7 @@ export default function MindARViewer() {
         };
 
         anchor.onTargetLost = () => {
-          setSubtitle("ターゲットを見失いました。");
+          setIsTargetTracking(false); // 💡 【新規】追跡状態をOFF (字幕のリセットはuseEffectが自動並行管理)
           isSpawningRef.current = false;
           if (avatarSceneRef.current) {
             avatarSceneRef.current.scale.set(0, 0, 0); 
@@ -456,6 +464,15 @@ export default function MindARViewer() {
         return;
       }
       
+      // 💡 ローカルテスト時の座標偽装用（ブラウザのGPSモックが必要な時は以下をアンコメント）
+      /*
+      resolve({
+        lat: 35.0115,  // 烏丸二条セクターの範囲内
+        lng: 135.7595,
+      });
+      return;
+      */
+      
       navigator.geolocation.getCurrentPosition(
         (position) => {
           resolve({
@@ -523,15 +540,15 @@ export default function MindARViewer() {
       audioInstance.src = ""; 
     }
 
-    // 💡 既存のタイマーがあれば完全にリセット
+    // 既存のタイマーがあれば完全にリセット
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
 
     setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
-    setSearchPhase("CONNECTING..."); // 💡 フェーズ1発動
+    setSearchPhase("CONNECTING..."); 
 
-    // 💡 【新規】時間経過に伴うサイバー自動検索シミュレーターをスケジュール
+    // 時間経過に伴うサイバー自動検索シミュレーターをスケジュール
     const t1 = setTimeout(() => {
       setSearchPhase("TAVILY_SEARCHING...");
       setSubtitle(`🌐 外部情報空間を走査中...\n（Tavilyサーチを同期しています）`);
@@ -557,12 +574,12 @@ export default function MindARViewer() {
             message: text, 
             wallet_address: address || null,
             image_base64: imageBase64,       
-            latitude: location ? location.lat : null, 
-            longitude: location ? location.lng : null  
+            latitude: location ? location.lat : null,   // 💡 パイプラインを正しくマッピング
+            longitude: location ? location.lng : null   // 💡 パイプラインを正しくマッピング
           }),
         });
 
-        // 💡 レスポンスが戻ったら、走らせていた擬似タイマーを全クリア
+        // レスポンスが戻ったら、走らせていた擬似タイマーを全クリア
         timersRef.current.forEach(clearTimeout);
         timersRef.current = [];
         setSearchPhase("STABLE");
@@ -589,11 +606,11 @@ export default function MindARViewer() {
             const audioUrl = URL.createObjectURL(blob);
 
             audioInstance.onended = () => {
-              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
               URL.revokeObjectURL(audioUrl); 
             };
 
+            initAudioPipeline(audioInstance);
             audioInstance.src = audioUrl;
             setAiStatus("talking");
             await audioInstance.play();
@@ -602,14 +619,12 @@ export default function MindARViewer() {
             console.error("音声再生エラー。フォールバック処理を行います:", audioError);
             setAiStatus("talking");
             setTimeout(() => {
-              setSubtitle("次の指示を待っています。");
               setAiStatus("idle");
             }, 5000);
           }
         } else {
           setAiStatus("talking");
           setTimeout(() => {
-            setSubtitle("次の指示を待っています。");
             setAiStatus("idle");
           }, 5000);
         }
@@ -634,11 +649,13 @@ export default function MindARViewer() {
       setSubtitle(`【本番フロントテスト】「${text}」を受信。`);
       setAiStatus("talking");
       setTimeout(() => {
-        setSubtitle("次の指示を待っています.");
         setAiStatus("idle");
       }, 5000);
     }, 2000);
   };
+
+  // 💡 【新規】「思考中」または「カードロスト中で、かつルキルキが発話中ではない」時は対話ゲートを閉じる
+  const isInteractionDisabled = aiStatus === "thinking" || (!isTargetTracking && aiStatus !== "talking");
 
   return (
     <>
@@ -652,7 +669,6 @@ export default function MindARViewer() {
           top: 0 !important;
           left: 0 !important;
         }
-        /* 💡 サイバーSFスキャンラインアニメーションの定義 */
         @keyframes cyber-scan {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
@@ -680,12 +696,11 @@ export default function MindARViewer() {
             <span className="text-[10px] text-purple-400 font-bold tracking-widest">OBSERVATION SYSTEM v3.3</span>
             <span className="text-xs font-semibold flex items-center gap-2">
               <span className={`h-2.5 w-2.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-pulse shadow-[0_0_8px_#facc15]" : aiStatus === "talking" ? "bg-cyan-400 animate-ping" : "bg-purple-500 shadow-[0_0_8px_#a855f7]"}`} />
-              STATUS: <span className={aiStatus === "thinking" ? "text-yellow-400" : aiStatus === "talking" ? "text-cyan-400" : "text-purple-400"}>{aiStatus.toUpperCase()}</span>
+              STATUS: <span className={aiStatus === "thinking" ? "text-yellow-400" : aiStatus === "talking" ? "text-cyan-400" : "text-purple-400"}={aiStatus.toUpperCase()}</span>
             </span>
           </div>
           
           <div className="flex items-center gap-3">
-            {/* 💡 サーチフェーズインジケーター（サイバー感マシマシ） */}
             <div className="hidden sm:flex flex-col items-end text-right text-[9px] mr-1">
               <span className="text-gray-500">QUANTUM_PHASE</span>
               <span className={`font-bold ${searchPhase.includes("SEARCHING") ? "text-yellow-400 animate-pulse" : searchPhase.includes("ANALYZING") ? "text-cyan-400" : "text-gray-400"}`}>
@@ -702,17 +717,15 @@ export default function MindARViewer() {
         {/* ─── 下部 UI エリア ─── */}
         <div className="w-full space-y-3 pointer-events-auto mb-4 max-w-2xl mx-auto">
           
-          {/* 💡 字幕・インフォメーションボード（ネオンテイスト） */}
+          {/* 字幕・インフォメーションボード */}
           <div className="relative bg-black/75 backdrop-blur-xl p-5 rounded-xl text-white min-h-[85px] flex flex-col items-center justify-center border border-purple-500/20 shadow-[0_4px_20px_rgba(0,0,0,0.6)] overflow-hidden">
             
-            {/* 💡 検索中・思考中だけに走る高速ネオンスキャンラインバー */}
             {aiStatus === "thinking" && (
               <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-purple-500 overflow-hidden">
                 <div className="w-1/2 h-full bg-gradient-to-r from-cyan-400 to-purple-400 animate-cyber-scan" />
               </div>
             )}
 
-            {/* システムインデックス風の飾りタグ */}
             <div className="absolute top-1.5 left-3 text-[8px] text-gray-500 tracking-wider flex gap-2">
               <span>[SUBTITLE_OUTPUT]</span>
               {searchPhase !== "STABLE" && <span className="text-yellow-500 animate-pulse">⚡ LINKING_TAVILY</span>}
@@ -728,10 +741,13 @@ export default function MindARViewer() {
             <button
               type="button"
               onClick={toggleListening}
+              disabled={isInteractionDisabled} // 💡 【新規】制御フラグをバインド
               className={`px-4 py-3.5 rounded-xl font-semibold text-sm shadow-lg active:scale-95 transition-all pointer-events-auto border ${
                 isListening 
                   ? "bg-red-600/20 border-red-500 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.4)] animate-pulse" 
-                  : "bg-black/60 text-gray-300 border-purple-500/20 hover:bg-purple-950/20 hover:border-purple-500/40"
+                  : isInteractionDisabled // 💡 【新規】無効化時のサイバー風ステルスデザイン
+                    ? "bg-gray-900/30 border-gray-800 text-gray-600 opacity-40 cursor-not-allowed"
+                    : "bg-black/60 text-gray-300 border-purple-500/20 hover:bg-purple-950/20 hover:border-purple-500/40"
               }`}
             >
               {isListening ? "🛰️" : "🎙️"}
@@ -742,17 +758,22 @@ export default function MindARViewer() {
                 ref={inputRef}
                 type="text" 
                 name="message"
-                disabled={aiStatus === "thinking"}
-                placeholder={isListening ? "::: 空間音響データをスキャン中 :::" : "XR観測ネットワークにコマンドを入力..."} 
-                className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
+                disabled={isInteractionDisabled} // 💡 【新規】制御フラグをバインド
+                placeholder={
+                  !isTargetTracking && aiStatus !== "talking"
+                    ? "::: ターゲットを見失っています :::" // 💡 ロスト時の親切なフィードバック
+                    : isListening 
+                      ? "::: 空間音響データをスキャン中 :::" 
+                      : "XR観測ネットワークにコマンドを入力..."
+                } 
+                className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)] border-purple-500/10 disabled:border-gray-800/50"
               />
-              {/* 入力欄の右端にうっすら光るサイバーなアクセント */}
-              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
+              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : !isTargetTracking && aiStatus !== "talking" ? "bg-gray-700" : "bg-purple-500"}`} />
             </div>
 
             <button 
               type="submit" 
-              disabled={aiStatus === "thinking"}
+              disabled={isInteractionDisabled} // 💡 【新規】制御フラグをバインド
               className="bg-gradient-to-r from-purple-700 via-indigo-700 to-cyan-700 hover:from-purple-600 hover:to-cyan-600 text-white px-5 py-3.5 rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(109,40,217,0.3)] active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none tracking-widest uppercase border border-white/10"
             >
               EXE
