@@ -85,8 +85,12 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     # 京都駅周辺
     elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
         return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
+    # MagatokiLab
+    elif 35.125 <= lat <= 35.140 and 135.400 <= lng <= 135.470:
+        return "【Magatoki開発ベースセクター】（相棒のメイン作業空間）"
     
-    return "【未知の観測セクター】（地球のどこか、未開拓の空間）"
+    #return "【未知の観測セクター】（地球のどこか、未開拓の空間）"
+    return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
 
 # データベースヘルパー：ユーザー名の取得
