@@ -11,13 +11,13 @@ import httpx
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage # 💡 AIMessage を追加
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.2 - Time & Search Fixed]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.3 - Autonomous Search Loop]")
 
 # ─── CORS設定 ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -154,7 +154,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 
 @app.get("/")
 def read_root():
-    return {"status": "healthy", "message": "RukiRuki Gateway Online"}
+    return {"status": "healthy", "message": "RukiRuki Autonomous Agent Gateway Online"}
 
 
 @app.post("/api/chat")
@@ -175,11 +175,10 @@ async def chat_endpoint(payload: ChatMessage):
     # 1. Markdownから基本ペルソナをロード
     base_persona = load_rukiruki_persona()
 
-    # 2. 時間・空間コンテキストの構築（💡 曜日判定を追加）
+    # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     
-    # Python側で確実に曜日文字列を生成
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
     current_weekday = weekdays[now_jst.weekday()]
     now_str = now_jst.strftime(f"%Y年%m月%d日（{current_weekday}曜日） %H時%M分%S秒")
@@ -222,7 +221,6 @@ async def chat_endpoint(payload: ChatMessage):
         # メッセージ配列を構築
         messages = [
             SystemMessage(content=dynamic_system_prompt),
-            # 💡 Tavily検索が古いノイズを拾って嘘をつくのを防ぐための時間軸固定の釘刺し
             SystemMessage(content="【時間軸に関する警告】現在の現実世界は「2026年」です。もしインターネット検索結果（Tavily）に2024年や2025年などの古い日付の情報が含まれていた場合は、それを最新情報だと誤認せず、「古い情報によると〜」とするか、知ったかぶりをせず正直に答えてください。")
         ]
 
@@ -238,26 +236,49 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             messages.append(HumanMessage(content=user_text))
 
-        # 1回目のLLM呼び出し
-        response = await llm_with_tools.ainvoke(messages)
+        # ─── 🤖 ルキルキの自律検索・思考ループ（最大3回） ───
+        max_iterations = 3
+        iteration = 0
+        final_response = None
 
-        # 検索ツールの実行ループ
-        if response.tool_calls:
-            for tool_call in response.tool_calls:
-                if tool_call["name"] == search_tool.name:
-                    query = tool_call["args"].get("query")
-                    print(f"─── 🔍 ルキルキがネット検索中: '{query}' ───")
-                    
-                    search_results = await search_tool.ainvoke(tool_call["args"])
-                    
-                    messages.append(response)
-                    messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
-                    
-                    # 検索結果を踏まえて2回目のLLM呼び出し
-                    response = await llm_with_tools.ainvoke(messages)
-                    break 
+        while iteration < max_iterations:
+            response = await llm_with_tools.ainvoke(messages)
+            iteration += 1
 
-        ai_response = response.content
+            # LLMが「検索ツールを使いたい」と要求（tool_callsを発行）した場合
+            if response.tool_calls:
+                print(f"⚙️ [思考ログ] ルキルキが検索を要求。中間出力: '{response.content}'")
+                
+                # 💡 OpenAIの癖対策：中間テキスト（調べるね等）を消去してクレンジングしたAIMessageを履歴に追加。
+                # これにより、次回呼び出し時にAIが「回答をサボる（フリーズする）」のを完全に防ぎます。
+                sanitized_ai_message = AIMessage(
+                    content="",  # 履歴上のテキスト出力を空にしてAIの勘違いをリセット
+                    tool_calls=response.tool_calls,
+                    id=response.id
+                )
+                messages.append(sanitized_ai_message)
+
+                # ツールコールの処理
+                for tool_call in response.tool_calls:
+                    if tool_call["name"] == search_tool.name:
+                        query = tool_call["args"].get("query")
+                        print(f"🔍 [自律検索実行] クエリ: '{query}' (ループ {iteration}回目)")
+                        
+                        # 実際にTavilyでネット検索を実行
+                        search_results = await search_tool.ainvoke(tool_call["args"])
+                        
+                        # 検索結果を履歴に積み上げる
+                        messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
+                
+                # 検索結果が揃ったので、whileの先頭に戻り、LLMに再度最終回答を考えさせる
+                continue
+            else:
+                # ツール呼び出し（tool_calls）が含まれていなければ、それが「最終回答」
+                final_response = response
+                break
+
+        # ループを抜けた最終テキスト回答を代入
+        ai_response = final_response.content if final_response else response.content
 
         # 名前記憶タグの処理
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
