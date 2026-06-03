@@ -42,7 +42,7 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# インターネット検索ツールの初期化（最大2件の検索結果を取得）
+# インネット検索ツールの初期化（最大2件の検索結果を取得）
 search_tool = TavilySearchResults(max_results=2)
 # LLMに検索ツールをバインド
 llm_with_tools = llm.bind_tools([search_tool])
@@ -227,7 +227,12 @@ async def chat_endpoint(payload: ChatMessage):
     try:
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        if image_base64:
+        # 💡 【追加箇所】ユーザーの言葉に視覚的な意図（「見て」「これ」「何」など）が含まれているか判定
+        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
+        has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
+
+        # 💡 【追加箇所】意図がある、またはテキストが完全に空（画像だけをパッと送ってきた場合）のみVision（画像入力）を有効化
+        if image_base64 and (has_vision_intent or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
@@ -236,6 +241,7 @@ async def chat_endpoint(payload: ChatMessage):
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
             ]))
         else:
+            # 💡 【追加箇所】単なる挨拶や日常の雑談（「こんばんは」など）の時は、画像をLLMに渡さず純粋なテキスト会話にする
             messages.append(HumanMessage(content=user_text))
 
         # 1回目のLLM呼び出し（検索が必要か判断させる）
