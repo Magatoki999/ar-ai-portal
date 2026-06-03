@@ -6,7 +6,6 @@ import type { AnimationMixer, AnimationAction } from "three";
 
 type AIStatus = "idle" | "thinking" | "talking";
 
-// 💡 複数メッシュや左右分離キーに対応するための構造定義
 interface MorphTargetRef {
   mesh: any;
   idxs: number[];
@@ -18,7 +17,7 @@ export default function MindARViewer() {
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
-  const [currentDateTime, setCurrentDateTime] = useState<string>(""); // 💡 右上日時表示用のステート
+  const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -35,10 +34,7 @@ export default function MindARViewer() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqDataRef = useRef<Uint8Array | null>(null);
   
-  // 💡 自動スキャンされた口（リップシンク）の参照リスト
   const mouthTargetsRef = useRef<MorphTargetRef[]>([]);
-
-  // 💡 自動スキャンされた瞬き（Blink）の参照リスト
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
@@ -444,7 +440,6 @@ export default function MindARViewer() {
     };
   }, []);
 
-  // 💡 Geolocation API を非同期処理（Promise化）するヘルパー
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) {
@@ -462,7 +457,7 @@ export default function MindARViewer() {
         },
         (error) => {
           console.error("GPS取得に失敗:", error);
-          resolve(null); // 位置情報が取れなくてもチャット自体はフォールバックして動かす
+          resolve(null); 
         },
         {
           enableHighAccuracy: true,
@@ -471,6 +466,23 @@ export default function MindARViewer() {
         }
       );
     });
+  };
+
+  // 💡 👁️ 【新規実装】ARの生カメラ映像（video要素）から現在の1フレームをBase64(JPEG)に変換して切り出す
+  const captureARCameraFrame = (): string | null => {
+    const video = containerRef.current?.querySelector("video");
+    if (!video || video.videoWidth === 0) return null;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // ビデオの現在の映像コマをそのままキャンバスにコピー描画
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // GPT-4o-miniが認識しやすいよう軽量なJPEG（画質0.7）のBase64データURLとして出力
+    return canvas.toDataURL("image/jpeg", 0.7);
   };
 
   const toggleListening = () => {
@@ -484,8 +496,13 @@ export default function MindARViewer() {
     } else {
       const audioInstance = audioInstanceRef.current;
       if (audioInstance) {
-        audioInstance.play().catch(() => {});
-        initAudioPipeline(audioInstance);
+        // 💡 🛠️ 【音声バグ修正】新しく聞く前に、直前の音声を「一時停止」して「ソースを完全消去」してリプレイを防ぐ！
+        audioInstance.pause();
+        audioInstance.src = ""; 
+      }
+      // インタラクション制限の解除は、オーディオコンテキストの再開だけで十分クリーンに対応可能
+      if (audioContextRef.current) {
+        audioContextRef.current.resume();
       }
       recognitionRef.current.start();
     }
@@ -501,15 +518,15 @@ export default function MindARViewer() {
     if (audioInstance) {
       audioInstance.pause();
       audioInstance.src = ""; 
-      audioInstance.play().catch(() => {});
-      initAudioPipeline(audioInstance);
     }
 
     setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
 
-    // 💡 送信の直前に非同期で最新の位置情報をスキャン
     const location = await getGPSLocation();
+    
+    // 💡 👁️ 【画像認識連携】メッセージ送信の直前のAR画面をパシャリとキャプチャ
+    const imageBase64 = captureARCameraFrame();
 
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -521,8 +538,9 @@ export default function MindARViewer() {
           body: JSON.stringify({ 
             message: text, 
             wallet_address: address || null,
-            latitude: location ? location.lat : null, // 💡 ペイロードに追加
-            longitude: location ? location.lng : null  // 💡 ペイロードに追加
+            image_base64: imageBase64,       // 💡 👁️ 【バグ修正】ここでバックエンドへ画像をパス！
+            latitude: location ? location.lat : null, 
+            longitude: location ? location.lng : null  
           }),
         });
 
@@ -629,7 +647,6 @@ export default function MindARViewer() {
           </span>
           
           <div className="flex items-center gap-3">
-            {/* 💡 右上日時表示エリア */}
             <span className="text-xs font-mono text-gray-300 bg-white/5 border border-white/10 px-2 py-1 rounded-md shadow-inner">
               {currentDateTime}
             </span>

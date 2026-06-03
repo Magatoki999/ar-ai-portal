@@ -17,7 +17,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3 - Search Enabled]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.1 - Debug & Search Enhanced]")
 
 # ─── CORS設定 ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -48,7 +48,7 @@ search_tool = TavilySearchResults(max_results=2)
 llm_with_tools = llm.bind_tools([search_tool])
 
 
-# 💡 パターンA: Markdownファイルからペルソナプロンプトを動的に読み込む関数
+# 💡 Markdownファイルからペルソナプロンプトを動的に読み込む関数
 def load_rukiruki_persona() -> str:
     persona_path = "rukiruki_persona.md"
     if os.path.exists(persona_path):
@@ -165,6 +165,14 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
+    # ─── 📡 リアルタイム観測ログ（デバッグ用情報表示） ───
+    print("\n====== 📡 [ルキルキ観測ゲートウェイ受信ログ] ======")
+    print(f"💬 送信テキスト: '{user_text}'")
+    print(f"📍 座標データ  : Lat={lat}, Lng={lng}")
+    print(f"🖼️ 画像データ  : {'あり (Base64上文字数: ' + str(len(image_base64)) + ')' if image_base64 else 'なし'}")
+    print(f"🔑 ウォレット  : {wallet_address}")
+    print("==================================================\n")
+
     # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
 
@@ -213,31 +221,32 @@ async def chat_endpoint(payload: ChatMessage):
     dynamic_system_prompt = f"{base_persona}\n\n{time_context}{location_context}{identity_context}"
 
     try:
-        # 💡 Tool Callingを柔軟に処理するため、メッセージ配列を一元管理する構造に変更
+        # メッセージ配列を一元管理
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
         if image_base64:
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
+            # メッセージや音声認識が空、または空白だけの場合はデフォルト文にフォールバック
+            clean_text = user_text.strip() if user_text else ""
             messages.append(HumanMessage(content=[
-                {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
+                {"type": "text", "text": clean_text if clean_text else "これ見て、何かわかる？"},
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
             ]))
         else:
             messages.append(HumanMessage(content=user_text))
 
-        # 💡 1回目のLLM呼び出し（検索が必要か判断させる）
+        # 1回目のLLM呼び出し（検索が必要か判断させる）
         response = await llm_with_tools.ainvoke(messages)
 
-        # 💡 LLMが「検索ツールを使いたい！」と判断（tool_callsが存在）した場合のループ処理
+        # LLMが「検索ツールを使いたい！」と判断した場合のループ処理
         if response.tool_calls:
             for tool_call in response.tool_calls:
-                if tool_call["name"] == "tavily_search_results_json":
-                    # 検索クエリを抽出して非同期実行
+                # 💡 search_tool.name を参照して安全に名前比較を行う
+                if tool_call["name"] == search_tool.name:
                     query = tool_call["args"].get("query")
-                    print(r"─── ルキルキがネット検索中... ───")
-                    print(f"Query: {query}")
+                    print(f"─── 🔍 ルキルキがネット検索中: '{query}' ───")
                     
                     search_results = await search_tool.ainvoke(tool_call["args"])
                     
@@ -247,7 +256,7 @@ async def chat_endpoint(payload: ChatMessage):
                     
                     # 検索結果を踏まえて、2回目のLLM呼び出し（最終回答の生成）
                     response = await llm_with_tools.ainvoke(messages)
-                    break # 今回はシンプルな1回検索を想定
+                    break 
 
         ai_response = response.content
 
