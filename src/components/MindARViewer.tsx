@@ -444,6 +444,35 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 💡 Geolocation API を非同期処理（Promise化）するヘルパー
+  const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        console.warn("Geolocationはサポートされていません。");
+        resolve(null);
+        return;
+      }
+      
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+        },
+        (error) => {
+          console.error("GPS取得に失敗:", error);
+          resolve(null); // 位置情報が取れなくてもチャット自体はフォールバックして動かす
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0,
+        }
+      );
+    });
+  };
+
   const toggleListening = () => {
     if (!recognitionRef.current) {
       alert("お使いのブラウザは音声認識に対応していません。ChromeかSafariでお試しください。");
@@ -479,6 +508,9 @@ export default function MindARViewer() {
     setSubtitle(`思考中... 「${text}」`);
     setAiStatus("thinking");
 
+    // 💡 送信の直前に非同期で最新の位置情報をスキャン
+    const location = await getGPSLocation();
+
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
     if (baseUrl) {
@@ -486,7 +518,12 @@ export default function MindARViewer() {
         const response = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, wallet_address: address || null }),
+          body: JSON.stringify({ 
+            message: text, 
+            wallet_address: address || null,
+            latitude: location ? location.lat : null, // 💡 ペイロードに追加
+            longitude: location ? location.lng : null  // 💡 ペイロードに追加
+          }),
         });
 
         if (!response.ok) throw new Error("APIへの接続に失敗しました");
@@ -592,7 +629,7 @@ export default function MindARViewer() {
           </span>
           
           <div className="flex items-center gap-3">
-            {/* 💡 右上日時表示エリアを追加 */}
+            {/* 💡 右上日時表示エリア */}
             <span className="text-xs font-mono text-gray-300 bg-white/5 border border-white/10 px-2 py-1 rounded-md shadow-inner">
               {currentDateTime}
             </span>

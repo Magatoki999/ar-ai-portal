@@ -1,7 +1,7 @@
 import os
 import base64
 import re
-from datetime import datetime, timedelta, timezone  # 💡 リアルタイム日時取得用に追加
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -70,6 +70,23 @@ class ChatMessage(BaseModel):
     message: str
     wallet_address: str | None = None
     image_base64: str | None = None
+    latitude: float | None = None   # 💡 位置認識用に拡張
+    longitude: float | None = None  # 💡 位置認識用に拡張
+
+
+# 💡 簡易エリア判定関数（MagatokiLabの拠点・関連セクターの判定）
+def judge_magatoki_sector(lat: float, lng: float) -> str:
+    # 烏丸二条周辺（松栄堂エリアを想定）
+    if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
+        return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
+    # 御所西周辺（山田松香木店エリアを想定）
+    elif 35.022 <= lat <= 35.026 and 135.749 <= lng <= 135.755:
+        return "【御所西セクター】（古風な香木と歴史が交差するエリア）"
+    # 京都駅周辺
+    elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
+        return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
+    
+    return "【未知の観測セクター】（地球のどこか、未開拓の空間）"
 
 
 # データベースヘルパー：ユーザー名の取得
@@ -203,6 +220,8 @@ async def chat_endpoint(payload: ChatMessage):
     user_text = payload.message
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
+    lat = payload.latitude
+    lng = payload.longitude
 
     # 💡 リアルタイムの日本時間(JST)をリクエスト毎に動的生成
     JST = timezone(timedelta(hours=+9))
@@ -216,6 +235,20 @@ async def chat_endpoint(payload: ChatMessage):
         f"※相棒（ユーザー）から「今いつ？」「今日何日？」などの時間を尋ねる質問があったら、"
         f"この日時情報を基準に、自然なフランクなタメ口（例：「今は{now_jst.strftime('%m月%d日の%H時%M分')}だよ！」など）で親身に答えてあげてください。解説口調は禁止です。\n\n"
     )
+
+    # 💡 空間の位置情報を認識させるためのコンテキスト
+    location_context = ""
+    if lat is not None and lng is not None:
+        sector_info = judge_magatoki_sector(lat, lng)
+        location_context = (
+            f"【現在の観測位置（GPS空間同期）】\n"
+            f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
+            f"識別セクター: {sector_info}\n"
+            f"※相棒から「ここどこ？」「今どこにいるかわかる？」といった場所に関する問いかけや、"
+            f"現在地に関連する雑談があったら、この識別セクターや座標の情報をベースに、"
+            f"「位置同期、バッチリだよ！」「お、ここは{sector_info.replace('【', '').replace('】', '')}じゃん！」など、"
+            f"SF感のあるフランクな相棒口調で触れてあげてください。長々とした位置解説は厳禁です。\n\n"
+        )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
@@ -232,7 +265,7 @@ async def chat_endpoint(payload: ChatMessage):
             identity_context = (
                 f"【対話コンテキスト】\n"
                 f"ウォレット（{short_addr}）が接続されたよ。\n"
-                f"「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」みたいに、フランクなタメ口で呼び名を聞いてみて。"
+                f"「あ、やっと繋がった！ねえ相棒、今回はなんて呼べばいい？」みたいに、フランクなタメ口で呼び名を聞みて。"
             )
     else:
         identity_context = (
@@ -241,8 +274,8 @@ async def chat_endpoint(payload: ChatMessage):
             "「んー？まだ同期が不完全かも。ほら、ゲートの認証を通してよ、相棒！」とフランクに促してください。"
         )
 
-    # 日時情報とキャラクター接続情報をマージ
-    full_identity_context = time_context + identity_context
+    # 日時情報、位置情報とキャラクター接続情報をマージ
+    full_identity_context = time_context + location_context + identity_context
 
     try:
         if image_base64:
