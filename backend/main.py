@@ -17,7 +17,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 # 環境変数の読み込み
 load_dotenv()
 
-app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.1 - Debug & Search Enhanced]")
+app = FastAPI(title="MagatokiLab RukiRuki XR Gateway [Production v3.2 - Time & Search Fixed]")
 
 # ─── CORS設定 ───
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
@@ -44,7 +44,7 @@ llm = ChatOpenAI(
 
 # 💡 インターネット検索ツールの初期化（最大2件の検索結果を取得）
 search_tool = TavilySearchResults(max_results=2)
-# LLMに検索ツールをバインド（紐付け）
+# LLMに検索ツールをバインド
 llm_with_tools = llm.bind_tools([search_tool])
 
 
@@ -154,7 +154,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 
 @app.get("/")
 def read_root():
-    return {"status": "healthy", "message": "RukiRuki Dynamic Persona Gateway Online"}
+    return {"status": "healthy", "message": "RukiRuki Gateway Online"}
 
 
 @app.post("/api/chat")
@@ -165,26 +165,29 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # ─── 📡 リアルタイム観測ログ（デバッグ用情報表示） ───
+    # デバッグログ
     print("\n====== 📡 [ルキルキ観測ゲートウェイ受信ログ] ======")
     print(f"💬 送信テキスト: '{user_text}'")
     print(f"📍 座標データ  : Lat={lat}, Lng={lng}")
-    print(f"🖼️ 画像データ  : {'あり (Base64上文字数: ' + str(len(image_base64)) + ')' if image_base64 else 'なし'}")
-    print(f"🔑 ウォレット  : {wallet_address}")
+    print(f"🖼️ 画像データ  : {'あり' if image_base64 else 'なし'}")
     print("==================================================\n")
 
-    # 1. Markdownから基本ペルソナを動的ロード
+    # 1. Markdownから基本ペルソナをロード
     base_persona = load_rukiruki_persona()
 
-    # 2. 時間・空間コンテキストの構築
+    # 2. 時間・空間コンテキストの構築（💡 曜日判定を追加）
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
-    now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
+    
+    # Python側で確実に曜日文字列を生成
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    current_weekday = weekdays[now_jst.weekday()]
+    now_str = now_jst.strftime(f"%Y年%m月%d日（{current_weekday}曜日） %H時%M分%S秒")
     
     time_context = (
         f"【現在の観測日時（日本時間）】\n"
         f"現在時刻: {now_str}\n"
-        f"※先生から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
+        f"※先生から日付や曜日、時間を尋ねられたら、この情報を「絶対の基準」として答え、適当な曜日を捏造しないでください。\n\n"
     )
 
     location_context = ""
@@ -193,8 +196,7 @@ async def chat_endpoint(payload: ChatMessage):
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
-            f"識別セクター: {sector_info}\n"
-            f"※先生から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
+            f"識別セクター: {sector_info}\n\n"
         )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
@@ -203,32 +205,31 @@ async def chat_endpoint(payload: ChatMessage):
         if stored_name:
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"対話相手は、MagatokiLabを主宰するまがとき先生であり、あなたの最高の相棒である『{stored_name}』先生です。\n"
-                f"一言二言の短い丁寧語で、親しみと少しの生意気さを交えつつテンポ良く掛け合いをしてください。"
+                f"対話相手は、まがとき先生（本名：{stored_name}）です。親しみと敬意を持って接してください。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が接続されました。親しみのある敬語で先生の呼び名を聞いてみてください。"
+                f"ウォレット（{short_addr}）が接続されました。先生の呼び名（登録名）を可愛く聞いてみてください。"
             )
     else:
-        identity_context = (
-            "【対話コンテキスト】\n"
-            "まだウォレット接続が確認できていません。ゲートの認証を通すよう、先生に促してください。"
-        )
+        identity_context = "【対話コンテキスト】\nウォレット未接続です。先生に接続を促してください。"
 
     dynamic_system_prompt = f"{base_persona}\n\n{time_context}{location_context}{identity_context}"
 
     try:
-        # メッセージ配列を一元管理
-        messages = [SystemMessage(content=dynamic_system_prompt)]
+        # メッセージ配列を構築
+        messages = [
+            SystemMessage(content=dynamic_system_prompt),
+            # 💡 Tavily検索が古いノイズを拾って嘘をつくのを防ぐための時間軸固定の釘刺し
+            SystemMessage(content="【時間軸に関する警告】現在の現実世界は「2026年」です。もしインターネット検索結果（Tavily）に2024年や2025年などの古い日付の情報が含まれていた場合は、それを最新情報だと誤認せず、「古い情報によると〜」とするか、知ったかぶりをせず正直に答えてください。")
+        ]
 
         if image_base64:
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
-            # メッセージや音声認識が空、または空白だけの場合はデフォルト文にフォールバック
             clean_text = user_text.strip() if user_text else ""
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": clean_text if clean_text else "これ見て、何かわかる？"},
@@ -237,24 +238,22 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             messages.append(HumanMessage(content=user_text))
 
-        # 1回目のLLM呼び出し（検索が必要か判断させる）
+        # 1回目のLLM呼び出し
         response = await llm_with_tools.ainvoke(messages)
 
-        # LLMが「検索ツールを使いたい！」と判断した場合のループ処理
+        # 検索ツールの実行ループ
         if response.tool_calls:
             for tool_call in response.tool_calls:
-                # 💡 search_tool.name を参照して安全に名前比較を行う
                 if tool_call["name"] == search_tool.name:
                     query = tool_call["args"].get("query")
                     print(f"─── 🔍 ルキルキがネット検索中: '{query}' ───")
                     
                     search_results = await search_tool.ainvoke(tool_call["args"])
                     
-                    # 会話履歴に「LLMの思考」と「ツールの検索結果」を追加
                     messages.append(response)
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
                     
-                    # 検索結果を踏まえて、2回目のLLM呼び出し（最終回答の生成）
+                    # 検索結果を踏まえて2回目のLLM呼び出し
                     response = await llm_with_tools.ainvoke(messages)
                     break 
 
@@ -267,7 +266,7 @@ async def chat_endpoint(payload: ChatMessage):
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 音声合成の実行
+        # 音声合成
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         if provider == "elevenlabs":
