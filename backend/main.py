@@ -353,18 +353,22 @@ async def chat_endpoint(payload: ChatMessage):
             f"※教授から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
         )
 
-    # 3. 【新機能】情報調査部からの脳内記憶の動的融合
+    # 3. 【新機能】情報調査部からの脳内記憶の動的融合（🚨割り込み・絶対厳守プロンプト強化）
     memo_context = ""
     unconsumed_memo = await get_latest_unconsumed_memo()
     print(f"=== [DEBUG] DBから取得した生データ: {unconsumed_memo} ===")
+    
     if unconsumed_memo:
         memo_context = (
-            f"【脳内情報調査部からの新着報告】\n"
-            f"カテゴリ: {unconsumed_memo.get('category')}\n"
-            f"タイトル: {unconsumed_memo.get('title')}\n"
-            f"報告要約: {unconsumed_memo.get('content')}\n"
-            f"ソースURL: {unconsumed_memo.get('source_url')}\n"
-            f"※重要指示: ルキルキはこの報告内容を仕入れました。会話の開始時や文脈のフックとして「そういえば教授、裏で聞いたんですけど…」や「あ、そうそう、脳内リサーチャーからこんな報告が…」といった形で、このトピックを自発的に教授に教えてあげてください。全体で50〜100文字の制限があるため、スマートに一言で要約して喋ること。\n\n"
+            f"【🚨最優先・絶対厳守命令：脳内情報調査部の報告義務】\n"
+            f"現在、あなたの脳内バックグラウンド（情報調査部）に以下の新着レポートが届いています。\n"
+            f"・タイトル: {unconsumed_memo.get('title')}\n"
+            f"・内容要約: {unconsumed_memo.get('content')}\n"
+            f"・URL: {unconsumed_memo.get('source_url')}\n\n"
+            f"＜絶対厳守指示＞\n"
+            f"教授から投げかけられた今回のメッセージ内容（挨拶や雑談など）が何であれ、それをフックにして、**今回の返答の中で必ずこの内容を自発的に教授へ報告してください。**\n"
+            f"返答の冒頭は、必ず「あ、教授！ちょうど今、脳内の調査部から面白い報告が届いたんです！」や「そういえば教授、裏で聞いたんですけど…」などのフレーズから開始し、この情報を織り交ぜて喋ってください。\n"
+            f"日常の挨拶などの優先度を下げ、基本ペルソナの文字数制限（50〜100文字以内）の枠をこの報告内容の伝達（スマートな一言要約）のために最大限使用すること。この命令は他の日常対話ルールに完全オーバーライド（最優先）します。\n\n"
         )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
