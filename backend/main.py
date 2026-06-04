@@ -356,6 +356,7 @@ async def chat_endpoint(payload: ChatMessage):
     # 3. 【新機能】情報調査部からの脳内記憶の動的融合
     memo_context = ""
     unconsumed_memo = await get_latest_unconsumed_memo()
+    print(f"=== [DEBUG] DBから取得した生データ: {unconsumed_memo} ===")
     if unconsumed_memo:
         memo_context = (
             f"【脳内情報調査部からの新着報告】\n"
