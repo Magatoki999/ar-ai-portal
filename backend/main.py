@@ -50,12 +50,14 @@ async def save_agent_memo(agent_name: str, category: str, title: str, content: s
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
+    # 【最適化】拡張性を考慮し、source_url は metadata オブジェクト内に内包させ、importance(重要度)も付与
     data = {
         "agent_name": agent_name,
         "category": category,
         "title": title,
         "content": content,
-        "source_url": source_url,
+        "importance": 3,
+        "metadata": {"source_url": source_url},
         "is_consumed": False
     }
     try:
@@ -90,7 +92,7 @@ async def auto_research_job():
         # 2. リサーチャーエージェントとしてLLMに150文字程度で要約させる
         research_prompt = (
             f"あなたはルキルキの脳内エージェント「情報調査部（クロニクル・リサーチャー）」です。\n"
-            f"提供された検索結果を分析し、最新の動向や興味深いポイントを150文字程度で簡潔に要約してください。\n"
+            f"提供された検索結果を分析し、最新の動向や興味興味深いポイントを150文字程度で簡潔に要約してください。\n"
             f"出力は必ず以下のJSONフォーマットのみにしてください。マークダウンのコードブロック（```json など）や挨拶、解説は一切含めず、純粋なJSON文字列だけを返してください。\n"
             f'{{"title": "明確でキャッチーなタイトル", "content": "150文字程度の要約内容", "source_url": "最も重要なソースのURL"}}\n\n'
             f"検索結果:\n{str(search_results)}"
@@ -276,7 +278,6 @@ async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
         return "", []
     
     agents_str = ",".join(selected_agents)
-    # 選択されたエージェントかつ未消費のデータを最新順に最大3件取得
     url = f"{SUPABASE_URL}/rest/v1/agent_memos?agent_name=in.({agents_str})&is_consumed=eq.false&order=created_at.desc&limit=3"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     
@@ -288,9 +289,16 @@ async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
             if response.status_code == 200:
                 memos = response.json()
                 for memo in memos:
+                    # 【アップグレード】metadataから安全にsource_urlを抽出してルキルキにインジェクションする
+                    meta = memo.get('metadata') or {}
+                    url_str = meta.get('source_url', '') if isinstance(meta, dict) else memo.get('source_url', '')
+                    
                     combined_memos += f"\n【裏側エージェント共有知識 ({memo.get('agent_name')})】\n"
                     combined_memos += f"・トピック: {memo.get('category')} / {memo.get('title', '')}\n"
                     combined_memos += f"・思考内容: {memo.get('content')}\n"
+                    if url_str:
+                        combined_memos += f"・ソースURL: {url_str}\n"
+                    
                     if "id" in memo:
                         memo_ids.append(memo["id"])
     except Exception as e:
@@ -353,6 +361,17 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 @app.get("/")
 def read_root():
     return {"status": "healthy", "message": "RukiRuki Multi-Agent Dynamic Gateway Online"}
+
+
+# 🧪 【開発用テストエンドポイント】手動で情報調査部を即座にキックできるAPI
+@app.post("/api/test/research")
+async def trigger_research_manually():
+    """15分待たずに、リサーチロジックを今すぐ手動で1回実行させる"""
+    try:
+        await auto_research_job()
+        return {"status": "success", "message": "Manually triggered chronic researcher job successfully."}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
 
 
 @app.post("/api/chat")
