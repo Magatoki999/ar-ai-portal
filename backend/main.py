@@ -181,6 +181,36 @@ def load_rukiruki_persona() -> str:
     )
 
 
+# 🧠 【新設】contextフォルダ内のMarkdownを自動で一括読み込みする関数
+def load_magatoki_context() -> str:
+    combined_context = ""
+    # main.py の位置を基準に backend/context フォルダの絶対パスを取得
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    context_dir = os.path.join(base_dir, "context")
+    
+    if not os.path.exists(context_dir):
+        print(f"⚠️ Warning: context folder not found at {context_dir}")
+        return combined_context
+
+    # フォルダ内（サブフォルダも含む）の .md ファイルを自動的に探索
+    for root, dirs, files in os.walk(context_dir):
+        for file in files:
+            if file.endswith(".md"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        combined_context += f"\n\n=== {file} 設定始まり ===\n"
+                        combined_context += f.read()
+                        combined_context += f"\n=== {file} 設定終わり ===\n"
+                except Exception as e:
+                    print(f"❌ Failed to read {file}: {e}")
+                    
+    return combined_context
+
+# ⚡ サーバー起動時に1回だけ読み込んでグローバルにキャッシュ（爆速化）
+MAGATOKI_KNOWLEDGE = load_magatoki_context()
+
+
 class ChatMessage(BaseModel):
     message: str
     wallet_address: str | None = None
@@ -329,7 +359,7 @@ async def chat_endpoint(payload: ChatMessage):
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
         "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
         "   - 教授から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
-        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーかくを当てて解析・言及してください。\n\n"
     )
 
     # 2. 時間・空間コンテキストの構築
@@ -392,7 +422,14 @@ async def chat_endpoint(payload: ChatMessage):
             "まだウォレット接続が確認できていません。ゲートの認証を通すよう、教授に促してください。"
         )
 
-    dynamic_system_prompt = f"{base_persona}\n\n{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
+    # 🔗 【重要】ロードした世界観アーカイブ知識（MAGATOKI_KNOWLEDGE）をシステムプロンプトのパズルに組み込む
+    world_context = (
+        f"【MagatokiLab公式設定・世界観アーカイブ】\n"
+        f"以下の設定を完全に把握し、会話の前提知識（世界観、キャラクターの人間関係、能力、裏設定など）としてください。矛盾する発言は厳禁です。\n"
+        f"{MAGATOKI_KNOWLEDGE}\n\n"
+    )
+
+    dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
 
     try:
         messages = [SystemMessage(content=dynamic_system_prompt)]
