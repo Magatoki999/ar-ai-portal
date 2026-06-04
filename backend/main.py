@@ -20,6 +20,9 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+# 🧠 【新設】思考調停ルーターのインポート
+from agents.router import analyze_and_route
+
 # 環境変数の読み込み
 load_dotenv()
 
@@ -37,17 +40,18 @@ def load_research_keywords() -> dict:
             print(f"Error reading {keywords_path}: {e}")
     return {}
 
-async def save_brain_memo(category: str, title: str, content: str, source_url: str):
-    """リサーチ結果をSupabaseのruki_brain_memosテーブルに格納する"""
+async def save_agent_memo(agent_name: str, category: str, title: str, content: str, source_url: str):
+    """リサーチ・思考結果をSupabaseの次世代ブラックボード（agent_memosテーブル）に格納する"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
-    url = f"{SUPABASE_URL}/rest/v1/ruki_brain_memos"
+    url = f"{SUPABASE_URL}/rest/v1/agent_memos"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
     data = {
+        "agent_name": agent_name,
         "category": category,
         "title": title,
         "content": content,
@@ -63,7 +67,7 @@ async def save_brain_memo(category: str, title: str, content: str, source_url: s
         print(f"[脳内エラー] 保存処理中に例外が発生しました: {e}")
 
 async def auto_research_job():
-    """定期実行される情報調査部の自律リサーチロジック"""
+    """定期実行される情報調査部（① クロニクル・リサーチャー）の自律リサーチロジック"""
     print("─── [脳内情報調査部] クローリング・リサーチを開始します ───")
     keywords_dict = load_research_keywords()
     if not keywords_dict:
@@ -106,8 +110,9 @@ async def auto_research_job():
         
         memo_data = json.loads(clean_content)
         
-        # 4. Supabaseにストック
-        await save_brain_memo(
+        # 4. 新ブラックボード（agent_memos）に 'chronicle' としてストック
+        await save_agent_memo(
+            agent_name="chronicle",
             category=category,
             title=memo_data.get("title", f"{keyword}に関する調査報告"),
             content=memo_data.get("content", ""),
@@ -122,7 +127,7 @@ async def auto_research_job():
 # ─── FastAPI ライフサイクル管理（lifespan） ───
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 起動時にスケジューラを稼働 (テスト用に15分間隔に設定。必要に応じて変更してください)
+    # 起動時にスケジューラを稼働 (テスト用に15分間隔に設定)
     scheduler.add_job(auto_research_job, 'interval', minutes=15)
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部が自律常駐を開始しました ───")
@@ -160,7 +165,7 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# インネット検索ツールの初期化（最大2件の検索結果を取得）
+# インターネット検索ツールの初期化
 search_tool = TavilySearchResults(max_results=2)
 # LLMに検索ツールをバインド
 llm_with_tools = llm.bind_tools([search_tool])
@@ -181,10 +186,9 @@ def load_rukiruki_persona() -> str:
     )
 
 
-# 🧠 【新設】contextフォルダ内のMarkdownを自動で一括読み込みする関数
+# contextフォルダ内のMarkdownを自動で一括読み込みする関数
 def load_magatoki_context() -> str:
     combined_context = ""
-    # main.py の位置を基準に backend/context フォルダの絶対パスを取得
     base_dir = os.path.dirname(os.path.abspath(__file__))
     context_dir = os.path.join(base_dir, "context")
     
@@ -192,7 +196,6 @@ def load_magatoki_context() -> str:
         print(f"⚠️ Warning: context folder not found at {context_dir}")
         return combined_context
 
-    # フォルダ内（サブフォルダも含む）の .md ファイルを自動的に探索
     for root, dirs, files in os.walk(context_dir):
         for file in files:
             if file.endswith(".md"):
@@ -207,7 +210,7 @@ def load_magatoki_context() -> str:
                     
     return combined_context
 
-# ⚡ サーバー起動時に1回だけ読み込んでグローバルにキャッシュ（爆速化）
+# ⚡ サーバー起動時にキャッシュ
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
@@ -227,7 +230,7 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
         return "【御所西セクター】（古風な香木と歴史が交差するエリア）"
     elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
         return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
-    elif 35.000 <= lat <= 35.150 and 135.700 <= lng <= 135.800:
+    elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
         return "【Magatoki開発ベースセクター】（相棒のメイン作業空間）"
     return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
@@ -266,39 +269,52 @@ async def save_username_to_db(wallet_address: str, name: str):
     except Exception as e:
         print(f"Error saving user name: {e}")
 
-async def get_latest_unconsumed_memo() -> dict | None:
-    """脳内報告書テーブルから未消費の最新レコードを1件取得する"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
-    url = f"{SUPABASE_URL}/rest/v1/ruki_brain_memos?is_consumed=eq.false&order=created_at.desc&limit=1"
+# 🧠 【次世代】選択されたアクティブなエージェントの未消費メモリを引き出す
+async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
+    """ルーターが選択したエージェントに対応するメモリをブラックボードからまとめて取得する"""
+    if not SUPABASE_URL or not SUPABASE_KEY or not selected_agents:
+        return "", []
+    
+    agents_str = ",".join(selected_agents)
+    # 選択されたエージェントかつ未消費のデータを最新順に最大3件取得
+    url = f"{SUPABASE_URL}/rest/v1/agent_memos?agent_name=in.({agents_str})&is_consumed=eq.false&order=created_at.desc&limit=3"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    
+    combined_memos = ""
+    memo_ids = []
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
             if response.status_code == 200:
-                data = response.json()
-                if data and len(data) > 0:
-                    return data[0]
+                memos = response.json()
+                for memo in memos:
+                    combined_memos += f"\n【裏側エージェント共有知識 ({memo.get('agent_name')})】\n"
+                    combined_memos += f"・トピック: {memo.get('category')} / {memo.get('title', '')}\n"
+                    combined_memos += f"・思考内容: {memo.get('content')}\n"
+                    if "id" in memo:
+                        memo_ids.append(memo["id"])
     except Exception as e:
-        print(f"Error fetching unconsumed memo: {e}")
-    return None
+        print(f"Error fetching active agent memos: {e}")
+        
+    return combined_memos, memo_ids
 
-async def mark_memo_as_consumed(memo_id: int | str):
-    """会話で使用した脳内報告書のis_consumedフラグをTRUEに更新する"""
-    if not SUPABASE_URL or not SUPABASE_KEY or not memo_id:
+async def mark_memos_as_consumed(memo_ids: list):
+    """会話で使用した思考メモリのis_consumedフラグをTRUEに一括更新する"""
+    if not SUPABASE_URL or not SUPABASE_KEY or not memo_ids:
         return
-    url = f"{SUPABASE_URL}/rest/v1/ruki_brain_memos?id=eq.{memo_id}"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    data = {"is_consumed": True}
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.patch(url, json=data, headers=headers, timeout=5.0)
-    except Exception as e:
-        print(f"Error updating memo status: {e}")
+    async with httpx.AsyncClient() as client:
+        for memo_id in memo_ids:
+            url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id}"
+            try:
+                await client.patch(url, json={"is_consumed": True}, headers=headers, timeout=5.0)
+                print(f"[脳内同期] レポート(ID: {memo_id}) の消費フラグをTRUEに更新しました。")
+            except Exception as e:
+                print(f"Error updating memo status for ID {memo_id}: {e}")
 
 
 # ─── 音声合成ヘルパー ───
@@ -350,7 +366,7 @@ async def chat_endpoint(payload: ChatMessage):
     # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
 
-    # 過剰な検索の自制、およびVision解析時の特定カード・UI除外制約
+    # 運用制約
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
@@ -359,7 +375,7 @@ async def chat_endpoint(payload: ChatMessage):
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
         "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
         "   - 教授から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
-        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーかくを当てて解析・言及してください。\n\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
     )
 
     # 2. 時間・空間コンテキストの構築
@@ -373,6 +389,7 @@ async def chat_endpoint(payload: ChatMessage):
         f"※教授から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
     )
 
+    sector_info = "【セクター未特定】"
     location_context = ""
     if lat is not None and lng is not None:
         sector_info = judge_magatoki_sector(lat, lng)
@@ -383,23 +400,25 @@ async def chat_endpoint(payload: ChatMessage):
             f"※教授から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
         )
 
-    # 3. 【新機能】情報調査部からの脳内記憶の動的融合（🚨割り込み・絶対厳守プロンプト強化）
+    # 🧠 ─── 【新コアロジック】調停ルーターの起動 ───
+    print(f"─── [Router] 思考調停を開始します ───")
+    router_res = analyze_and_route(user_text if user_text else "[画像送信のみ]", sector_info, now_str)
+    print(f"[Router 結果] Intent: {router_res.intent} | Selected: {router_res.selected_agents}")
+    print(f"[Router 理由] {router_res.reason}")
+
+    # 3. ジャッジされたエージェントの思考メモリをブラックボード（Supabase）から動的抽出
     memo_context = ""
-    unconsumed_memo = await get_latest_unconsumed_memo()
-    print(f"=== [DEBUG] DBから取得した生データ: {unconsumed_memo} ===")
-    
-    if unconsumed_memo:
-        memo_context = (
-            f"【🚨最優先・絶対厳守命令：脳内情報調査部の報告義務】\n"
-            f"現在、あなたの脳内バックグラウンド（情報調査部）に以下の新着レポートが届いています。\n"
-            f"・タイトル: {unconsumed_memo.get('title')}\n"
-            f"・内容要約: {unconsumed_memo.get('content')}\n"
-            f"・URL: {unconsumed_memo.get('source_url')}\n\n"
-            f"＜絶対厳守指示＞\n"
-            f"教授から投げかけられた今回のメッセージ内容（挨拶や雑談など）が何であれ、それをフックにして、**今回の返答の中で必ずこの内容を自発的に教授へ報告してください。**\n"
-            f"返答の冒頭は、必ず「あ、教授！ちょうど今、脳内の調査部から面白い報告が届いたんです！」や「そういえば教授、裏で聞いたんですけど…」などのフレーズから開始し、この情報を織り交ぜて喋ってください。\n"
-            f"日常の挨拶などの優先度を下げ、基本ペルソナの文字数制限（50〜100文字以内）の枠をこの報告内容の伝達（スマートな一言要約）のために最大限使用すること。この命令は他の日常対話ルールに完全オーバーライド（最優先）します。\n\n"
-        )
+    active_memo_ids = []
+    if router_res.selected_agents:
+        fetched_memos, active_memo_ids = await get_active_agent_memos(router_res.selected_agents)
+        if fetched_memos:
+            memo_context = (
+                f"【🧠 バックグラウンド思考層からのリアルタイム共有知識】\n"
+                f"ルキルキ、現在あなたの裏側で動くエージェント（{', '.join(router_res.selected_agents)}）から以下の知見がブラックボードにストックされています。\n"
+                f"会話の流れを不自然に壊さない範囲で、この知識をあなたの言葉（人格層）にブレンドして教授に伝えてください。\n"
+                f"日常の挨拶や雑談から自然な流れでこのトピックに繋げられると、随伴型AIとして非常に優秀です。\n"
+                f"{fetched_memos}\n"
+            )
 
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
 
@@ -422,7 +441,7 @@ async def chat_endpoint(payload: ChatMessage):
             "まだウォレット接続が確認できていません。ゲートの認証を通すよう、教授に促してください。"
         )
 
-    # 🔗 【重要】ロードした世界観アーカイブ知識（MAGATOKI_KNOWLEDGE）をシステムプロンプトのパズルに組み込む
+    # ロードした世界観アーカイブ知識をパズルに組み込む
     world_context = (
         f"【MagatokiLab公式設定・世界観アーカイブ】\n"
         f"以下の設定を完全に把握し、会話の前提知識（世界観、キャラクターの人間関係、能力、裏設定など）としてください。矛盾する発言は厳禁です。\n"
@@ -434,11 +453,10 @@ async def chat_endpoint(payload: ChatMessage):
     try:
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        # ユーザーの言葉に視覚的な意図（「見て」「これ」「何」など）が含まれているか判定
+        # ユーザーの言葉に視覚的な意図が含まれているか判定
         vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
-        # 意図がある、またはテキストが完全に空（画像だけをパッと送ってきた場合）のみVision（画像入力）を有効化
         if image_base64 and (has_vision_intent or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
@@ -448,12 +466,12 @@ async def chat_endpoint(payload: ChatMessage):
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
             ]))
         else:
-            messages.append(HumanMessage(content=user_text))
+            messages.append(HumanMessage(content=user_text if user_text else ""))
 
-        # 1回目のLLM呼び出し（検索が必要か判断させる）
+        # 1回目のLLM呼び出し
         response = await llm_with_tools.ainvoke(messages)
 
-        # LLMが「検索ツールを使いたい！」と判断した場合のループ処理
+        # 検索ツールの実行ループ
         if response.tool_calls:
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
@@ -478,10 +496,9 @@ async def chat_endpoint(payload: ChatMessage):
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 4. 【新機能】今回のターンで脳内報告書を消費したため、ステータスをTRUEに更新
-        if unconsumed_memo:
-            await mark_memo_as_consumed(unconsumed_memo["id"])
-            print(f"[脳内同期] レポート(ID: {unconsumed_memo['id']}) の消費フラグをTRUEに更新しました。")
+        # 4. 【新機能】今回ロードされ、無事会話に使用されたメモリの消費フラグを一括でTRUEに更新
+        if active_memo_ids:
+            await mark_memos_as_consumed(active_memo_ids)
 
         # 音声合成の実行
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
