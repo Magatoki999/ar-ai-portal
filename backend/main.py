@@ -5,7 +5,7 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -26,11 +26,49 @@ from agents.router import analyze_and_route
 # 環境変数の読み込み
 load_dotenv()
 
+# ─── グローバル変数・共通インスタンスの初期化 ───
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+
+# LLM・検索ツールの初期化
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.8,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+)
+search_tool = TavilySearchResults(max_results=2)
+llm_with_tools = llm.bind_tools([search_tool])
+
+
+# 🌐 ─── WebSocket 接続管理クラス（リアルタイム同期用） ───
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        """接続されているすべてのフロントエンドに状態を即時ブロードキャスト"""
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                # 既に切断されている接続などのノイズをパス
+                pass
+
+manager = ConnectionManager()
+
+
 # ─── バックグラウンドタスク（情報調査部）の設定 ───
 scheduler = AsyncIOScheduler()
 
 def load_research_keywords() -> dict:
-    """ルートディレクトリのkeywords.jsonを読み込むヘルパー関数"""
     keywords_path = "keywords.json"
     if os.path.exists(keywords_path):
         try:
@@ -41,7 +79,6 @@ def load_research_keywords() -> dict:
     return {}
 
 async def save_agent_memo(agent_name: str, category: str, title: str, content: str, source_url: str):
-    """リサーチ・思考結果をSupabaseの次世代ブラックボード（agent_memosテーブル）に格納する"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
     url = f"{SUPABASE_URL}/rest/v1/agent_memos"
@@ -68,7 +105,6 @@ async def save_agent_memo(agent_name: str, category: str, title: str, content: s
         print(f"[脳内エラー] 保存処理中に例外が発生しました: {e}")
 
 async def auto_research_job():
-    """定期実行される情報調査部（① クロニクル・リサーチャー）の自律リサーチロジック"""
     print("─── [脳内情報調査部] クローリング・リサーチを開始します ───")
     keywords_dict = load_research_keywords()
     if not keywords_dict:
@@ -88,7 +124,7 @@ async def auto_research_job():
         
         research_prompt = (
             f"あなたはルキルキの脳内エージェント「情報調査部（クロニクル・リサーチャー）」です。\n"
-            f"提供された検索結果を分析し、最新の動向や興味興味深いポイントを150文字程度で簡潔に要約してください。\n"
+            f"提供された検索結果を分析し、最新の動向や興味深いポイントを150文字程度で簡潔に要約してください。\n"
             f"出力は必ず以下のJSONフォーマットのみにしてください。マークダウンのコードブロック（```json など）や挨拶、解説は一切含めず、純粋なJSON文字列だけを返してください。\n"
             f'{{"title": "明確でキャッチーなタイトル", "content": "150文字程度の要約内容", "source_url": "最も重要なソースのURL"}}\n\n'
             f"検索結果:\n{str(search_results)}"
@@ -136,32 +172,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ─── CORS設定 ───
-cors_origins_env = os.getenv("CORS_ORIGOrigins", "http://localhost:3000,https://ar-ai-portal.vercel.app")
+# ─── CORS設定（タイポ修復 ＆ VercelプレビューURL救済） ───
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://ar-ai-portal-.*\.vercel\.app", 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ─── Supabase 認証情報 ───
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
-
-# LLM初期化 (gpt-4o-mini)
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.8,
-    openai_api_key=os.getenv("OPENAI_API_KEY")
-)
-
-# インターネット検索ツールの初期化
-search_tool = TavilySearchResults(max_results=2)
-llm_with_tools = llm.bind_tools([search_tool])
 
 
 def load_rukiruki_persona() -> str:
@@ -205,10 +227,10 @@ def load_magatoki_context() -> str:
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
-# フロントエンドのHistoryItem構造をパースするPydanticスキーマ
+# Pydanticスキーマ定義
 class HistoryItem(BaseModel):
-    role: str       # "user" または "ruki"
-    text: str       # 発言内容
+    role: str       
+    text: str       
     timestamp: str | None = None
 
 class ChatMessage(BaseModel):
@@ -217,10 +239,10 @@ class ChatMessage(BaseModel):
     image_base64: str | None = None
     latitude: float | None = None   
     longitude: float | None = None  
-    history: list[HistoryItem] | None = None  # 会話バックログの受信ポケット
+    history: list[HistoryItem] | None = None  
 
 
-# ─── エリア判定関数 ───
+# エリア判定
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
         return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
@@ -233,7 +255,7 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
 
-# ─── Supabase データベースヘルパー ───
+# Supabase ヘルパー
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
@@ -268,7 +290,6 @@ async def save_username_to_db(wallet_address: str, name: str):
         print(f"Error saving user name: {e}")
 
 async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
-    """ルーターが選択したエージェントに対応するメモリをブラックボードからまとめて取得する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not selected_agents:
         return "", []
     
@@ -301,7 +322,6 @@ async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
     return combined_memos, memo_ids
 
 async def mark_memos_as_consumed(memo_ids: list):
-    """会話で使用した思考メモリのis_consumedフラグをTRUEに一括更新する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not memo_ids:
         return
     headers = {
@@ -319,7 +339,7 @@ async def mark_memos_as_consumed(memo_ids: list):
                 print(f"Error updating memo status for ID {memo_id}: {e}")
 
 
-# ─── 音声合成ヘルパー ───
+# 音声合成ヘルパー
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key: return None
@@ -352,6 +372,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
     return None
 
 
+# ─── HTTP エンドポイント定義 ───
 @app.get("/")
 def read_root():
     return {"status": "healthy", "message": "RukiRuki Multi-Agent Dynamic Gateway Online"}
@@ -374,32 +395,30 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 1. Markdownから基本ペルソナを動的ロード
+    # 💡 【エモ機能追加】対話が始まったらアバターのステータスを「thinking」に即時同期
+    await manager.broadcast({"type": "status", "status": "thinking"})
+
     base_persona = load_rukiruki_persona()
 
-    # 🔥 【変更点】URLの出力を完全禁止する指示（項目3）をシステム制約にインジェクションしました
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
-        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキスト（日時や識別セクター情報、脳内新着報告）だけで自己完結して回答できる場合は、絶対に検索ツール（tavily_search_results_json）を起動しないでください。\n"
-        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」「近くにあるおすすめの店」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキストだけで自己完結して回答できる場合は、絶対に検索ツールを起動しないでください。\n"
+        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
-        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
-        "   - 教授から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
-        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n"
+        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは完全に無視（除外）してください。\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、お香などのクラフトアイテム」についてのみフォーカスを当ててください。\n"
         "3. リンク（URL）の出力完全禁止:\n"
-        "   - 外部検索（Tavily）の結果やバックグラウンドの共有知識にURL（httpやhttpsから始まる文字列）が含まれていた場合でも、教授への応答テキスト内には絶対にURLやソースリンクを含めないでください。詳細なウェブ情報は省き、ピュアなテキストの要約情報のみを親しみやすく伝えてください。\n\n"
+        "   - 教授への応答テキスト内には絶対にURLやソースリンク（httpやhttps）を含めないでください。\n\n"
     )
 
-    # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
     
     time_context = (
         f"【現在の観測日時（日本時間）】\n"
-        f"現在時刻: {now_str}\n"
-        f"※教授から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
+        f"現在時刻: {now_str}\n\n"
     )
 
     sector_info = "【セクター未特定】"
@@ -409,14 +428,12 @@ async def chat_endpoint(payload: ChatMessage):
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
-            f"識別セクター: {sector_info}\n"
-            f"※周辺のお店やスポットについて検索ツール（tavily_search_results_json）を呼び出す際は、このセクター名（例: 烏丸二条、御所西、京都駅など）や『京都市』といった具体的な地域キーワードを検索クエリ（query）に自動で含めて検索をかけてください。\n\n"
+            f"識別セクター: {sector_info}\n\n"
         )
 
     print(f"─── [Router] 思考調停を開始します ───")
     router_res = analyze_and_route(user_text if user_text else "[画像送信のみ]", sector_info, now_str)
     print(f"[Router 結果] Intent: {router_res.intent} | Selected: {router_res.selected_agents}")
-    print(f"[Router 理由] {router_res.reason}")
 
     memo_context = ""
     active_memo_ids = []
@@ -425,9 +442,6 @@ async def chat_endpoint(payload: ChatMessage):
         if fetched_memos:
             memo_context = (
                 f"【🧠 バックグラウンド思考層からのリアルタイム共有知識】\n"
-                f"ルキルキ、現在あなたの裏側で動くエージェント（{', '.join(router_res.selected_agents)}）から以下の知見がブラックボードにストックされています。\n"
-                f"会話の流れを不自然に壊さない範囲で、この知識をあなたの言葉（人格層）にブレンドして教授に伝えてください。\n"
-                f"日常の挨拶や雑談から自然な流れでこのトピックに繋げられると、随伴型AIとして非常に優秀です。\n"
                 f"{fetched_memos}\n"
             )
 
@@ -437,47 +451,33 @@ async def chat_endpoint(payload: ChatMessage):
         if stored_name:
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"対話相手は、MagatokiLabを主宰するまがとき教授であり、あなたの最高の相棒である『{stored_name}』教授です。\n"
-                f"一言二言の短い丁寧語で、親しみと少しの生意気さを交えつつテンポ良く掛け合いをしてください。"
+                f"対話相手は、あなたの最高の相棒である『{stored_name}』教授です。"
             )
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-            identity_context = (
-                f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が接続されました。親しみのある敬語で教授の呼び名を聞いてみてください。"
-            )
+            identity_context = f"【対話コンテキスト】\nウォレット（{short_addr}）が接続されました。教授の呼び名を聞いてみてください。"
     else:
-        identity_context = (
-            "【対話コンテキスト】\n"
-            "まだウォレット接続が確認できていません。ゲートの認証を通すよう、教授に促してください。"
-        )
+        identity_context = "【対話コンテキスト】\nまだウォレット接続が確認できていません。認証を通すよう教授に促してください。"
 
-    world_context = (
-        f"【MagatokiLab公式設定・世界観アーカイブ】\n"
-        f"以下の設定を完全に把握し、会話の前提知識（世界観、キャラクターの人間関係、能力、裏設定など）としてください。矛盾する発言は厳禁です。\n"
-        f"{MAGATOKI_KNOWLEDGE}\n\n"
-    )
-
+    world_context = f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
     dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
 
     try:
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
         if payload.history:
-            print(f"[脳内同期] 過去 {len(payload.history)} 件の会話履歴をニューラルバインドします。")
             for item in payload.history:
                 if item.role == "user":
                     messages.append(HumanMessage(content=item.text))
                 elif item.role == "ruki":
                     messages.append(AIMessage(content=item.text))
 
-        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
+        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
         if image_base64 and (has_vision_intent or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
-
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
@@ -486,7 +486,6 @@ async def chat_endpoint(payload: ChatMessage):
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
         if memo_context:
-            print("[脳内同期] DB記憶を優先するため、検索ツールを物理的に封印します。")
             response = await llm.ainvoke(messages)
         else:
             response = await llm_with_tools.ainvoke(messages)
@@ -495,26 +494,19 @@ async def chat_endpoint(payload: ChatMessage):
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
                     query = tool_call["args"].get("query")
-                    
                     if lat is not None and lng is not None:
                         clean_sector = sector_info.replace("【", "").replace("】", "").split("セクター")[0]
                         base_query = query.replace("京都市", "").strip()
-                        
                         if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
                             query = f"京都市 近くの {base_query} 地元で人気"
                         else:
                             query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
-                        
                         tool_call["args"]["query"] = query
 
                     print(r"─── ルキルキがネット検索中... ───")
-                    print(f"Query: {query}")
-                    
                     search_results = await search_tool.ainvoke(tool_call["args"])
-                    
                     messages.append(response)
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
-                    
                     response = await llm_with_tools.ainvoke(messages)
                     break
 
@@ -528,6 +520,9 @@ async def chat_endpoint(payload: ChatMessage):
 
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
+
+        # 💡 【エモ機能追加】AIの返答テキストが確定したら、喋り出す前に「talking」に状態を変更
+        await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
@@ -543,8 +538,30 @@ async def chat_endpoint(payload: ChatMessage):
         ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、教授？"
         audio_base64 = None
 
+    # 💡 【エモ機能追加】すべて終わったら「idle（待機状態）」に戻す
+    await manager.broadcast({"type": "status", "status": "idle"})
+
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
         "status": "success"
     }
+
+
+# ⚡ ─── WebSocket エンドポイント定義（403拒否の完全対策） ───
+@app.websocket("/ws/avatar")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    フロントエンド（MindARViewer.tsx）からの常時同期リンクを受け止めるエンドポイント
+    """
+    await manager.connect(websocket)
+    print(f"[WebSocket] 教授のデバイスがアバター同期リンクに接続しました。")
+    try:
+        while True:
+            # フロント側からの常時生存確認（ハートビート等）のメッセージを待機
+            data = await websocket.receive_text()
+            # 必要であれば応答を返す（基本はクライアントの切断検知のためにループを回します）
+            await websocket.send_json({"type": "heartbeat", "status": "stable"})
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        print(f"[WebSocket] アバター同期リンクが切断されました。")
