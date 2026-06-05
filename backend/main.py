@@ -11,9 +11,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
 
-# LangChain 関連 (★ AIMessage を追加)
+# LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+# 🌟 【アップデート】履歴をルキルキの記憶として解釈させるため AIMessage を追加
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -201,13 +202,14 @@ def load_magatoki_context() -> str:
                     
     return combined_context
 
+# ⚡ サーバー起動時にキャッシュ
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
-# ─── ★【新設】過去ログ同期用のPydanticモデル ───
+# 🌟 【新設】フロントエンドのHistoryItem構造をパースするPydanticスキーマ
 class HistoryItem(BaseModel):
-    role: str      # "user" または "ruki"
-    text: str
+    role: str       # "user" または "ruki"
+    text: str       # 発言内容
     timestamp: str | None = None
 
 class ChatMessage(BaseModel):
@@ -216,9 +218,10 @@ class ChatMessage(BaseModel):
     image_base64: str | None = None
     latitude: float | None = None   
     longitude: float | None = None  
-    history: list[HistoryItem] | None = None  # ★ フロントエンドのバックログを受け取る
+    history: list[HistoryItem] | None = None  # 🌟 【追加】会話バックログの受信ポケット
 
 
+# ─── エリア判定関数 ───
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
         return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
@@ -231,11 +234,12 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
 
+# ─── Supabase データベースヘルパー ───
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
     url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    headers = {"apikey": SUPABASE_URL, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
@@ -265,6 +269,7 @@ async def save_username_to_db(wallet_address: str, name: str):
         print(f"Error saving user name: {e}")
 
 async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
+    """ルーターが選択したエージェントに対応するメモリをブラックボードからまとめて取得する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not selected_agents:
         return "", []
     
@@ -297,6 +302,7 @@ async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
     return combined_memos, memo_ids
 
 async def mark_memos_as_consumed(memo_ids: list):
+    """会話で使用した思考メモリのis_consumedフラグをTRUEに一括更新する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not memo_ids:
         return
     headers = {
@@ -314,6 +320,7 @@ async def mark_memos_as_consumed(memo_ids: list):
                 print(f"Error updating memo status for ID {memo_id}: {e}")
 
 
+# ─── 音声合成ヘルパー ───
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key: return None
@@ -367,10 +374,11 @@ async def chat_endpoint(payload: ChatMessage):
     image_base64 = payload.image_base64
     lat = payload.latitude
     lng = payload.longitude
-    history = payload.history  # ★ 履歴データの取得
 
+    # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
 
+    # 運用制約
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
@@ -382,6 +390,7 @@ async def chat_endpoint(payload: ChatMessage):
         "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
     )
 
+    # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
@@ -451,20 +460,22 @@ async def chat_endpoint(payload: ChatMessage):
     dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
 
     try:
+        # まずシステムプロンプト（人格、制約、知識、世界観、エージェントメモリ）をセット
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        # 📜 ★【新設】過去の文脈バックログをメッセージ木にインジェクション (直近最大10件)
-        if history:
-            for item in history[-10:]:
+        # 🌟 【新機能】フロントエンドから届いた過去の会話バックログ（履歴スタック）を時系列順にLLMへインジェクション
+        if payload.history:
+            print(f"[脳内同期] 過去 {len(payload.history)} 件の会話履歴をニューラルバインドします。")
+            for item in payload.history:
                 if item.role == "user":
                     messages.append(HumanMessage(content=item.text))
                 elif item.role == "ruki":
                     messages.append(AIMessage(content=item.text))
 
+        # 最後に、今回送信された「最新の」メッセージと画像をメッセージスタックの最末尾に追加
         vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
-        # 今回の最新メッセージを末尾に装填
         if image_base64 and (has_vision_intent or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
@@ -476,13 +487,14 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
-        # ─── 🛠️ ツールバインドの動的切り替え ───
+        # ツールバインドの動的切り替え（DBの未消費記憶がある場合は外部検索を物理封印）
         if memo_context:
             print("[脳内同期] DB記憶を優先するため、検索ツールを物理的に封印します。")
             response = await llm.ainvoke(messages)
         else:
             response = await llm_with_tools.ainvoke(messages)
         
+        # 検索ツールの実行ループ
         if response.tool_calls:
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
@@ -500,6 +512,7 @@ async def chat_endpoint(payload: ChatMessage):
 
         ai_response = response.content
 
+        # 名前記憶タグの処理
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
@@ -509,6 +522,7 @@ async def chat_endpoint(payload: ChatMessage):
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
 
+        # 音声合成の実行
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         if provider == "elevenlabs":
