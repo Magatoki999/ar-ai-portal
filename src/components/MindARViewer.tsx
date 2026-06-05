@@ -36,6 +36,7 @@ export default function MindARViewer() {
   const inputRef = useRef<HTMLInputElement>(null);
   const { address } = useAccount();
   const timersRef = useRef<NodeJS.Timeout[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Three.js アニメーション関連
   const mixerRef = useRef<AnimationMixer | null>(null);
@@ -148,6 +149,95 @@ export default function MindARViewer() {
       audioContextRef.current.resume();
     }
   };
+
+  // 🔥【新設：ルキルキ常時脳内同期用 WebSocket パイプライン】
+  useEffect(() => {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!baseUrl) return;
+
+    // HTTP(S) URL を WS(S) URL へインテリジェントにコンバート
+    const wsUrl = baseUrl.replace(/^http/, "ws") + "/ws/avatar";
+    let socket: WebSocket;
+    let reconnectTimeout: NodeJS.Timeout;
+
+    const connectWebSocket = () => {
+      console.log(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
+      socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        console.log("✨ [空間同期リンク] ルキルキとの常時接続（脳内リンク）が成功しました！");
+      };
+
+      socket.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // バックグラウンドリサーチ完了時の自発的発話（プロアクティブ・スピークバック）をフック
+          if (data.type === "proactive_speech") {
+            console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
+            
+            // 既存の再生中音声やタイマーを安全にクリーンアップ
+            if (audioInstanceRef.current) {
+              audioInstanceRef.current.pause();
+              audioInstanceRef.current.src = "";
+            }
+            timersRef.current.forEach(clearTimeout);
+            timersRef.current = [];
+
+            // UI字幕およびログタイムラインの同期更新
+            const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            setSubtitle(data.reply);
+            setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
+
+            // プッシュ音声データ（base64）の即時自動再生
+            if (data.audio_data && audioInstanceRef.current) {
+              try {
+                const binaryString = window.atob(data.audio_data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+
+                audioInstanceRef.current.onended = () => { 
+                  setAiStatus("idle"); 
+                  URL.revokeObjectURL(audioUrl); 
+                };
+                initAudioPipeline(audioInstanceRef.current);
+                audioInstanceRef.current.src = audioUrl;
+                setAiStatus("talking");
+                await audioInstanceRef.current.play();
+              } catch (audioErr) {
+                console.error("自発的発話の音声生成に失敗、テキスト追従にフォールバック:", audioErr);
+                setAiStatus("talking");
+                setTimeout(() => setAiStatus("idle"), 5000);
+              }
+            } else {
+              setAiStatus("talking");
+              setTimeout(() => setAiStatus("idle"), 5000);
+            }
+          }
+        } catch (err) {
+          console.error("WSメッセージのリアルタイムパースに失敗しました:", err);
+        }
+      };
+
+      socket.onclose = () => {
+        console.log("🍂 [空間同期リンク] 常時接続が切断されました。5秒後に再接続を試みます。");
+        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+      };
+
+      socket.onerror = (error) => {
+        console.error("⚠️ [空間同期リンク] WebSocketエラーが発生しました:", error);
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (socket) socket.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, []);
 
   // 4. MindAR & Three.js メイン初期化
   useEffect(() => {
@@ -439,7 +529,6 @@ export default function MindARViewer() {
     if (!text.trim()) return;
 
     // 📱 【スマートフォン仮想キーボード対策】
-    // 入力フォーカスを強制解除してキーボードを閉じ、100ms後に画面スクロール位置を完全に最上部(0,0)へ引き戻す
     if (inputRef.current) inputRef.current.blur();
     setTimeout(() => {
       window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
@@ -607,7 +696,6 @@ export default function MindARViewer() {
               <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${!isTargetFound ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
             </div>
 
-            {/* 🌟 EXE から「送信」へと最適化されたコマンド送信ボタン */}
             <button 
               type="submit" 
               disabled={isControlDisabled}
