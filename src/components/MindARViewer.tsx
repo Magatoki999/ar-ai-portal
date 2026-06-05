@@ -12,6 +12,13 @@ interface MorphTargetRef {
   idxs: number[];
 }
 
+// 📜 バックログ用のデータ構造の型定義
+interface HistoryItem {
+  role: "user" | "ruki";
+  text: string;
+  timestamp: string;
+}
+
 export default function MindARViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -21,6 +28,11 @@ export default function MindARViewer() {
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
   const [isTargetFound, setIsTargetFound] = useState<boolean>(false); 
+
+  // 🧠 【新設】ハイブリッドUX用の状態（State）と参照（Ref）
+  const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); // 過去の会話ログスタック
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); // 履歴パネルの開閉状態
+  const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null); // トラッキングロストの残像タイマー
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +86,7 @@ export default function MindARViewer() {
         audioInstanceRef.current = null;
       }
       timersRef.current.forEach(clearTimeout);
+      if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current); // タイマーのクリーンアップ
     };
   }, []);
 
@@ -141,7 +154,7 @@ export default function MindARViewer() {
   // 4. MindAR & Three.js メイン初期化
   useEffect(() => {
     let mindarThreeInstance: any = null;
-    let localRenderer: any = null; // 💡 アンマウント時のクリーンアップ用参照
+    let localRenderer: any = null; 
 
     const start = async () => {
       try {
@@ -160,7 +173,7 @@ export default function MindARViewer() {
         mindarThreeInstance = mindarThree;
 
         const { renderer, scene, camera } = mindarThree;
-        localRenderer = renderer; // 💡 参照を保持
+        localRenderer = renderer; 
 
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -259,9 +272,24 @@ export default function MindARViewer() {
           }
         });
 
+        // 🔗 ターゲット再捕捉時のロジック拡張
         anchor.onTargetFound = () => {
+          // 残像期間中に再捕捉した場合は、ロストタイマーを破壊して現存状態をキープ
+          if (lostTimeoutRef.current) {
+            clearTimeout(lostTimeoutRef.current);
+            lostTimeoutRef.current = null;
+            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
+          }
+
           setIsTargetFound(true); 
-          setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
+          
+          // 字幕がデフォルトのロスト表記に戻されていた時だけ、案内を初期化する（ルキルキのセリフは殺さない）
+          setSubtitle(prev => 
+            prev === "（カメラをターゲットにかざしてください）" 
+              ? "ルキルキを現実世界に固定しました。話しかけてください。" 
+              : prev
+          );
+
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
 
@@ -275,16 +303,25 @@ export default function MindARViewer() {
           }
         };
 
+        // 🔗 【2の要素：隠し味】ターゲット見失い時の「4秒残像ホールド」ロジック
         anchor.onTargetLost = () => {
-          setIsTargetFound(false); 
-          setSubtitle("（カメラをターゲットにかざしてください）");
-          isSpawningRef.current = false;
-          if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
+          if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
           
-          // 💡 古いStateに縛られないよう、isListening条件を撤廃して安全に強制停止を走らせる
-          if (recognitionRef.current) {
-            try { recognitionRef.current.stop(); } catch(e){}
-          }
+          console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
+
+          // 即座にオブジェクトを殺さず、4秒間の猶予を与える
+          lostTimeoutRef.current = setTimeout(() => {
+            setIsTargetFound(false); 
+            setSubtitle("（カメラをターゲットにかざしてください）");
+            isSpawningRef.current = false;
+            if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
+            
+            if (recognitionRef.current) {
+              try { recognitionRef.current.stop(); } catch(e){}
+            }
+            lostTimeoutRef.current = null;
+            console.log("[XRシステム] 残像ホールド期間終了。完全にロストしました。");
+          }, 4000); 
         };
 
         const clock = new Clock();
@@ -360,7 +397,6 @@ export default function MindARViewer() {
 
     start();
     
-    // 💡 クリーンアップ関数を強固にし、アニメーションループのゾンビ化を完全に防ぐ
     return () => { 
       if (localRenderer) {
         try { localRenderer.setAnimationLoop(null); } catch(e){}
@@ -418,6 +454,10 @@ export default function MindARViewer() {
     setAiStatus("thinking");
     setSearchPhase("CONNECTING..."); 
 
+    // 📜 1. 【バックログ保存】ユーザーの発言をタイムスタンプ付きでスタックに送る
+    const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setChatHistory(prev => [...prev, { role: "user", text, timestamp: timeStampStr }]);
+
     timersRef.current.push(
       setTimeout(() => { setSearchPhase("TAVILY_SEARCHING..."); setSubtitle(`🌐 外部情報空間を走査中...\n（Tavilyサーチを同期しています）`); }, 1800),
       setTimeout(() => { setSearchPhase("DATA_ANALYZING..."); setSubtitle(`🔮 取得した時間軸データを展開中...\n（ルキルキが回答を再構成しています）`); }, 5000)
@@ -433,8 +473,12 @@ export default function MindARViewer() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            message: text, wallet_address: address || null, image_base64: imageBase64,       
-            latitude: location ? location.lat : null, longitude: location ? location.lng : null
+            message: text, 
+            wallet_address: address || null, 
+            image_base64: imageBase64,       
+            latitude: location ? location.lat : null, 
+            longitude: location ? location.lng : null,
+            history: chatHistory // ★【同期回路の接続】溜まっている過去ログ配列をそのままバックエンドへインジェクション
           }),
         });
 
@@ -444,7 +488,12 @@ export default function MindARViewer() {
 
         const data = await response.json();
         if (inputRef.current) inputRef.current.value = "";
+        
+        // 画面字幕の反映
         setSubtitle(data.reply);
+
+        // 📜 2. 【バックログ保存】ルキルキの応答テキストをスタックに流し込む
+        setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
         if (data.audio_data && audioInstanceRef.current) {
           try {
@@ -489,7 +538,7 @@ export default function MindARViewer() {
 
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1, backgroundColor: "#000" }} />
 
-      <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
+      <div className="fixed inset-0 z-40 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         {/* 上部ヘッダーエリア */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
           <div className="flex flex-col gap-0.5">
@@ -504,6 +553,15 @@ export default function MindARViewer() {
               <span className="text-gray-500">QUANTUM_PHASE</span>
               <span className={`font-bold ${searchPhase.includes("SEARCHING") ? "text-yellow-400 animate-pulse" : searchPhase.includes("ANALYZING") ? "text-cyan-400" : "text-gray-400"}`}>[{searchPhase}]</span>
             </div>
+            
+            {/* 📜 【新UI】バックログ展開ボタンをヘッダーに統合 */}
+            <button
+              onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+              className="text-xs font-mono font-bold text-purple-400 bg-purple-950/50 border border-purple-500/40 hover:bg-purple-900/60 px-3 py-1 rounded-md active:scale-95 transition-all shadow-[0_0_8px_rgba(168,85,247,0.2)]"
+            >
+              📜 LOG ({chatHistory.length})
+            </button>
+
             <span className="text-xs font-mono text-cyan-400 bg-black/40 border border-cyan-500/20 px-2 py-1 rounded-md">{currentDateTime}</span>
           </div>
         </div>
@@ -540,7 +598,6 @@ export default function MindARViewer() {
             </button>
 
             <div className="relative flex-1 flex items-center">
-              {/* 💡 Tailwindの末尾のborder重複クラスをきれいにクリーンアップ */}
               <input 
                 ref={inputRef}
                 type="text" 
@@ -566,6 +623,52 @@ export default function MindARViewer() {
           </form>
         </div>
       </div>
+
+      {/* 📜 【新設：3の要素】サイバーバックログ履歴モーダルパネル */}
+      {isHistoryOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-6 font-mono text-white pointer-events-auto">
+          <div className="flex justify-between items-center border-b border-purple-500/30 pb-3 mb-4">
+            <div className="flex flex-col">
+              <span className="text-purple-400 font-bold tracking-widest text-sm">::: RUKIRUKI_MISSION_LOG_RECORDER :::</span>
+              <span className="text-[9px] text-gray-500">BLACKBOARD CHAT HISTORY MEMORY</span>
+            </div>
+            <button 
+              onClick={() => setIsHistoryOpen(false)}
+              className="text-xs bg-purple-950/60 border border-purple-500/40 text-purple-300 px-4 py-1.5 rounded-md hover:bg-purple-900/60 transition-colors font-bold"
+            >
+              CLOSE [X]
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-4 pr-2 scrollbar-thin scrollbar-thumb-purple-500/40">
+            {chatHistory.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-gray-500 text-xs py-12 gap-2">
+                <span>─── 観測ログ履歴データが空です ───</span>
+                <span className="text-[10px] text-gray-600">ルキルキと対話するとここにタイムラインが記録されます。</span>
+              </div>
+            ) : (
+              chatHistory.map((item, idx) => (
+                <div 
+                  key={idx} 
+                  className={`p-3.5 rounded-xl border text-xs leading-relaxed shadow-md transition-all ${
+                    item.role === "user" 
+                      ? "bg-cyan-950/20 border-cyan-500/30 ml-12 shadow-[0_2px_8px_rgba(6,182,212,0.05)]" 
+                      : "bg-purple-950/20 border-purple-500/30 mr-12 shadow-[0_2px_8px_rgba(168,85,247,0.05)]"
+                  }`}
+                >
+                  <div className="flex justify-between items-center mb-1.5 text-[10px] font-bold tracking-wider">
+                    <span className={item.role === "user" ? "text-cyan-400" : "text-purple-400"}>
+                      {item.role === "user" ? "▶ まがとき教授" : "◁ ルキルキ SYSTEM"}
+                    </span>
+                    <span className="text-gray-500 font-normal">{item.timestamp}</span>
+                  </div>
+                  <p className={item.role === "user" ? "text-cyan-100" : "text-purple-100"}>{item.text}</p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
