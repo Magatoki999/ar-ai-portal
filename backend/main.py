@@ -97,13 +97,11 @@ async def auto_research_job():
         response = await llm.ainvoke([HumanMessage(content=research_prompt)])
         
         clean_content = response.content.strip()
-        if clean_content.startswith("
-```json"):
+        if clean_content.startswith("```json"):
             clean_content = clean_content[7:]
         elif clean_content.startswith("```"):
             clean_content = clean_content[3:]
-        if clean_content.endswith("
-```"):
+        if clean_content.endswith("```"):
             clean_content = clean_content[:-3]
         clean_content = clean_content.strip()
         
@@ -134,7 +132,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MagatokiLab RukiRuki XR Gateway [Production v4 - Multi-Agent Ready]",
+    title="MagatokiLab RukiRuki XR Gateway [Production v5 - Dynamic Query Anti-Bias]",
     lifespan=lifespan
 )
 
@@ -154,10 +152,18 @@ app.add_middleware(
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
-# LLM初期化 (gpt-4o-mini)
+# 🧠 メインLLM（会話用・人格層: 適度な創造性を持たせるため温度高め）
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.8,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+)
+
+# 🧼 【根本対策用：クエリデトックス専用LLM】
+# 過去の会話履歴を1ミリも渡さず、完全に決定論的(temperature=0.0)に動作させて、クエリから地名ノイズだけを削ぎ落とす
+cleaner_llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
@@ -207,7 +213,6 @@ def load_magatoki_context() -> str:
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
-# フロントエンドのHistoryItem構造をパースするPydanticスキーマ
 class HistoryItem(BaseModel):
     role: str       # "user" または "ruki"
     text: str       # 発言内容
@@ -219,25 +224,24 @@ class ChatMessage(BaseModel):
     image_base64: str | None = None
     latitude: float | None = None   
     longitude: float | None = None  
-    history: list[HistoryItem] | None = None  # 会話バックログの受信ポケット
+    history: list[HistoryItem] | None = None
 
 
 # ─── エリア判定関数 ───
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
-        return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
+        return "【烏丸二条セクター】"
     elif 35.022 <= lat <= 35.026 and 135.749 <= lng <= 135.755:
-        return "【御所西セクター】（古風な香木と歴史が交差するエリア）"
+        return "【御所西セクター】"
     elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
-        return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
+        return "【京都駅セクター】"
     elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
-        return "【Magatoki開発ベースセクター】（相棒のメイン作業空間）"
-    return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
+        return "【Magatoki開発ベースセクター】"
+    return f"【未知の観測セクター】"
 
 
-# 💡 【新規追加】逆ジオコーディング（地名推測）エンジン
+# 🗺️ 逆ジオコーディング（リアルタイム住所推測）
 async def reverse_geocode(lat: float, lng: float) -> str:
-    """緯度経度から実際の住所やエリア名をリアルタイム推測する"""
     url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lng}&accept-language=ja"
     headers = {
         "User-Agent": "MagatokiLab_RukiRuki_XR_Gateway/1.0"
@@ -249,10 +253,9 @@ async def reverse_geocode(lat: float, lng: float) -> str:
                 data = response.json()
                 address = data.get("address", {})
                 
-                # 検索クエリに最も適した地域粒度を抽出
                 suburb = address.get("suburb", "")          # 区（例: 中京区）
-                neighbourhood = address.get("neighbourhood", "")  # 近隣地域（例: 烏丸御池など）
-                road = address.get("road", "")              # 通りの名前（例: 御池通）
+                neighbourhood = address.get("neighbourhood", "")  # 近隣（例: 烏丸御池）
+                road = address.get("road", "")              # 通り名（例: 御池通）
                 
                 location_text = f"{suburb} {neighbourhood} {road}".strip()
                 if location_text:
@@ -297,7 +300,6 @@ async def save_username_to_db(wallet_address: str, name: str):
         print(f"Error saving user name: {e}")
 
 async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
-    """ルーターが選択したエージェントに対応するメモリをブラックボードからまとめて取得する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not selected_agents:
         return "", []
     
@@ -330,7 +332,6 @@ async def get_active_agent_memos(selected_agents: list) -> tuple[str, list]:
     return combined_memos, memo_ids
 
 async def mark_memos_as_consumed(memo_ids: list):
-    """会話で使用した思考メモリのis_consumedフラグをTRUEに一括更新する"""
     if not SUPABASE_URL or not SUPABASE_KEY or not memo_ids:
         return
     headers = {
@@ -403,33 +404,27 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 💡 【デバッグ用】フロントから届いた生のGPS座標を即時強制ダンプ
-    print(f"🚨 [受信生データチェック] latitude: {lat} (型: {type(lat)}) | longitude: {lng} (型: {type(lng)})")
+    print(f"🚨 [受信生データチェック] latitude: {lat} | longitude: {lng}")
 
-    # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
 
-    # 運用制約
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
-        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキスト（日時や識別セクター情報、脳内新着報告）だけで自己完結して回答できる場合は、絶対に検索ツール（tavily_search_results_json）を起動しないでください。\n"
-        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」「近くにあるおすすめの店」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキストだけで自己完結して回答できる場合は、絶対に検索ツールを起動しないでください。\n"
+        "   - 教授から最新情報や近くのおすすめ店など、手持ちの知識では絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
-        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
-        "   - 教授から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
-        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、部屋の様子、人物、お香などのクラフトアイテム」についてのみ、フォーカスを当てて解析・言及してください。\n\n"
+        "   - 画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは完全に無視（除外）してください。\n"
+        "   - カードの背景や周囲に存在する「現実世界の風景や物体」についてのみフォーカスして解析してください。\n\n"
     )
 
-    # 2. 時間・空間コンテキストの構築
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
     
     time_context = (
         f"【現在の観測日時（日本時間）】\n"
-        f"現在時刻: {now_str}\n"
-        f"※教授から時間を尋ねられたら、この日時情報を基準に、丁寧かつ親しみやすい口調でサクッと答えてください。\n\n"
+        f"現在時刻: {now_str}\n\n"
     )
 
     sector_info = "【セクター未特定】"
@@ -439,14 +434,11 @@ async def chat_endpoint(payload: ChatMessage):
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
-            f"識別セクター: {sector_info}\n"
-            f"※周辺のお店やスポットについて検索ツール（tavily_search_results_json）を呼び出す際は、このセクター名（例: 烏丸二条、御所西、京都駅など）や『京都市』といった具体的な地域キーワードを検索クエリ（query）に自動で含めて検索をかけてください。\n\n"
+            f"識別セクター: {sector_info}\n\n"
         )
 
     print(f"─── [Router] 思考調停を開始します ───")
     router_res = analyze_and_route(user_text if user_text else "[画像送信のみ]", sector_info, now_str)
-    print(f"[Router 結果] Intent: {router_res.intent} | Selected: {router_res.selected_agents}")
-    print(f"[Router 理由] {router_res.reason}")
 
     memo_context = ""
     active_memo_ids = []
@@ -455,9 +447,6 @@ async def chat_endpoint(payload: ChatMessage):
         if fetched_memos:
             memo_context = (
                 f"【🧠 バックグラウンド思考層からのリアルタイム共有知識】\n"
-                f"ルキルキ、現在あなたの裏側で動くエージェント（{', '.join(router_res.selected_agents)}）から以下の知見がブラックボードにストックされています。\n"
-                f"会話の流れを不自然に壊さない範囲で、この知識をあなたの言葉（人格層）にブレンドして教授に伝えてください。\n"
-                f"日常の挨拶や雑談から自然な流れでこのトピックに繋げられると、随伴型AIとして非常に優秀です。\n"
                 f"{fetched_memos}\n"
             )
 
@@ -467,24 +456,18 @@ async def chat_endpoint(payload: ChatMessage):
         if stored_name:
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"対話相手は、MagatokiLabを主宰するまがとき教授であり、あなたの最高の相棒である『{stored_name}』教授です。\n"
-                f"一言二言の短い丁寧語で、親しみと少しの生意気さを交えつつテンポ良く掛け合いをしてください。"
+                f"対話相手は、まがとき教授であり、あなたの最高の相棒である『{stored_name}』教授です。"
             )
         else:
-            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
             identity_context = (
                 f"【対話コンテキスト】\n"
-                f"ウォレット（{short_addr}）が接続されました。親しみのある敬語で教授の呼び名を聞いてみてください。"
+                f"ウォレットが接続されました。親しみのある敬語で教授の呼び名を聞いてみてください。"
             )
     else:
-        identity_context = (
-            "【対話コンテキスト】\n"
-            "まだウォレット接続が確認できていません。ゲートの認証を通すよう、教授に促してください。"
-        )
+        identity_context = "【対話コンテキスト】ウォレット接続を教授に促してください。"
 
     world_context = (
         f"【MagatokiLab公式設定・世界観アーカイブ】\n"
-        f"以下の設定を完全に把握し、会話の前提知識（世界観、キャラクターの人間関係、能力、裏設定など）としてください。矛盾する発言は厳禁です。\n"
         f"{MAGATOKI_KNOWLEDGE}\n\n"
     )
 
@@ -494,20 +477,18 @@ async def chat_endpoint(payload: ChatMessage):
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
         if payload.history:
-            print(f"[脳内同期] 過去 {len(payload.history)} 件の会話履歴をニューラルバインドします。")
             for item in payload.history:
                 if item.role == "user":
                     messages.append(HumanMessage(content=item.text))
                 elif item.role == "ruki":
                     messages.append(AIMessage(content=item.text))
 
-        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
+        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
         if image_base64 and (has_vision_intent or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
-
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
@@ -516,7 +497,6 @@ async def chat_endpoint(payload: ChatMessage):
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
         if memo_context:
-            print("[脳内同期] DB記憶を優先するため、検索ツールを物理的に封印します。")
             response = await llm.ainvoke(messages)
         else:
             response = await llm_with_tools.ainvoke(messages)
@@ -525,33 +505,48 @@ async def chat_endpoint(payload: ChatMessage):
         if response.tool_calls:
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
-                    query = tool_call["args"].get("query")
+                    raw_query = tool_call["args"].get("query")
                     
-                    # 💡 【逆ジオコーディング連携：超精密ガードレール】
+                    # 💡 【根本解決：検索ツール起動時のガードレール】
                     if lat is not None and lng is not None:
                         clean_sector = sector_info.replace("【", "").replace("】", "").split("セクター")[0]
-                        base_query = query.replace("京都市", "").strip()
                         
-                        # リアルタイム地名・住所推測を実行
+                        # 🔥 過去の会話履歴を1ミリも知らない完全独立したLLMにクエリを通し、
+                        # 履歴から漏れ出した古い地名や修飾語（福知山、宮津、周辺など）を徹底デトックスする
+                        clean_prompt = (
+                            "あなたは検索クエリの最適化エンジンです。\n"
+                            "入力された検索クエリから、あらゆる地名、駅名、市区町村名、エリア名、都道府県名、および「周辺」「近くの」といった位置に関する修飾語を完全に削除してください。\n"
+                            "ユーザーが純粋に検索しようとしている『対象物・目的（例: カフェ、居酒屋、最新ニュース、お香の専門店など）』のキーワードだけを抽出してください。\n"
+                            "余計な解説や挨拶、マークダウンの装飾(```json等)は一切含めず、クレンジング後の純粋なキーワードのみを出力してください。\n\n"
+                            f"入力クエリ: {raw_query}"
+                        )
+                        
+                        try:
+                            clean_res = await cleaner_llm.ainvoke([HumanMessage(content=clean_prompt)])
+                            base_query = clean_res.content.strip().replace("`", "").replace('"', '')
+                        except Exception as e:
+                            print(f"⚠️ [クエリクレンジングエラー] {e}")
+                            base_query = raw_query.replace("京都市", "").strip()
+
+                        # 最新のリアルタイム地名・住所推測（逆ジオコーディング）を取得
                         estimated_location = await reverse_geocode(lat, lng)
                         
                         if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
                             if estimated_location:
-                                # 地名が引けた場合は検索大好物の人間用住所テキストをインジェクション
+                                # 完全に現在のクリーンな住所テキストのみでクエリを上書き再構築！
                                 query = f"京都市 {estimated_location} {base_query} 徒歩圏内 おすすめ"
-                                print(f"✨ [空間同期ガードレール] 地名推測成功: 【{estimated_location}】でクエリをハックしました。")
+                                print(f"✨ [空間同期] 過去の地名バイアスを完全クリア。【{estimated_location}】でクエリを再構成しました。")
                             else:
-                                # 万が一推測に失敗した場合は生座標でフォールバック
                                 query = f"京都市 {lat}, {lng} 周辺 {base_query} 徒歩圏内"
-                                print("⚠️ [空間同期ガードレール] 地名推測が空だったため、生座標で代用します。")
+                                print("⚠️ [空間同期] 地名推測が空だったため生座標を採用します。")
                         else:
                             # 登録セクター内の場合は、定義済みの美しい実在地名でガチガチに固定
                             query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
-                            print(f"✨ [空間同期ガードレール] 既知セクター: 【{clean_sector}】のキーワードを適応しました。")
+                            print(f"✨ [空間同期] 既知セクター: 【{clean_sector}】のキーワードを適応しました。")
                         
-                        tool_call["args"]["query"] = query  # クエリの上書き書き換え
+                        tool_call["args"]["query"] = query  # クエリの書き換え上書き
                     else:
-                        print("⚠️ [空間同期スキップ] 位置情報(lat/lng)が None のため、ガードレールをスルーしました。フロントエンドを確認してください。")
+                        print("⚠️ [空間同期スキップ] 位置情報が None のためガードレールをスルー。")
 
                     print(r"─── ルキルキがネット検索中... ───")
                     print(f"Query: {query}")
