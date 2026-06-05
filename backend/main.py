@@ -14,9 +14,9 @@ import httpx
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-# 🌟 【アップデート】履歴をルキルキの記憶として解釈させるため AIMessage を追加
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
-from langchain_community.tools.if image_base64 and (has_vision_intent or not user_text):ly_search import TavilySearchResults
+# 🌟 【修復】混入していたコードを削除し、正しいインポートに修正しました
+from langchain_community.tools.tavily_search import TavilySearchResults
 
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -138,7 +138,7 @@ app = FastAPI(
 )
 
 # ─── CORS設定 ───
-cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
+cors_origins_env = os.getenv("CORS_ORIGOrigins", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
 app.add_middleware(
@@ -206,7 +206,7 @@ def load_magatoki_context() -> str:
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
-# 🌟 【新設】フロントエンドのHistoryItem構造をパースするPydanticスキーマ
+# フロントエンドのHistoryItem構造をパースするPydanticスキーマ
 class HistoryItem(BaseModel):
     role: str       # "user" または "ruki"
     text: str       # 発言内容
@@ -218,7 +218,7 @@ class ChatMessage(BaseModel):
     image_base64: str | None = None
     latitude: float | None = None   
     longitude: float | None = None  
-    history: list[HistoryItem] | None = None  # 🌟 【追加】会話バックログの受信ポケット
+    history: list[HistoryItem] | None = None  # 会話バックログの受信ポケット
 
 
 # ─── エリア判定関数 ───
@@ -239,7 +239,8 @@ async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
     url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
-    headers = {"apikey": SUPABASE_URL, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    # 🌟 【修正】apikeyの値がSUPABASE_URLになっていたバグをSUPABASE_KEYに修正しました
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=5.0)
@@ -383,7 +384,7 @@ async def chat_endpoint(payload: ChatMessage):
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
         "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキスト（日時や識別セクター情報、脳内新着報告）だけで自己完結して回答できる場合は、絶対に検索ツール（tavily_search_results_json）を起動しないでください。\n"
-        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」「直近のイベント情報」「近くにあるおすすめの店」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
         "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは、システムが重畳している既知の内部構成要素です。\n"
         "   - 教授から「何が映っているか」「これを見て」と言われた際は、この『ルキルキのカード』やUIの存在は完全に無視（除外）してください。\n"
@@ -405,11 +406,12 @@ async def chat_endpoint(payload: ChatMessage):
     location_context = ""
     if lat is not None and lng is not None:
         sector_info = judge_magatoki_sector(lat, lng)
+        # 🌟 【強化】周辺の検索をかける際、LLMが「具体的な京都の地名」を補完して検索できるようにプロンプト指示を補強
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
             f"識別セクター: {sector_info}\n"
-            f"※教授から場所に関する問いかけがあったら、この識別セクターの情報をベースに、親しみのある教え子口調で触れてあげてください。\n\n"
+            f"※周辺のお店やスポットについて検索ツール（tavily_search_results_json）を呼び出す際は、このセクター名（例: 烏丸二条、御所西、京都駅など）や『京都市』といった具体的な地域キーワードを検索クエリ（query）に自動で含めて検索をかけてください。\n\n"
         )
 
     print(f"─── [Router] 思考調停を開始します ───")
@@ -463,7 +465,7 @@ async def chat_endpoint(payload: ChatMessage):
         # まずシステムプロンプト（人格、制約、知識、世界観、エージェントメモリ）をセット
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        # 🌟 【新機能】フロントエンドから届いた過去の会話バックログ（履歴スタック）を時系列順にLLMへインジェクション
+        # フロントエンドから届いた過去の会話バックログ（履歴スタック）を時系列順にLLMへインジェクション
         if payload.history:
             print(f"[脳内同期] 過去 {len(payload.history)} 件の会話履歴をニューラルバインドします。")
             for item in payload.history:
@@ -482,6 +484,7 @@ async def chat_endpoint(payload: ChatMessage):
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
+                # 🌟 【確定】detailを"high"に固定。miniのまま格安で解像度を上げてOCR精度を最大化します
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
             ]))
         else:
