@@ -487,9 +487,16 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
-        # 1回目のLLM呼び出し
-        response = await llm_with_tools.ainvoke(messages)
-
+        # ─── 🛠️ 【ここを修正】ツールバインドの動的切り替え ───
+        if memo_context:
+            # DBから記憶をロードしている場合は、浮気防止のために検索ツールを「渡さない」
+            print("[脳内同期] DB記憶を優先するため、検索ツールを物理的に封印します。")
+            response = await llm.ainvoke(messages) # ← 無印のllmを使用！
+        else:
+            # DBに記憶がない場合のみ、必要に応じて検索できるツール付きLLMを使用
+            response = await llm_with_tools.ainvoke(messages)
+        # ─────────────────────────────────────────────────
+        
         # 検索ツールの実行ループ
         if response.tool_calls:
             for tool_call in response.tool_calls:
