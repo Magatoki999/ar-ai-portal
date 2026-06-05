@@ -16,7 +16,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 # 🌟 【アップデート】履歴をルキルキの記憶として解釈させるため AIMessage を追加
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.tools.if image_base64 and (has_vision_intent or not user_text):ly_search import TavilySearchResults
 
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -482,7 +482,7 @@ async def chat_endpoint(payload: ChatMessage):
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
-                {"type": "image_url", "image_url": {"url": image_base64, "detail": "low"}}
+                {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
             ]))
         else:
             messages.append(HumanMessage(content=user_text if user_text else ""))
