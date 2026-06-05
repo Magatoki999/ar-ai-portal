@@ -15,7 +15,6 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
-# 🌟 【修復】混入していたコードを削除し、正しいインポートに修正しました
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 # APScheduler 関連
@@ -98,11 +97,13 @@ async def auto_research_job():
         response = await llm.ainvoke([HumanMessage(content=research_prompt)])
         
         clean_content = response.content.strip()
-        if clean_content.startswith("```json"):
+        if clean_content.startswith("
+```json"):
             clean_content = clean_content[7:]
         elif clean_content.startswith("```"):
             clean_content = clean_content[3:]
-        if clean_content.endswith("```"):
+        if clean_content.endswith("
+```"):
             clean_content = clean_content[:-3]
         clean_content = clean_content.strip()
         
@@ -234,12 +235,38 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
 
 
+# 💡 【新規追加】逆ジオコーディング（地名推測）エンジン
+async def reverse_geocode(lat: float, lng: float) -> str:
+    """緯度経度から実際の住所やエリア名をリアルタイム推測する"""
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lng}&accept-language=ja"
+    headers = {
+        "User-Agent": "MagatokiLab_RukiRuki_XR_Gateway/1.0"
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=3.0)
+            if response.status_code == 200:
+                data = response.json()
+                address = data.get("address", {})
+                
+                # 検索クエリに最も適した地域粒度を抽出
+                suburb = address.get("suburb", "")          # 区（例: 中京区）
+                neighbourhood = address.get("neighbourhood", "")  # 近隣地域（例: 烏丸御池など）
+                road = address.get("road", "")              # 通りの名前（例: 御池通）
+                
+                location_text = f"{suburb} {neighbourhood} {road}".strip()
+                if location_text:
+                    return location_text
+    except Exception as e:
+        print(f"⚠️ [逆ジオコーディングエラー] 地名推測に失敗しました: {e}")
+    return ""
+
+
 # ─── Supabase データベースヘルパー ───
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
     url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
-    # 🌟 【修正】apikeyの値がSUPABASE_URLになっていたバグをSUPABASE_KEYに修正しました
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
@@ -376,6 +403,9 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
+    # 💡 【デバッグ用】フロントから届いた生のGPS座標を即時強制ダンプ
+    print(f"🚨 [受信生データチェック] latitude: {lat} (型: {type(lat)}) | longitude: {lng} (型: {type(lng)})")
+
     # 1. Markdownから基本ペルソナを動的ロード
     base_persona = load_rukiruki_persona()
 
@@ -406,7 +436,6 @@ async def chat_endpoint(payload: ChatMessage):
     location_context = ""
     if lat is not None and lng is not None:
         sector_info = judge_magatoki_sector(lat, lng)
-        # 🌟 【強化】周辺の検索をかける際、LLMが「具体的な京都の地名」を補完して検索できるようにプロンプト指示を補強
         location_context = (
             f"【現在の観測位置（GPS空間同期）】\n"
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
@@ -462,10 +491,8 @@ async def chat_endpoint(payload: ChatMessage):
     dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
 
     try:
-        # まずシステムプロンプト（人格、制約、知識、世界観、エージェントメモリ）をセット
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        # フロントエンドから届いた過去の会話バックログ（履歴スタック）を時系列順にLLMへインジェクション
         if payload.history:
             print(f"[脳内同期] 過去 {len(payload.history)} 件の会話履歴をニューラルバインドします。")
             for item in payload.history:
@@ -474,7 +501,6 @@ async def chat_endpoint(payload: ChatMessage):
                 elif item.role == "ruki":
                     messages.append(AIMessage(content=item.text))
 
-        # 最後に、今回送信された「最新の」メッセージと画像をメッセージスタックの最末尾に追加
         vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚", "そこ", "写して"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
@@ -484,13 +510,11 @@ async def chat_endpoint(payload: ChatMessage):
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": user_text if user_text else "これ見て、何かわかる？"},
-                # 🌟 【確定】detailを"high"に固定。miniのまま格安で解像度を上げてOCR精度を最大化します
                 {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
             ]))
         else:
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
-        # ツールバインドの動的切り替え（DBの未消費記憶がある場合は外部検索を物理封印）
         if memo_context:
             print("[脳内同期] DB記憶を優先するため、検索ツールを物理的に封印します。")
             response = await llm.ainvoke(messages)
@@ -503,24 +527,31 @@ async def chat_endpoint(payload: ChatMessage):
                 if tool_call["name"] == "tavily_search_results_json":
                     query = tool_call["args"].get("query")
                     
-                    # 💡 【クエリピンポイント調整ガードレール】
-                    # 教授を絶対に迷子にさせないため、位置情報がある場合はクエリを強制最適化します
+                    # 💡 【逆ジオコーディング連携：超精密ガードレール】
                     if lat is not None and lng is not None:
-                        # セクター情報から純粋な実在地名部分を抽出（例: "烏丸二条"、"御所西"、"京都駅"）
                         clean_sector = sector_info.replace("【", "").replace("】", "").split("セクター")[0]
-                        
-                        # LLMが作ったクエリから一旦「京都市」を抜いてプレーンな要求を取り出す
                         base_query = query.replace("京都市", "").strip()
                         
-                        if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
-                            # 登録セクター外、または開発ベースの場合は、現在地周辺であることを強調
-                            query = f"京都市 近くの {base_query} 地元で人気"
-                        else:
-                            # 実在地名セクター（烏丸二条、御所西、京都駅）の場合は、そのエリアの徒歩圏内に超限定
-                            # 例:「京都市 烏丸二条 おすすめの店 おすすめ 徒歩圏内」
-                            query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
+                        # リアルタイム地名・住所推測を実行
+                        estimated_location = await reverse_geocode(lat, lng)
                         
-                        tool_call["args"]["query"] = query  # 実際にTavilyに飛ぶクエリを上書き！
+                        if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
+                            if estimated_location:
+                                # 地名が引けた場合は検索大好物の人間用住所テキストをインジェクション
+                                query = f"京都市 {estimated_location} {base_query} 徒歩圏内 おすすめ"
+                                print(f"✨ [空間同期ガードレール] 地名推測成功: 【{estimated_location}】でクエリをハックしました。")
+                            else:
+                                # 万が一推測に失敗した場合は生座標でフォールバック
+                                query = f"京都市 {lat}, {lng} 周辺 {base_query} 徒歩圏内"
+                                print("⚠️ [空間同期ガードレール] 地名推測が空だったため、生座標で代用します。")
+                        else:
+                            # 登録セクター内の場合は、定義済みの美しい実在地名でガチガチに固定
+                            query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
+                            print(f"✨ [空間同期ガードレール] 既知セクター: 【{clean_sector}】のキーワードを適応しました。")
+                        
+                        tool_call["args"]["query"] = query  # クエリの上書き書き換え
+                    else:
+                        print("⚠️ [空間同期スキップ] 位置情報(lat/lng)が None のため、ガードレールをスルーしました。フロントエンドを確認してください。")
 
                     print(r"─── ルキルキがネット検索中... ───")
                     print(f"Query: {query}")
@@ -535,7 +566,6 @@ async def chat_endpoint(payload: ChatMessage):
 
         ai_response = response.content
 
-        # 名前記憶タグの処理
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
@@ -545,7 +575,6 @@ async def chat_endpoint(payload: ChatMessage):
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
 
-        # 音声合成の実行
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         if provider == "elevenlabs":
