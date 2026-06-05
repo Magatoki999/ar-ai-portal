@@ -12,7 +12,6 @@ interface MorphTargetRef {
   idxs: number[];
 }
 
-// 📜 バックログ用のデータ構造の型定義
 interface HistoryItem {
   role: "user" | "ruki";
   text: string;
@@ -29,10 +28,9 @@ export default function MindARViewer() {
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
   const [isTargetFound, setIsTargetFound] = useState<boolean>(false); 
 
-  // 🧠 【新設】ハイブリッドUX用の状態（State）と参照（Ref）
-  const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); // 過去の会話ログスタック
-  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); // 履歴パネルの開閉状態
-  const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null); // トラッキングロストの残像タイマー
+  const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
+  const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null); 
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +84,7 @@ export default function MindARViewer() {
         audioInstanceRef.current = null;
       }
       timersRef.current.forEach(clearTimeout);
-      if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current); // タイマーのクリーンアップ
+      if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
     };
   }, []);
 
@@ -272,9 +270,7 @@ export default function MindARViewer() {
           }
         });
 
-        // 🔗 ターゲット再捕捉時のロジック拡張
         anchor.onTargetFound = () => {
-          // 残像期間中に再捕捉した場合は、ロストタイマーを破壊して現存状態をキープ
           if (lostTimeoutRef.current) {
             clearTimeout(lostTimeoutRef.current);
             lostTimeoutRef.current = null;
@@ -282,8 +278,6 @@ export default function MindARViewer() {
           }
 
           setIsTargetFound(true); 
-          
-          // 字幕がデフォルトのロスト表記に戻されていた時だけ、案内を初期化する（ルキルキのセリフは殺さない）
           setSubtitle(prev => 
             prev === "（カメラをターゲットにかざしてください）" 
               ? "ルキルキを現実世界に固定しました。話しかけてください。" 
@@ -303,13 +297,11 @@ export default function MindARViewer() {
           }
         };
 
-        // 🔗 【2の要素：隠し味】ターゲット見失い時の「4秒残像ホールド」ロジック
         anchor.onTargetLost = () => {
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
           
           console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
 
-          // 即座にオブジェクトを殺さず、4秒間の猶予を与える
           lostTimeoutRef.current = setTimeout(() => {
             setIsTargetFound(false); 
             setSubtitle("（カメラをターゲットにかざしてください）");
@@ -446,6 +438,13 @@ export default function MindARViewer() {
     const text = formData.get("message") as string;
     if (!text.trim()) return;
 
+    // 📱 【スマートフォン仮想キーボード対策】
+    // 入力フォーカスを強制解除してキーボードを閉じ、100ms後に画面スクロール位置を完全に最上部(0,0)へ引き戻す
+    if (inputRef.current) inputRef.current.blur();
+    setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    }, 100);
+
     if (audioInstanceRef.current) { audioInstanceRef.current.pause(); audioInstanceRef.current.src = ""; }
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
@@ -454,7 +453,6 @@ export default function MindARViewer() {
     setAiStatus("thinking");
     setSearchPhase("CONNECTING..."); 
 
-    // 📜 1. 【バックログ保存】ユーザーの発言をタイムスタンプ付きでスタックに送る
     const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setChatHistory(prev => [...prev, { role: "user", text, timestamp: timeStampStr }]);
 
@@ -478,7 +476,7 @@ export default function MindARViewer() {
             image_base64: imageBase64,       
             latitude: location ? location.lat : null, 
             longitude: location ? location.lng : null,
-            history: chatHistory // ★【同期回路の接続】溜まっている過去ログ配列をそのままバックエンドへインジェクション
+            history: chatHistory 
           }),
         });
 
@@ -489,10 +487,7 @@ export default function MindARViewer() {
         const data = await response.json();
         if (inputRef.current) inputRef.current.value = "";
         
-        // 画面字幕の反映
         setSubtitle(data.reply);
-
-        // 📜 2. 【バックログ保存】ルキルキの応答テキストをスタックに流し込む
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
         if (data.audio_data && audioInstanceRef.current) {
@@ -554,7 +549,6 @@ export default function MindARViewer() {
               <span className={`font-bold ${searchPhase.includes("SEARCHING") ? "text-yellow-400 animate-pulse" : searchPhase.includes("ANALYZING") ? "text-cyan-400" : "text-gray-400"}`}>[{searchPhase}]</span>
             </div>
             
-            {/* 📜 【新UI】バックログ展開ボタンをヘッダーに統合 */}
             <button
               onClick={() => setIsHistoryOpen(!isHistoryOpen)}
               className="text-xs font-mono font-bold text-purple-400 bg-purple-950/50 border border-purple-500/40 hover:bg-purple-900/60 px-3 py-1 rounded-md active:scale-95 transition-all shadow-[0_0_8px_rgba(168,85,247,0.2)]"
@@ -613,18 +607,19 @@ export default function MindARViewer() {
               <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${!isTargetFound ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
             </div>
 
+            {/* 🌟 EXE から「送信」へと最適化されたコマンド送信ボタン */}
             <button 
               type="submit" 
               disabled={isControlDisabled}
               className="bg-gradient-to-r from-purple-700 via-indigo-700 to-cyan-700 hover:from-purple-600 hover:to-cyan-600 text-white px-5 py-3.5 rounded-xl font-bold text-sm shadow-[0_0_15px_rgba(109,40,217,0.3)] active:scale-95 transition-all disabled:opacity-30 disabled:pointer-events-none tracking-widest border border-white/10"
             >
-              EXE
+              送信
             </button>
           </form>
         </div>
       </div>
 
-      {/* 📜 【新設：3の要素】サイバーバックログ履歴モーダルパネル */}
+      {/* サイバーバックログ履歴モーダルパネル */}
       {isHistoryOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-6 font-mono text-white pointer-events-auto">
           <div className="flex justify-between items-center border-b border-purple-500/30 pb-3 mb-4">
