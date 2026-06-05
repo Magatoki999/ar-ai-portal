@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.tools import tool  # 💡 明示的なツール定義のために追加
 
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -35,18 +36,50 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
-# LLM・検索ツールの初期化
+# LLMの初期化
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 search_tool = TavilySearchResults(max_results=2)
-llm_with_tools = llm.bind_tools([search_tool])
+
+
+# 💡 ─── 【コア機能】geopyによる逆ジオコーディングのツール化 ───
+def _sync_reverse_geocode(lat: float, lng: float) -> str:
+    """geopyの同期処理を行う内部関数"""
+    try:
+        geolocator = Nominatim(user_agent="magatokilab_rukiruki_gateway")
+        location = geolocator.reverse((lat, lng), timeout=4, language="ja")
+        if location and "address" in location.raw:
+            addr = location.raw["address"]
+            city = addr.get("city", addr.get("town", addr.get("village", addr.get("province", ""))))
+            suburb = addr.get("suburb", "")  # 区など
+            neighbourhood = addr.get("neighbourhood", "")  # 町名など
+            attraction = addr.get("attraction", addr.get("historic", addr.get("tourism", "")))  # 有名施設・史跡名など
+            
+            return f"{city} {suburb} {neighbourhood} {attraction}".strip()
+    except Exception as e:
+        print(f"[GPS逆変換エラー] 住所の動的変換に失敗しました: {e}")
+    return ""
+
+async def fetch_street_address(lat: float, lng: float) -> str:
+    """緯度経度から実際の物理住所・周辺施設を抽出する非同期ラッパーヘルパー"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_reverse_geocode, lat, lng)
+
+@tool
+async def locate_current_position(lat: float, lng: float) -> str:
+    """教授の現在の緯度・経度（lat, lng）から、実際の物理住所や周辺の有名なスポット・施設名を逆ジオコーディングで特定して返すツールです。
+    教授から『今どこにいる？』『現在地を教えて』『場所を特定して』など、直接場所の特定を求められた場合に、システムプロンプトに提示されている現在の座標値（緯度・経度）を引数に渡して呼び出してください。"""
+    return await fetch_street_address(lat, lng)
+
+
+# 💡 ネット検索と位置特定ツールの2つをルキルキの脳にバインド
+llm_with_tools = llm.bind_tools([search_tool, locate_current_position])
 
 
 # 💡 【最高精度版】座標と実住所のハイブリッド型クエリ最適化プロンプト
-# 挨拶や解説、引用符を徹底的に排除し、純粋な検索キーワードだけをLLMに抽出させます。
 query_refine_prompt = ChatPromptTemplate.from_template(
     "あなたは検索クエリ最適化の専門家です。ユーザーの要望、現在の正確なGPS座標、および"
     "逆ジオコーディングによって得られた実際の住所情報から、そのエリアの空間的文脈（繁華街、自然、周辺スポットなど）を高度に咀嚼し、"
@@ -78,7 +111,6 @@ class ConnectionManager:
             try:
                 await connection.send_json(message)
             except Exception:
-                # 既に切断されている接続などのノイズをパス
                 pass
 
 manager = ConnectionManager()
@@ -274,34 +306,6 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     return "【未知の観測セクター】"
 
 
-# 💡 ─── 【新機能】geopyによる逆ジオコーディング（非同期ラップ） ───
-async def fetch_street_address(lat: float, lng: float) -> str:
-    """緯度経度から実際の物理住所・周辺施設を抽出するヘルパー"""
-    try:
-        # OpenStreetMapの無料ジオコーディングサービスを利用（User-Agentを指定）
-        geolocator = Nominatim(user_agent="magatokilab_rukiruki_gateway")
-        
-        # 同期関数であるgeolocator.reverseを、非同期のイベントループ上で安全に実行
-        loop = asyncio.get_event_loop()
-        location = await loop.run_in_executor(
-            None, lambda: geolocator.reverse((lat, lng), timeout=4, language="ja")
-        )
-        
-        if location and "address" in location.raw:
-            addr = location.raw["address"]
-            # 検索クエリのコンテキストとして最適な粒度の地域・スポット情報を抽出
-            city = addr.get("city", addr.get("town", addr.get("village", addr.get("province", ""))))
-            suburb = addr.get("suburb", "")  # 区など
-            neighbourhood = addr.get("neighbourhood", "")  # 町名など
-            attraction = addr.get("attraction", addr.get("historic", addr.get("tourism", "")))  # 有名施設・史跡名など
-            
-            address_text = f"{city} {suburb} {neighbourhood} {attraction}".strip()
-            return address_text
-    except Exception as e:
-        print(f"[GPS逆変換エラー] 住所の動的変換に失敗しました: {e}")
-    return ""
-
-
 # Supabase ヘルパー群
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
@@ -442,7 +446,7 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 対話が始まったらアバターのステータスを「thinking」に即時同期
+    # 对話が始まったらアバターのステータスを「thinking」に即時同期
     await manager.broadcast({"type": "status", "status": "thinking"})
 
     base_persona = load_rukiruki_persona()
@@ -537,21 +541,20 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             response = await llm_with_tools.ainvoke(messages)
         
-        # ─── 🛠️ ツール呼び出し（外部検索）のインターセプト ───
+        # ─── 🛠️ ツール呼び出し（外部検索 ＆ 位置特定）のインターセプト ───
         if response.tool_calls:
+            messages.append(response)  # 💡 ツール要求メッセージを履歴に追加
+            
             for tool_call in response.tool_calls:
+                # 分岐1: ネット検索（Tavily）が呼ばれた場合
                 if tool_call["name"] == "tavily_search_results_json":
                     base_query = tool_call["args"].get("query")
                     
-                    # 💡 【ハイブリッド空間同期のコアロジック】
-                    # フロントエンドから有効なGPS座標が届いている場合、Query Rewritingを発動
                     if lat is not None and lng is not None:
-                        # 1. バックグラウンドで物理住所・周辺のコンテキストを確定
                         address_keywords = await fetch_street_address(lat, lng)
                         if not address_keywords:
                             address_keywords = "（空間変換一時エラー：日本の主要都市周辺と推測）"
                         
-                        # 2. 座標と実住所の双方をQuery Rewriterに投入し、LLMに最適な検索ワードを再構成させる
                         refine_chain = query_refine_prompt | llm
                         refined_query = await refine_chain.ainvoke({
                             "lat": lat,
@@ -560,17 +563,28 @@ async def chat_endpoint(payload: ChatMessage):
                             "base_query": base_query
                         })
                         
-                        # 元の機械的な検索クエリを上書き
                         optimized_query = refined_query.content.strip()
                         tool_call["args"]["query"] = optimized_query
                         print(f"[ルキルキ空間同期脳] ハイブリッド最適化を完了しました: '{optimized_query}'")
                     
                     print(f"─── ルキルキがネット検索中... ───")
                     search_results = await search_tool.ainvoke(tool_call["args"])
-                    messages.append(response)
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
-                    response = await llm_with_tools.ainvoke(messages)
-                    break
+                
+                # 分岐2: 💡 位置特定ツール（locate_current_position）が直接呼ばれた場合
+                elif tool_call["name"] == "locate_current_position":
+                    t_lat = tool_call["args"].get("lat", lat)
+                    t_lng = tool_call["args"].get("lng", lng)
+                    print(f"─── ルキルキが直接ジオコーディング実行中 ({t_lat}, {t_lng}) ───")
+                    
+                    address_result = await fetch_street_address(t_lat, t_lng)
+                    if not address_result:
+                        address_result = "空間の歪みにより座標から具体的な住所を特定できませんでした。"
+                    
+                    messages.append(ToolMessage(content=str(address_result), tool_call_id=tool_call["id"]))
+            
+            # すべてのツール実行結果を反映させて、ルキルキの最終回答を再生成
+            response = await llm_with_tools.ainvoke(messages)
 
         ai_response = response.content
 
@@ -620,7 +634,6 @@ async def websocket_endpoint(websocket: WebSocket):
     print(f"[WebSocket] 教授のデバイスがアバター同期リンクに接続しました。")
     try:
         while True:
-            # フロント側からの常時生存確認（ハートビート等）のメッセージを待機
             data = await websocket.receive_text()
             await websocket.send_json({"type": "heartbeat", "status": "stable"})
     except WebSocketDisconnect:
