@@ -502,6 +502,26 @@ async def chat_endpoint(payload: ChatMessage):
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
                     query = tool_call["args"].get("query")
+                    
+                    # 💡 【クエリピンポイント調整ガードレール】
+                    # 教授を絶対に迷子にさせないため、位置情報がある場合はクエリを強制最適化します
+                    if lat is not None and lng is not None:
+                        # セクター情報から純粋な実在地名部分を抽出（例: "烏丸二条"、"御所西"、"京都駅"）
+                        clean_sector = sector_info.replace("【", "").replace("】", "").split("セクター")[0]
+                        
+                        # LLMが作ったクエリから一旦「京都市」を抜いてプレーンな要求を取り出す
+                        base_query = query.replace("京都市", "").strip()
+                        
+                        if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
+                            # 登録セクター外、または開発ベースの場合は、現在地周辺であることを強調
+                            query = f"京都市 近くの {base_query} 地元で人気"
+                        else:
+                            # 実在地名セクター（烏丸二条、御所西、京都駅）の場合は、そのエリアの徒歩圏内に超限定
+                            # 例:「京都市 烏丸二条 おすすめの店 おすすめ 徒歩圏内」
+                            query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
+                        
+                        tool_call["args"]["query"] = query  # 実際にTavilyに飛ぶクエリを上書き！
+
                     print(r"─── ルキルキがネット検索中... ───")
                     print(f"Query: {query}")
                     
@@ -511,7 +531,7 @@ async def chat_endpoint(payload: ChatMessage):
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
                     
                     response = await llm_with_tools.ainvoke(messages)
-                    break 
+                    break
 
         ai_response = response.content
 
