@@ -1,8 +1,10 @@
+# backend/main.py
 import os
 import base64
 import re
 import json
 import random
+import asyncio  # 💡 geopyを非同期イベントループで動かすために追加
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -19,6 +21,9 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# 💡 位置情報（逆ジオコーディング）用ライブラリ
+from geopy.geocoders import Nominatim
 
 # 🧠 思考調停ルーターのインポート
 from agents.router import analyze_and_route
@@ -38,6 +43,20 @@ llm = ChatOpenAI(
 )
 search_tool = TavilySearchResults(max_results=2)
 llm_with_tools = llm.bind_tools([search_tool])
+
+
+# 💡 【最高精度版】座標と実住所のハイブリッド型クエリ最適化プロンプト
+# 挨拶や解説、引用符を徹底的に排除し、純粋な検索キーワードだけをLLMに抽出させます。
+query_refine_prompt = ChatPromptTemplate.from_template(
+    "あなたは検索クエリ最適化の専門家です。ユーザーの要望、現在の正確なGPS座標、および"
+    "逆ジオコーディングによって得られた実際の住所情報から、そのエリアの空間的文脈（繁華街、自然、周辺スポットなど）を高度に咀嚼し、"
+    "検索エンジン（Tavily）で最も的確なローカル情報がヒットする検索キーワード（3語程度、スペース区切り）のみを出力してください。\n"
+    "余計な解説、挨拶、文章、引用符（\"\"）は一切含めず、キーワードの羅列だけを返してください。\n\n"
+    "【現在の観測座標】: 緯度 {lat} / 経度 {lng}\n"
+    "【逆ジオコーディング住所】: {address}\n"
+    "【ユーザーの元の検索意図】: {base_query}\n"
+    "最適化された検索キーワード:"
+)
 
 
 # 🌐 ─── WebSocket 接続管理クラス（リアルタイム同期用） ───
@@ -168,11 +187,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MagatokiLab RukiRuki XR Gateway [Production v4 - Multi-Agent Ready]",
+    title="MagatokiLab RukiRuki XR Gateway [Production v5 - Hybrid Location Synced]",
     lifespan=lifespan
 )
 
-# ─── CORS設定（タイポ修復 ＆ VercelプレビューURL救済） ───
+# CORS設定
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
@@ -223,7 +242,7 @@ def load_magatoki_context() -> str:
                     
     return combined_context
 
-# ⚡ サーバー起動時にキャッシュ
+# サーバー起動時にキャッシュ
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 
@@ -242,20 +261,48 @@ class ChatMessage(BaseModel):
     history: list[HistoryItem] | None = None  
 
 
-# エリア判定
+# エリア判定（従来のフォールバック・ログ出力用として残存）
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
-        return "【烏丸二条セクター】（伝統の薫香エネルギーを感じるエリア）"
+        return "【烏丸二条セクター】"
     elif 35.022 <= lat <= 35.026 and 135.749 <= lng <= 135.755:
-        return "【御所西セクター】（古風な香木と歴史が交差するエリア）"
+        return "【御所西セクター】"
     elif 34.975 <= lat <= 34.990 and 135.750 <= lng <= 135.765:
-        return "【京都駅セクター】（現実世界のゲートウェイ・人流の激しいエリア）"
+        return "【京都駅セクター】"
     elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
-        return "【Magatoki開発ベースセクター】（相棒のメイン作業空間）"
-    return f"【未知の観測セクター】（座標は 緯度 {lat} / 経度 {lng} だよ）"
+        return "【Magatoki開発ベースセクター】"
+    return "【未知の観測セクター】"
 
 
-# Supabase ヘルパー
+# 💡 ─── 【新機能】geopyによる逆ジオコーディング（非同期ラップ） ───
+async def fetch_street_address(lat: float, lng: float) -> str:
+    """緯度経度から実際の物理住所・周辺施設を抽出するヘルパー"""
+    try:
+        # OpenStreetMapの無料ジオコーディングサービスを利用（User-Agentを指定）
+        geolocator = Nominatim(user_agent="magatokilab_rukiruki_gateway")
+        
+        # 同期関数であるgeolocator.reverseを、非同期のイベントループ上で安全に実行
+        loop = asyncio.get_event_loop()
+        location = await loop.run_in_executor(
+            None, lambda: geolocator.reverse((lat, lng), timeout=4, language="ja")
+        )
+        
+        if location and "address" in location.raw:
+            addr = location.raw["address"]
+            # 検索クエリのコンテキストとして最適な粒度の地域・スポット情報を抽出
+            city = addr.get("city", addr.get("town", addr.get("village", addr.get("province", ""))))
+            suburb = addr.get("suburb", "")  # 区など
+            neighbourhood = addr.get("neighbourhood", "")  # 町名など
+            attraction = addr.get("attraction", addr.get("historic", addr.get("tourism", "")))  # 有名施設・史跡名など
+            
+            address_text = f"{city} {suburb} {neighbourhood} {attraction}".strip()
+            return address_text
+    except Exception as e:
+        print(f"[GPS逆変換エラー] 住所の動的変換に失敗しました: {e}")
+    return ""
+
+
+# Supabase ヘルパー群
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
@@ -395,7 +442,7 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 💡 【エモ機能追加】対話が始まったらアバターのステータスを「thinking」に即時同期
+    # 対話が始まったらアバターのステータスを「thinking」に即時同期
     await manager.broadcast({"type": "status", "status": "thinking"})
 
     base_persona = load_rukiruki_persona()
@@ -490,20 +537,35 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             response = await llm_with_tools.ainvoke(messages)
         
+        # ─── 🛠️ ツール呼び出し（外部検索）のインターセプト ───
         if response.tool_calls:
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "tavily_search_results_json":
-                    query = tool_call["args"].get("query")
+                    base_query = tool_call["args"].get("query")
+                    
+                    # 💡 【ハイブリッド空間同期のコアロジック】
+                    # フロントエンドから有効なGPS座標が届いている場合、Query Rewritingを発動
                     if lat is not None and lng is not None:
-                        clean_sector = sector_info.replace("【", "").replace("】", "").split("セクター")[0]
-                        base_query = query.replace("京都市", "").strip()
-                        if "未知の観測" in clean_sector or "Magatoki開発ベース" in clean_sector:
-                            query = f"京都市 近くの {base_query} 地元で人気"
-                        else:
-                            query = f"京都市 {clean_sector} {base_query} 徒歩圏内 おすすめ"
-                        tool_call["args"]["query"] = query
-
-                    print(r"─── ルキルキがネット検索中... ───")
+                        # 1. バックグラウンドで物理住所・周辺のコンテキストを確定
+                        address_keywords = await fetch_street_address(lat, lng)
+                        if not address_keywords:
+                            address_keywords = "（空間変換一時エラー：日本の主要都市周辺と推測）"
+                        
+                        # 2. 座標と実住所の双方をQuery Rewriterに投入し、LLMに最適な検索ワードを再構成させる
+                        refine_chain = query_refine_prompt | llm
+                        refined_query = await refine_chain.ainvoke({
+                            "lat": lat,
+                            "lng": lng,
+                            "address": address_keywords,
+                            "base_query": base_query
+                        })
+                        
+                        # 元の機械的な検索クエリを上書き
+                        optimized_query = refined_query.content.strip()
+                        tool_call["args"]["query"] = optimized_query
+                        print(f"[ルキルキ空間同期脳] ハイブリッド最適化を完了しました: '{optimized_query}'")
+                    
+                    print(f"─── ルキルキがネット検索中... ───")
                     search_results = await search_tool.ainvoke(tool_call["args"])
                     messages.append(response)
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
@@ -521,7 +583,7 @@ async def chat_endpoint(payload: ChatMessage):
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
 
-        # 💡 【エモ機能追加】AIの返答テキストが確定したら、喋り出す前に「talking」に状態を変更
+        # AIの返答テキストが確定したら、喋り出す前に「talking」に状態を変更
         await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
@@ -538,7 +600,7 @@ async def chat_endpoint(payload: ChatMessage):
         ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、教授？"
         audio_base64 = None
 
-    # 💡 【エモ機能追加】すべて終わったら「idle（待機状態）」に戻す
+    # すべて終わったら「idle（待機状態）」に戻す
     await manager.broadcast({"type": "status", "status": "idle"})
 
     return {
@@ -560,7 +622,6 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # フロント側からの常時生存確認（ハートビート等）のメッセージを待機
             data = await websocket.receive_text()
-            # 必要であれば応答を返す（基本はクライアントの切断検知のためにループを回します）
             await websocket.send_json({"type": "heartbeat", "status": "stable"})
     except WebSocketDisconnect:
         manager.disconnect(websocket)
