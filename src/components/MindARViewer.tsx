@@ -63,6 +63,10 @@ export default function MindARViewer() {
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
+  // ウォレットアドレス用のRef（クロージャバグ対策）
+  const addressRef = useRef(address);
+  useEffect(() => { addressRef.current = address; }, [address]);
+
   // 0. リアルタイム日時更新ロジック
   useEffect(() => {
     const updateDateTime = () => {
@@ -365,18 +369,15 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
+          let isSeamlessReturn = false;
           if (lostTimeoutRef.current) {
             clearTimeout(lostTimeoutRef.current);
             lostTimeoutRef.current = null;
             console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
+            isSeamlessReturn = true;
           }
 
           setIsTargetFound(true); 
-          setSubtitle(prev => 
-            prev === "（カメラをターゲットにかざしてください）" 
-              ? "ルキルキを現実世界に固定しました。話しかけてください。" 
-              : prev
-          );
 
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
@@ -390,6 +391,19 @@ export default function MindARViewer() {
               posArr[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
             }
             particlesRef.current.geometry.attributes.position.needsUpdate = true;
+          }
+
+          // ✨ 手ブレ復帰（残像ホールド内）でない新規検知時のみ自動で初期挨拶を発動させる
+          if (!isSeamlessReturn) {
+            getGPSLocation().then((loc) => {
+              triggerInitialGreeting(loc);
+            });
+          } else {
+            setSubtitle(prev => 
+              prev === "（カメラをターゲットにかざしてください）" 
+                ? "ルキルキを現実世界に固定しました。話しかけてください。" 
+                : prev
+            );
           }
         };
 
@@ -527,7 +541,7 @@ export default function MindARViewer() {
     };
   }, []);
 
-  // 💡 修正箇所: GPS精度向上のためにチューニング（timeoutの延長とキャッシュの厳格な完全拒否）
+  // 💡 チューニングされた高精度GPS取得ロジック
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) { resolve(null); return; }
@@ -535,12 +549,82 @@ export default function MindARViewer() {
         (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
         () => resolve(null),
         { 
-          enableHighAccuracy: true, // ⚡真のGPSチップを強制起動
-          timeout: 10000,           // ⚡同期時間を10秒に引き伸ばして衛星補正の猶予を確保
-          maximumAge: 0             // ⚡キャッシュされた古い座標を完全に弾く
+          enableHighAccuracy: true, 
+          timeout: 10000,           
+          maximumAge: 0             
         }
       );
     });
+  };
+
+  // 💡 【新設】初回出現時にルキルキから能動的に挨拶をさせる自動同期関数
+  const triggerInitialGreeting = async (forcedLocation?: { lat: number; lng: number } | null) => {
+    if (audioInstanceRef.current) { audioInstanceRef.current.pause(); audioInstanceRef.current.src = ""; }
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    setSubtitle("ルキルキが現実世界と同期中...");
+    setAiStatus("thinking");
+    setSearchPhase("CONNECTING...");
+
+    const location = forcedLocation !== undefined ? forcedLocation : await getGPSLocation();
+    const imageBase64 = captureARCameraFrame();
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+
+    if (baseUrl) {
+      try {
+        const response = await fetch(`${baseUrl}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            message: "[INITIAL_GREETING]", // バックエンドに初期化の挨拶を要求する特殊シグナル
+            wallet_address: addressRef.current || null, 
+            image_base64: imageBase64,       
+            latitude: location ? location.lat : null, 
+            longitude: location ? location.lng : null,
+            history: [] 
+          }),
+        });
+
+        setSearchPhase("STABLE");
+        if (!response.ok) throw new Error("API初期挨拶の同期エラー");
+
+        const data = await response.json();
+        
+        if (data.spatial_effect) {
+          setSpatialEffect(data.spatial_effect);
+          currentEffectRef.current = data.spatial_effect;
+        }
+
+        setSubtitle(data.reply);
+        const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
+
+        if (data.audio_data && audioInstanceRef.current) {
+          try {
+            const binaryString = window.atob(data.audio_data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+
+            audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
+            initAudioPipeline(audioInstanceRef.current);
+            audioInstanceRef.current.src = audioUrl;
+            setAiStatus("talking");
+            await audioInstanceRef.current.play();
+          } catch {
+            setAiStatus("talking"); setTimeout(() => setAiStatus("idle"), 5000);
+          }
+        } else {
+          setAiStatus("talking"); setTimeout(() => setAiStatus("idle"), 5000);
+        }
+      } catch (err) {
+        console.error("ルキルキの初期挨拶取得に失敗:", err);
+        setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
+        setAiStatus("idle");
+        setSearchPhase("STABLE");
+      }
+    }
   };
 
   const captureARCameraFrame = (): string | null => {
@@ -674,7 +758,6 @@ export default function MindARViewer() {
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1 }} />
 
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
-        {/* 上部ヘッダーエリア */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
           <div className="flex flex-col gap-0.5">
             <span className="text-[10px] text-purple-400 font-bold tracking-widest">OBSERVATION SYSTEM v3.5</span>
@@ -700,9 +783,7 @@ export default function MindARViewer() {
           </div>
         </div>
 
-        {/* 下部 UI エリア */}
         <div className="w-full space-y-3 pointer-events-auto mb-4 max-w-2xl mx-auto">
-          {/* 字幕ボード */}
           <div className="relative bg-black/75 backdrop-blur-xl p-5 rounded-xl text-white min-h-[85px] flex flex-col items-center justify-center border border-purple-500/20 shadow-[0_4px_20px_rgba(0,0,0,0.6)] overflow-hidden">
             {aiStatus === "thinking" && (
               <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-purple-500 overflow-hidden">
@@ -716,7 +797,6 @@ export default function MindARViewer() {
             <p className="text-sm font-medium leading-relaxed text-center px-2 mt-1 whitespace-pre-line">{subtitle}</p>
           </div>
 
-          {/* 入力コンソールフォーム */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
             <button
               type="button"
@@ -732,7 +812,6 @@ export default function MindARViewer() {
             </button>
 
             <div className="relative flex-1 flex items-center">
-              {/* 💡 修正箇所: プレースホルダーの「まがとき教授」を「まがときさん」へ変更 */}
               <input 
                 ref={inputRef}
                 type="text" 
@@ -791,7 +870,6 @@ export default function MindARViewer() {
                   }`}
                 >
                   <div className="flex justify-between items-center mb-1.5 text-[10px] font-bold">
-                    {/* 💡 修正箇所: ログ内表示の「まがとき教授」を「まがときさん」へ変更 */}
                     <span className={item.role === "user" ? "text-cyan-400" : "text-purple-400"}>
                       {item.role === "user" ? "▶ まがときさん" : "◁ ルキルキ SYSTEM"}
                     </span>

@@ -267,7 +267,6 @@ async def auto_research_job():
 
 # 💡 【検証済・最適化版】1分おきにルキルキが自発的に雑談・ニュース報告してくるAIコアジョブ
 async def proactive_talk_job():
-    # フロントエンドが一人も接続していない場合はリソース節約のためスキップ
     if not manager.active_connections:
         return
 
@@ -277,7 +276,6 @@ async def proactive_talk_job():
     JST = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%H時%M分")
 
-    # 1. 脳内リサーチDBから、まだ消費していない最新の知識があるか1件チェック
     fetched_memos = []
     memo_id_to_consume = None
     
@@ -294,7 +292,6 @@ async def proactive_talk_job():
         except Exception as e:
             print(f"[自発エラー] DB取得失敗（日常雑談にフォールバックします）: {e}")
 
-    # 2. プロンプトの組み立て
     system_constraints = (
         "【ルキルキ自発システム発話制約】\n"
         "1. あなたは、今まがときさんの隣に漂っているAIパートナーとして、自発的にひとりごとや雑談を発話します。\n"
@@ -315,11 +312,10 @@ async def proactive_talk_job():
     else:
         topic_input = (
             f"【現在時刻】: {now_str}\n"
-            f"指示: 現在の時間帯、またはルキルキとしての気分（お腹空いた、ちょっと眠いかも、まがときさんの作業を応援したい、お香の匂いで癒やされたい、など）に絡めて、まがときさんに優しく一言、何気ない日常の独り言を話しかてください。"
+            f"指示: 現在の時間帯、またはルキルキとしての気分（お腹空いた、ちょっと眠いかも、まがときさんの作業を応援したい、お香の匂いで癒やされたい、など）に絡めて、まがときさんに優しく一言、何気ない日常の独り言を話しかけてください。"
         )
 
     try:
-        # 💡 修正: 対話モードの誤作動を防ぐため、コンテキストもすべてSystem層にマージしてペルソナを固定
         messages = [
             SystemMessage(content=f"{base_persona}\n\n{system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
         ]
@@ -327,7 +323,6 @@ async def proactive_talk_job():
         response = await llm.ainvoke(messages)
         ai_reply = response.content.strip()
 
-        # 音声の生成
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
         if provider == "elevenlabs":
@@ -337,7 +332,6 @@ async def proactive_talk_job():
         else:
             audio_base64 = await generate_openai_tts(ai_reply)
 
-        # 💡 修正: WebSocketの送信競合を防ぐため、発話開始エフェクト指示とデータを単一のブロードキャストで安全に一斉射撃
         await manager.broadcast({
             "type": "proactive_speech",
             "reply": ai_reply,
@@ -345,7 +339,6 @@ async def proactive_talk_job():
         })
         print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply}")
 
-        # 使用したDBのメモは消費フラグを立てる
         if memo_id_to_consume:
             url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id_to_consume}"
             headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
@@ -359,11 +352,8 @@ async def proactive_talk_job():
 # ─── FastAPI ライフサイクル管理（lifespan） ───
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 15分おきにネットを自動調査
     scheduler.add_job(auto_research_job, 'interval', minutes=15)
-    # 1分おきにルキルキがまがときさんに自発的に話しかけてくるジョブ
     scheduler.add_job(proactive_talk_job, 'interval', minutes=1)
-    
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
     yield
@@ -524,6 +514,16 @@ async def chat_endpoint(payload: ChatMessage):
 
     base_persona = load_rukiruki_persona()
 
+    # 💡 【新設】フロントエンドからの初期検知時シグナルを検知して歓迎プロンプトへ置換
+    is_initial_greeting = (user_text == "[INITIAL_GREETING]")
+    if is_initial_greeting:
+        user_text = (
+            "（システム絶対指示：まがときさんがARカメラをターゲットにかざし、あなたが現実世界に出現した【最初の瞬間】です。"
+            "現在の時間帯、識別された位置情報、もし手に入るなら外部検索ツール等を用いて周辺のリアルタイムの天気や話題を絡め、"
+            "実体化できた喜びと、まがときさんを歓迎する気の利いた挨拶を50〜110文字の親しみのある丁寧語で呟いてください。"
+            "こちらから質問攻めにするのではなく、その時間の気遣いや空間の情緒を交えた自然なファーストコンタクトにしてください。URLの出力は厳禁です。）"
+        )
+
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
@@ -597,7 +597,7 @@ async def chat_endpoint(payload: ChatMessage):
     try:
         messages = [SystemMessage(content=dynamic_system_prompt)]
 
-        if payload.history:
+        if payload.history and not is_initial_greeting:
             for item in payload.history:
                 if item.role == "user":
                     messages.append(HumanMessage(content=item.text))
@@ -607,12 +607,13 @@ async def chat_endpoint(payload: ChatMessage):
         vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
         has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
-        if image_base64 and (has_vision_intent or not user_text):
+        if image_base64 and (has_vision_intent or is_initial_greeting or not user_text):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
                 
             vision_text = user_text if user_text else "これ見て、何かわかる？"
-            vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI」が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
+            if not is_initial_greeting:
+                vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI」が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": vision_text},
