@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field # 💡 Fieldを追加
 from dotenv import load_dotenv
 import httpx
 
@@ -43,6 +43,23 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 search_tool = TavilySearchResults(max_results=2)
+
+
+# 🧠 ─── [新設] 空間エフェクト自律判定用の構造化データスキーマ ───
+class SpatialEffectAnalysis(BaseModel):
+    effect_id: str = Field(
+        description="周辺エリアの歴史・文化・施設文脈、季節、または会話の内容から総合的に判断した、アバター周囲の最適空間エフェクトID。"
+                    "選択肢は必ず次のいずれか: 'cyber_glow', 'incense_smoke', 'cherry_blossom', 'snow_crystal', 'cyber_rain'"
+    )
+    reason: str = Field(description="その空間エフェクトを自律選択した背景・文脈の言語化理由")
+
+
+# 🧠 エフェクト判定専用の決定論的LLMチェーン（ブレをなくすため、temperature=0.0に固定）
+effect_analyzer_llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.0,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+).with_structured_output(SpatialEffectAnalysis)
 
 
 # 💡 ─── 【コア機能】geopyによる逆ジオコーディングのツール化 ───
@@ -423,6 +440,34 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
     return None
 
 
+# 🧠 ─── [新設] 空間エフェクトを自律的に決定するコア関数 ───
+async def judge_spatial_effect_autonomously(address: str, user_msg: str, ai_reply: str) -> str:
+    """
+    逆ジオコーディングされた住所文字列、教授の発話、ルキルキの応答文脈から
+    LLMが空間エフェクトIDを完全に自律判定します。
+    """
+    prompt = (
+        "外の世界の空間 context、およびユーザーとAIの対話から、XRアバターの周囲に展開すべき"
+        "最もエモーショナルで文脈に適合した空間エフェクトIDを自律的に決定してください。\n\n"
+        "【エフェクト選択基準】\n"
+        "- 'incense_smoke': お香の老舗（松栄堂・山田松など）、伝統工芸、和風の奥ゆかしい文脈\n"
+        "- 'cherry_blossom': 歴史的スポット（御所、二条城、神社仏閣）、京都の風情、春の文脈\n"
+        "- 'snow_crystal': 静寂、夜、冬、または冷徹・シリアスな文脈\n"
+        "- 'cyber_rain': ローカル開発、Unity/Blender、MCP、ハッキング、雨、サイバーパンク文脈\n"
+        "- 'cyber_glow': 上記に該当しない標準状態、または純粋なサイバーテクノロジー文脈\n\n"
+        f"【現在地の物理住所・周辺スポット】: {address}\n"
+        f"【教授の発話】: {user_msg}\n"
+        f"【ルキルキの返答】: {ai_reply}\n"
+    )
+    try:
+        analysis = await effect_analyzer_llm.ainvoke(prompt)
+        print(f"🔮 [LLM自律エフェクト選択] 選定ID: {analysis.effect_id} | 理由: {analysis.reason}")
+        return analysis.effect_id
+    except Exception as e:
+        print(f"❌ [エフェクト自律判定エラー] フォールバックします: {e}")
+        return "cyber_glow"
+
+
 # ─── HTTP エンドポイント定義 ───
 @app.get("/")
 def read_root():
@@ -446,7 +491,11 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 对話が始まったらアバターのステータスを「thinking」に即時同期
+    # 空間エフェクト変数のスコープ初期化
+    spatial_effect = "cyber_glow"
+    current_address = ""
+
+    # 対話が始まったらアバターのステータスを「thinking」に即時同期
     await manager.broadcast({"type": "status", "status": "thinking"})
 
     base_persona = load_rukiruki_persona()
@@ -481,6 +530,8 @@ async def chat_endpoint(payload: ChatMessage):
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
             f"識別セクター: {sector_info}\n\n"
         )
+        # 後続のエフェクト判定用に住所文字列を事前キープ
+        current_address = await fetch_street_address(lat, lng)
 
     print(f"─── [Router] 思考調停を開始します ───")
     router_res = analyze_and_route(user_text if user_text else "[画像送信のみ]", sector_info, now_str)
@@ -551,7 +602,7 @@ async def chat_endpoint(payload: ChatMessage):
                     base_query = tool_call["args"].get("query")
                     
                     if lat is not None and lng is not None:
-                        address_keywords = await fetch_street_address(lat, lng)
+                        address_keywords = current_address if current_address else await fetch_street_address(lat, lng)
                         if not address_keywords:
                             address_keywords = "（空間変換一時エラー：日本の主要都市周辺と推測）"
                         
@@ -580,6 +631,8 @@ async def chat_endpoint(payload: ChatMessage):
                     address_result = await fetch_street_address(t_lat, t_lng)
                     if not address_result:
                         address_result = "空間の歪みにより座標から具体的な住所を特定できませんでした。"
+                    else:
+                        current_address = address_result # 最新化
                     
                     messages.append(ToolMessage(content=str(address_result), tool_call_id=tool_call["id"]))
             
@@ -596,6 +649,19 @@ async def chat_endpoint(payload: ChatMessage):
 
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
+
+        # 🌌 [自律判定の起動] レスポンス確定直前に、文脈から最適なエフェクトを自律的に決定
+        spatial_effect = await judge_spatial_effect_autonomously(
+            address=current_address if current_address else "位置未特定・ローカルセクター",
+            user_msg=user_text if user_text else "[画像送信のみ]",
+            ai_reply=ai_response
+        )
+
+        # ⚡ エフェクトIDをWebSocketでフロントエンドへ超高速先行ブロードキャスト
+        await manager.broadcast({
+            "type": "spatial_effect",
+            "spatial_effect": spatial_effect
+        })
 
         # AIの返答テキストが確定したら、喋り出す前に「talking」に状態を変更
         await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
@@ -620,6 +686,7 @@ async def chat_endpoint(payload: ChatMessage):
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
+        "spatial_effect": spatial_effect,  # 💡 JSONレスポンスにも含めて二重の安全性を確保
         "status": "success"
     }
 
