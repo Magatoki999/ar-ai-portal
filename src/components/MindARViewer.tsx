@@ -23,7 +23,7 @@ export default function MindARViewer() {
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); 
-  const [spatialEffect, setSpatialEffect] = useState<string>("cyber");
+  const [spatialEffect, setSpatialEffect] = useState<string>("cyber"); // 桜, 雪, 雨, サイバーの同期
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
@@ -39,12 +39,15 @@ export default function MindARViewer() {
   const timersRef = useRef<NodeJS.Timeout[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // リアルタイムエフェクト同期用Ref
   const currentEffectRef = useRef<string>("cyber");
 
+  // Three.js アニメーション関連
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
+  // オーディオ & リップシンク関連
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -54,11 +57,13 @@ export default function MindARViewer() {
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
+  // パーティクル演出関連
   const particlesRef = useRef<any>(null);
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
+  // 0. リアルタイム日時更新ロジック
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -75,6 +80,7 @@ export default function MindARViewer() {
     return () => clearInterval(timer);
   }, []);
 
+  // 1. オーディオインスタンスの初期化
   useEffect(() => {
     audioInstanceRef.current = new Audio();
     return () => {
@@ -87,11 +93,14 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 2. アニメーションクロスフェード制御
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
       const currentAction = activeActionRef.current;
+
       if (!nextAction || nextAction === currentAction) return;
+
       nextAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(duration).play();
       if (currentAction) currentAction.fadeOut(duration);
       activeActionRef.current = nextAction;
@@ -99,6 +108,7 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
+  // 3. Web Speech API (音声認識) の初期化
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -144,6 +154,7 @@ export default function MindARViewer() {
     }
   };
 
+  // 📡【ルキルキ常時脳内同期用 WebSocket パイプライン】
   useEffect(() => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!baseUrl) return;
@@ -165,12 +176,14 @@ export default function MindARViewer() {
         try {
           const data = JSON.parse(event.data);
           
+          // 空間エフェクト指示のリアルタイムハッキング
           if (data.spatial_effect) {
             setSpatialEffect(data.spatial_effect);
             currentEffectRef.current = data.spatial_effect;
           }
 
           if (data.type === "proactive_speech") {
+            console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
             if (audioInstanceRef.current) {
               audioInstanceRef.current.pause();
               audioInstanceRef.current.src = "";
@@ -198,6 +211,7 @@ export default function MindARViewer() {
                 setAiStatus("talking");
                 await audioInstanceRef.current.play();
               } catch (audioErr) {
+                console.error("自発的発話の音声生成に失敗:", audioErr);
                 setAiStatus("talking");
                 setTimeout(() => setAiStatus("idle"), 5000);
               }
@@ -207,12 +221,17 @@ export default function MindARViewer() {
             }
           }
         } catch (err) {
-          console.error("WSメッセージのパース失敗:", err);
+          console.error("WSメッセージのリアルタイムパースに失敗:", err);
         }
       };
 
       socket.onclose = () => {
+        console.log("🍂 [空間同期リンク] 切断。5秒後に再接続を試みます。");
         reconnectTimeout = setTimeout(connectWebSocket, 5000);
+      };
+
+      socket.onerror = (error) => {
+        console.error("⚠️ WebSocketエラー:", error);
       };
     };
 
@@ -224,6 +243,7 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 4. MindAR & Three.js メイン初期化
   useEffect(() => {
     let mindarThreeInstance: any = null;
     let localRenderer: any = null; 
@@ -236,7 +256,7 @@ export default function MindARViewer() {
         const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
         const { AnimationMixer: ThreeAnimationMixer, Clock } = THREE;
 
-        if (!containerRef.current) throw new Error("DOMが見つかりません。");
+        if (!containerRef.current) throw new Error("DOMコンテナが見つかりません。");
 
         const mindarThree = new MindARThree({
           container: containerRef.current,
@@ -250,6 +270,8 @@ export default function MindARViewer() {
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0; 
+
+        // 🔥【超重要】カメラ映像透過バグの修正。クリアアルファを0にして透過
         renderer.setClearColor(0x000000, 0);
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
@@ -261,7 +283,8 @@ export default function MindARViewer() {
 
         const anchor = mindarThree.addAnchor(0);
 
-        const particleCount = 120;
+        // クチュール・パーティクルジオメトリ生成
+        const particleCount = 120; // 密度を少し強化
         const particleGeometry = new THREE.BufferGeometry();
         const particlePositions = new Float32Array(particleCount * 3);
         const particleVelocities = new Float32Array(particleCount * 3);
@@ -276,10 +299,8 @@ export default function MindARViewer() {
         }
 
         particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-        
-        // 【修正ポイント】sizeを0.05に変更して視認性向上
         const particleMaterial = new THREE.PointsMaterial({
-          color: 0x8b5cf6, size: 0.05, transparent: true, opacity: 0, blending: THREE.AdditiveBlending
+          color: 0x8b5cf6, size: 0.028, transparent: true, opacity: 0, blending: THREE.AdditiveBlending
         });
 
         const spawnParticles = new THREE.Points(particleGeometry, particleMaterial);
@@ -350,7 +371,9 @@ export default function MindARViewer() {
           if (lostTimeoutRef.current) {
             clearTimeout(lostTimeoutRef.current);
             lostTimeoutRef.current = null;
+            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
           }
+
           setIsTargetFound(true); 
           setSubtitle(prev => 
             prev === "（カメラをターゲットにかざしてください）" 
@@ -375,15 +398,19 @@ export default function MindARViewer() {
 
         anchor.onTargetLost = () => {
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
+          console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
+
           lostTimeoutRef.current = setTimeout(() => {
             setIsTargetFound(false); 
             setSubtitle("（カメラをターゲットにかざしてください）");
             isSpawningRef.current = false;
             if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
+            
             if (recognitionRef.current) {
               try { recognitionRef.current.stop(); } catch(e){}
             }
             lostTimeoutRef.current = null;
+            console.log("[XRシステム] 完全にロストしました。");
           }, 4000); 
         };
 
@@ -412,6 +439,7 @@ export default function MindARViewer() {
             avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
           }
 
+          // まばたき制御
           if (blinkTargetsRef.current.length > 0) {
             blinkTimer += delta;
             if (!isBlinking && blinkTimer >= nextBlinkTime) { isBlinking = true; blinkTimer = 0; }
@@ -426,35 +454,41 @@ export default function MindARViewer() {
             }
           }
 
+          // 🔮【新設】環境適応型パーティクル物理シミュレーションループ
           if (particlesRef.current && particleVelocitiesRef.current) {
             const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
             const vels = particleVelocitiesRef.current;
             const currentEffect = currentEffectRef.current;
             const mat = particlesRef.current.material as any;
 
-            if (currentEffect === "sakura") mat.color.setHex(0xfbcfe8);
-            else if (currentEffect === "snow") mat.color.setHex(0xffffff);
-            else if (currentEffect === "rain") mat.color.setHex(0x3b82f6);
-            else mat.color.setHex(0x8b5cf6);
+            // 情緒パラメータに合わせたマテリアルカラー変更
+            if (currentEffect === "sakura") mat.color.setHex(0xfbcfe8);      // 桜：薄桃
+            else if (currentEffect === "snow") mat.color.setHex(0xffffff);  // 雪：純白
+            else if (currentEffect === "rain") mat.color.setHex(0x3b82f6);  // 雨：蒼
+            else mat.color.setHex(0x8b5cf6);                                // デフォルト：サイバー紫
 
             for (let i = 0; i < particleCount; i++) {
               if (currentEffect === "sakura") {
+                // ひらひらと斜めに舞い散る風の動き
                 posArr[i * 3] += vels[i * 3] * delta * 0.4 + Math.sin(elapsedTime + i) * 0.002;
                 posArr[i * 3 + 1] -= Math.abs(vels[i * 3 + 1]) * delta * 0.3;
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta * 0.4 + Math.cos(elapsedTime + i) * 0.002;
                 if (posArr[i * 3 + 1] < -0.4) posArr[i * 3 + 1] = 0.4;
               } else if (currentEffect === "snow") {
+                // 静かに垂直降下
                 posArr[i * 3] += vels[i * 3] * delta * 0.1;
                 posArr[i * 3 + 1] -= 0.12 * delta;
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta * 0.1;
                 if (posArr[i * 3 + 1] < -0.4) posArr[i * 3 + 1] = 0.4;
               } else if (currentEffect === "rain") {
+                // 高速で地面へ突き刺さる
                 posArr[i * 3 + 1] -= 1.9 * delta;
                 if (posArr[i * 3 + 1] < -0.4) {
                   posArr[i * 3 + 1] = 0.4;
                   posArr[i * 3] = (Math.random() - 0.5) * 0.3;
                 }
               } else {
+                // 通常サイバー：下から湧き上がるホログラム粒子
                 posArr[i * 3] += vels[i * 3] * delta; 
                 posArr[i * 3 + 1] += vels[i * 3 + 1] * delta; 
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta;
@@ -463,14 +497,18 @@ export default function MindARViewer() {
             }
             particlesRef.current.geometry.attributes.position.needsUpdate = true;
 
-            // 【修正ポイント】cyberエフェクトがフェードアウトするのを防ぎ、常時表示する
             if (isSpawningRef.current) {
               if (mat.opacity < 0.9) mat.opacity += delta * 2.0;
             } else {
-              mat.opacity = 0.8; // 環境エフェクト、デフォルトに関わらず可視状態を維持
+              if (["sakura", "snow", "rain"].includes(currentEffect)) {
+                mat.opacity = 0.75; // 環境エフェクト時は常時維持
+              } else if (mat.opacity > 0) {
+                mat.opacity -= delta * 1.2;
+              }
             }
           }
 
+          // リップシンク処理
           const audioInstance = audioInstanceRef.current;
           if (audioInstance && !audioInstance.paused && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
@@ -487,6 +525,7 @@ export default function MindARViewer() {
         });
 
       } catch (initError: any) {
+        console.error("MindAR起動失敗:", initError);
         setSubtitle(`システム初期化エラー: ${initError?.message || String(initError)}`);
       }
     };
@@ -583,6 +622,7 @@ export default function MindARViewer() {
         const data = await response.json();
         if (inputRef.current) inputRef.current.value = "";
         
+        // HTTP応答からエフェクト指令を取り出して物理エンジンに即時同期
         if (data.spatial_effect) {
           setSpatialEffect(data.spatial_effect);
           currentEffectRef.current = data.spatial_effect;
@@ -623,6 +663,7 @@ export default function MindARViewer() {
 
   return (
     <>
+      {/* 💥 レイヤー不透過バグをCSSでも徹底破壊 */}
       <style dangerouslySetInnerHTML={{ __html: `
         .mindar-full-container video {
           width: 100vw !important; height: 100vh !important; object-fit: cover !important;
@@ -638,9 +679,12 @@ export default function MindARViewer() {
         .animate-cyber-scan { animation: cyber-scan 1.5s infinite linear; }
       `}} />
 
+      {/* コンテナ自体は完全に透過。背景黒を撤廃 */}
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1 }} />
 
+      {/* UIコンソールレイヤー(z-50)で描画キャンバスの前面に固定 */}
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
+        {/* 上部ヘッダーエリア */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
           <div className="flex flex-col gap-0.5">
             <span className="text-[10px] text-purple-400 font-bold tracking-widest">OBSERVATION SYSTEM v3.5</span>
@@ -666,7 +710,9 @@ export default function MindARViewer() {
           </div>
         </div>
 
+        {/* 下部 UI エリア */}
         <div className="w-full space-y-3 pointer-events-auto mb-4 max-w-2xl mx-auto">
+          {/* 字幕ボード */}
           <div className="relative bg-black/75 backdrop-blur-xl p-5 rounded-xl text-white min-h-[85px] flex flex-col items-center justify-center border border-purple-500/20 shadow-[0_4px_20px_rgba(0,0,0,0.6)] overflow-hidden">
             {aiStatus === "thinking" && (
               <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-purple-500 overflow-hidden">
@@ -680,6 +726,7 @@ export default function MindARViewer() {
             <p className="text-sm font-medium leading-relaxed text-center px-2 mt-1 whitespace-pre-line">{subtitle}</p>
           </div>
 
+          {/* 入力コンソールフォーム */}
           <form onSubmit={handleSendMessage} className="flex gap-2">
             <button
               type="button"
@@ -721,6 +768,7 @@ export default function MindARViewer() {
         </div>
       </div>
 
+      {/* バックログ履歴モーダル */}
       {isHistoryOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-6 font-mono text-white pointer-events-auto">
           <div className="flex justify-between items-center border-b border-purple-500/30 pb-3 mb-4">
