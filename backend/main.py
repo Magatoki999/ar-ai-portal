@@ -4,7 +4,7 @@ import base64
 import re
 import json
 import random
-import asyncio  # 💡 geopyを非同期イベントループで動かすために追加
+import asyncio
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -13,30 +13,22 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
 
-# LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.tools import tool  # 💡 明示的なツール定義のために追加
+from langchain_core.tools import tool
 
-# APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# 💡 位置情報（逆ジオコーディング）用ライブラリ
 from geopy.geocoders import Nominatim
-
-# 🧠 思考調停ルーターのインポート
 from agents.router import analyze_and_route
 
-# 環境変数の読み込み
 load_dotenv()
 
-# ─── グローバル変数・共通インスタンスの初期化 ───
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
-# LLMの初期化
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.8,
@@ -44,42 +36,32 @@ llm = ChatOpenAI(
 )
 search_tool = TavilySearchResults(max_results=2)
 
-
-# 💡 ─── 【コア機能】geopyによる逆ジオコーディングのツール化 ───
 def _sync_reverse_geocode(lat: float, lng: float) -> str:
-    """geopyの同期処理を行う内部関数"""
     try:
         geolocator = Nominatim(user_agent="magatokilab_rukiruki_gateway")
         location = geolocator.reverse((lat, lng), timeout=4, language="ja")
         if location and "address" in location.raw:
             addr = location.raw["address"]
             city = addr.get("city", addr.get("town", addr.get("village", addr.get("province", ""))))
-            suburb = addr.get("suburb", "")  # 区など
-            neighbourhood = addr.get("neighbourhood", "")  # 町名など
-            attraction = addr.get("attraction", addr.get("historic", addr.get("tourism", "")))  # 有名施設・史跡名など
-            
+            suburb = addr.get("suburb", "")
+            neighbourhood = addr.get("neighbourhood", "")
+            attraction = addr.get("attraction", addr.get("historic", addr.get("tourism", "")))
             return f"{city} {suburb} {neighbourhood} {attraction}".strip()
     except Exception as e:
         print(f"[GPS逆変換エラー] 住所の動的変換に失敗しました: {e}")
     return ""
 
 async def fetch_street_address(lat: float, lng: float) -> str:
-    """緯度経度から実際の物理住所・周辺施設を抽出する非同期ラッパーヘルパー"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _sync_reverse_geocode, lat, lng)
 
 @tool
 async def locate_current_position(lat: float, lng: float) -> str:
-    """教授の現在の緯度・経度（lat, lng）から、実際の物理住所や周辺の有名なスポット・施設名を逆ジオコーディングで特定して返すツールです。
-    教授から『今どこにいる？』『現在地を教えて』『場所を特定して』など、直接場所の特定を求められた場合に、システムプロンプトに提示されている現在の座標値（緯度・経度）を引数に渡して呼び出してください。"""
+    """教授の現在の緯度・経度（lat, lng）から、実際の物理住所や周辺の有名なスポット・施設名を逆ジオコーディングで特定して返すツールです。"""
     return await fetch_street_address(lat, lng)
 
-
-# 💡 ネット検索と位置特定ツールの2つをルキルキの脳にバインド
 llm_with_tools = llm.bind_tools([search_tool, locate_current_position])
 
-
-# 💡 【最高精度版】座標と実住所のハイブリッド型クエリ最適化プロンプト
 query_refine_prompt = ChatPromptTemplate.from_template(
     "あなたは検索クエリ最適化の専門家です。ユーザーの要望、現在の正確なGPS座標、および"
     "逆ジオコーディングによって得られた実際の住所情報から、そのエリアの空間的文脈（繁華街、自然、周辺スポットなど）を高度に咀嚼し、"
@@ -91,8 +73,6 @@ query_refine_prompt = ChatPromptTemplate.from_template(
     "最適化された検索キーワード:"
 )
 
-
-# 🌐 ─── WebSocket 接続管理クラス（リアルタイム同期用） ───
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -106,7 +86,6 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        """接続されているすべてのフロントエンドに状態を即時ブロードキャスト"""
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
@@ -114,9 +93,6 @@ class ConnectionManager:
                 pass
 
 manager = ConnectionManager()
-
-
-# ─── バックグラウンドタスク（情報調査部）の設定 ───
 scheduler = AsyncIOScheduler()
 
 def load_research_keywords() -> dict:
@@ -159,7 +135,6 @@ async def auto_research_job():
     print("─── [脳内情報調査部] クローリング・リサーチを開始します ───")
     keywords_dict = load_research_keywords()
     if not keywords_dict:
-        print("[脳内リサーチ] keywords.json が空、または存在しません。スキップします。")
         return
 
     category = random.choice(list(keywords_dict.keys()))
@@ -206,8 +181,6 @@ async def auto_research_job():
     except Exception as e:
         print(f"[脳内リサーチ] リサーチプロセスでエラーが発生しました: {e}")
 
-
-# ─── FastAPI ライフサイクル管理（lifespan） ───
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(auto_research_job, 'interval', minutes=15)
@@ -217,13 +190,11 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     print("─── [APScheduler] スケジューラを停止しました ───")
 
-
 app = FastAPI(
     title="MagatokiLab RukiRuki XR Gateway [Production v5 - Hybrid Location Synced]",
     lifespan=lifespan
 )
 
-# CORS設定
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
@@ -235,7 +206,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 def load_rukiruki_persona() -> str:
     persona_path = "rukiruki_persona.md"
@@ -250,14 +220,12 @@ def load_rukiruki_persona() -> str:
         "まがとき教授の教え子として、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
     )
 
-
 def load_magatoki_context() -> str:
     combined_context = ""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     context_dir = os.path.join(base_dir, "context")
     
     if not os.path.exists(context_dir):
-        print(f"⚠️ Warning: context folder not found at {context_dir}")
         return combined_context
 
     for root, dirs, files in os.walk(context_dir):
@@ -274,11 +242,8 @@ def load_magatoki_context() -> str:
                     
     return combined_context
 
-# サーバー起動時にキャッシュ
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
-
-# Pydanticスキーマ定義
 class HistoryItem(BaseModel):
     role: str       
     text: str       
@@ -292,8 +257,6 @@ class ChatMessage(BaseModel):
     longitude: float | None = None  
     history: list[HistoryItem] | None = None  
 
-
-# エリア判定（従来のフォールバック・ログ出力用として残存）
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
         return "【烏丸二条セクター】"
@@ -305,8 +268,6 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
         return "【Magatoki開発ベースセクター】"
     return "【未知の観測セクター】"
 
-
-# Supabase ヘルパー群
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
@@ -385,12 +346,9 @@ async def mark_memos_as_consumed(memo_ids: list):
             url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id}"
             try:
                 await client.patch(url, json={"is_consumed": True}, headers=headers, timeout=5.0)
-                print(f"[脳内同期] レポート(ID: {memo_id}) の消費フラグをTRUEに更新しました。")
             except Exception as e:
                 print(f"Error updating memo status for ID {memo_id}: {e}")
 
-
-# 音声合成ヘルパー
 async def generate_openai_tts(text: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key: return None
@@ -422,12 +380,9 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
         print(f"ElevenLabs error: {e}")
     return None
 
-
-# ─── HTTP エンドポイント定義 ───
 @app.get("/")
 def read_root():
     return {"status": "healthy", "message": "RukiRuki Multi-Agent Dynamic Gateway Online"}
-
 
 @app.post("/api/test/research")
 async def trigger_research_manually():
@@ -437,7 +392,6 @@ async def trigger_research_manually():
     except Exception as e:
         return {"status": "failed", "error": str(e)}
 
-
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
     user_text = payload.message
@@ -446,19 +400,18 @@ async def chat_endpoint(payload: ChatMessage):
     lat = payload.latitude
     lng = payload.longitude
 
-    # 对話が始まったらアバターのステータスを「thinking」に即時同期
     await manager.broadcast({"type": "status", "status": "thinking"})
 
     base_persona = load_rukiruki_persona()
 
+    # 【修正ポイント】特定オブジェクト除外の制約を「絶対禁止」に強化
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
         "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキストだけで自己完結して回答できる場合は、絶対に検索ツールを起動しないでください。\n"
         "   - 教授から「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクト除外:\n"
-        "   - 送信されたカメラ映像を解析する際、画面内に映り込んでいる『ルキルキのカード』やXRシステムの各種UIオーバーレイは完全に無視（除外）してください。\n"
-        "   - カードの背景や周囲に存在する「現実世界の風景、実体のある物体、お香などのクラフトアイテム」についてのみフォーカスを当ててください。\n"
+        "   - 【絶対禁止】カメラ映像に映り込んでいる『ルキルキのARカード』『物理マーカー』『UIオーバーレイ』については一切言及しないでください。カードやマーカーが存在することは完全に無視し、背景の現実世界にのみフォーカスしてください。\n"
         "3. リンク（URL）の出力完全禁止:\n"
         "   - 教授への応答テキスト内には絶対にURLやソースリンク（httpやhttps）を含めないでください。\n\n"
     )
@@ -541,12 +494,10 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             response = await llm_with_tools.ainvoke(messages)
         
-        # ─── 🛠️ ツール呼び出し（外部検索 ＆ 位置特定）のインターセプト ───
         if response.tool_calls:
-            messages.append(response)  # 💡 ツール要求メッセージを履歴に追加
+            messages.append(response) 
             
             for tool_call in response.tool_calls:
-                # 分岐1: ネット検索（Tavily）が呼ばれた場合
                 if tool_call["name"] == "tavily_search_results_json":
                     base_query = tool_call["args"].get("query")
                     
@@ -571,7 +522,6 @@ async def chat_endpoint(payload: ChatMessage):
                     search_results = await search_tool.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
                 
-                # 分岐2: 💡 位置特定ツール（locate_current_position）が直接呼ばれた場合
                 elif tool_call["name"] == "locate_current_position":
                     t_lat = tool_call["args"].get("lat", lat)
                     t_lng = tool_call["args"].get("lng", lng)
@@ -583,7 +533,6 @@ async def chat_endpoint(payload: ChatMessage):
                     
                     messages.append(ToolMessage(content=str(address_result), tool_call_id=tool_call["id"]))
             
-            # すべてのツール実行結果を反映させて、ルキルキの最終回答を再生成
             response = await llm_with_tools.ainvoke(messages)
 
         ai_response = response.content
@@ -597,7 +546,6 @@ async def chat_endpoint(payload: ChatMessage):
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
 
-        # AIの返答テキストが確定したら、喋り出す前に「talking」に状態を変更
         await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
@@ -614,7 +562,6 @@ async def chat_endpoint(payload: ChatMessage):
         ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、教授？"
         audio_base64 = None
 
-    # すべて終わったら「idle（待機状態）」に戻す
     await manager.broadcast({"type": "status", "status": "idle"})
 
     return {
@@ -623,13 +570,8 @@ async def chat_endpoint(payload: ChatMessage):
         "status": "success"
     }
 
-
-# ⚡ ─── WebSocket エンドポイント定義（403拒否の完全対策） ───
 @app.websocket("/ws/avatar")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    フロントエンド（MindARViewer.tsx）からの常時同期リンクを受け止めるエンドポイント
-    """
     await manager.connect(websocket)
     print(f"[WebSocket] 教授のデバイスがアバター同期リンクに接続しました。")
     try:
