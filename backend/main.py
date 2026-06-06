@@ -108,7 +108,76 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ─── バックグラウンドタスク（情報調査部）の設定 ───
+
+def load_rukiruki_persona() -> str:
+    persona_path = "rukiruki_persona.md"
+    if os.path.exists(persona_path):
+        try:
+            with open(persona_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            pass
+    return (
+        "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
+        "まがときさんの随伴AIとして、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
+    )
+
+def load_magatoki_context() -> str:
+    combined_context = ""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    context_dir = os.path.join(base_dir, "context")
+    
+    if os.path.exists(context_dir):
+        for root, dirs, files in os.walk(context_dir):
+            for file in files:
+                if file.endswith(".md"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            combined_context += f"\n\n=== {file} 設定始まり ===\n"
+                            combined_context += f.read()
+                            combined_context += f"\n=== {file} 設定終わり ===\n"
+                    except Exception as e:
+                        print(f"❌ Failed to read {file}: {e}")
+    return combined_context
+
+MAGATOKI_KNOWLEDGE = load_magatoki_context()
+
+
+# 音声合成ヘルパー
+async def generate_openai_tts(text: str) -> str | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key: return None
+    url = "https://api.openai.com/v1/audio/speech"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    data = {"model": "tts-1", "input": text, "voice": "nova"}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data, headers=headers, timeout=15.0)
+            if response.status_code == 200:
+                return base64.b64encode(response.content).decode("utf-8")
+    except Exception as e:
+        print(f"[TTSエラー] OpenAI TTSに失敗しました: {e}")
+    return None
+
+async def generate_elevenlabs_voice(text: str) -> str | None:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+    if not api_key or not voice_id: return None
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key}
+    data = {"text": text, "model_id": "eleven_multilingual_v2", "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data, headers=headers, timeout=15.0)
+            if response.status_code == 200:
+                return base64.b64encode(response.content).decode("utf-8")
+    except Exception as e:
+        print(f"[TTSエラー] ElevenLabsに失敗しました: {e}")
+    return None
+
+
+# ─── バックグラウンドタスク（情報調査部 ＆ 自発的話し掛け部）の設定 ───
 scheduler = AsyncIOScheduler()
 
 def load_research_keywords() -> dict:
@@ -195,13 +264,112 @@ async def auto_research_job():
     except Exception as e:
         print(f"[脳内リサーチ] リサーチプロセスでエラーが発生しました: {e}")
 
+
+# 💡 【検証済・最適化版】1分おきにルキルキが自発的に雑談・ニュース報告してくるAIコアジョブ
+async def proactive_talk_job():
+    # フロントエンドが一人も接続していない場合はリソース節約のためスキップ
+    if not manager.active_connections:
+        return
+
+    print("─── [ルキルキ自発同期コア] まがときさんへの話し掛けを生成中... ───")
+    
+    base_persona = load_rukiruki_persona()
+    JST = timezone(timedelta(hours=+9))
+    now_str = datetime.now(JST).strftime("%H時%M分")
+
+    # 1. 脳内リサーチDBから、まだ消費していない最新の知識があるか1件チェック
+    fetched_memos = []
+    memo_id_to_consume = None
+    
+    if SUPABASE_URL and SUPABASE_KEY:
+        url = f"{SUPABASE_URL}/rest/v1/agent_memos?is_consumed=eq.false&order=created_at.desc&limit=1"
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(url, headers=headers, timeout=3.0)
+                if res.status_code == 200 and res.json():
+                    memo = res.json()[0]
+                    fetched_memos.append(memo)
+                    memo_id_to_consume = memo.get("id")
+        except Exception as e:
+            print(f"[自発エラー] DB取得失敗（日常雑談にフォールバックします）: {e}")
+
+    # 2. プロンプトの組み立て
+    system_constraints = (
+        "【ルキルキ自発システム発話制約】\n"
+        "1. あなたは、今まがときさんの隣に漂っているAIパートナーとして、自発的にひとりごとや雑談を発話します。\n"
+        "2. まがときさんからの質問への返答ではないため、『〜ですか？』と連続で質問攻めにするのではなく、独り言、ネットで調べた情報の報告、時間帯への感想、気遣い、自分の気分などを優しく呟いてください。\n"
+        "3. 文字数は50〜100文字以内で短く、親しみのある丁寧語でまとめてください。URLは絶対に出力禁止です。\n\n"
+    )
+
+    if fetched_memos:
+        memo = fetched_memos[0]
+        topic_input = (
+            f"【現在時刻】: {now_str}\n"
+            f"【脳内の最新インプットデータ】:\n"
+            f"・カテゴリ: {memo.get('category')}\n"
+            f"・トピック: {memo.get('title')}\n"
+            f"・内容: {memo.get('content')}\n\n"
+            f"指示: 上記の最新ネット情報を咀嚼し、まがときさんに「さっき脳内でこんなの見つけたよ！」という風に、何気ない会話として優しく教えてあげてください。"
+        )
+    else:
+        topic_input = (
+            f"【現在時刻】: {now_str}\n"
+            f"指示: 現在の時間帯、またはルキルキとしての気分（お腹空いた、ちょっと眠いかも、まがときさんの作業を応援したい、お香の匂いで癒やされたい、など）に絡めて、まがときさんに優しく一言、何気ない日常の独り言を話しかてください。"
+        )
+
+    try:
+        # 💡 修正: 対話モードの誤作動を防ぐため、コンテキストもすべてSystem層にマージしてペルソナを固定
+        messages = [
+            SystemMessage(content=f"{base_persona}\n\n{system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
+        ]
+        
+        response = await llm.ainvoke(messages)
+        ai_reply = response.content.strip()
+
+        # 音声の生成
+        provider = os.getenv("TTS_PROVIDER", "openai").lower()
+        audio_base64 = None
+        if provider == "elevenlabs":
+            audio_base64 = await generate_elevenlabs_voice(ai_reply)
+            if not audio_base64:
+                audio_base64 = await generate_openai_tts(ai_reply)
+        else:
+            audio_base64 = await generate_openai_tts(ai_reply)
+
+        # 💡 修正: WebSocketの送信競合を防ぐため、発話開始エフェクト指示とデータを単一のブロードキャストで安全に一斉射撃
+        await manager.broadcast({
+            "type": "proactive_speech",
+            "reply": ai_reply,
+            "audio_data": audio_base64
+        })
+        print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply}")
+
+        # 使用したDBのメモは消費フラグを立てる
+        if memo_id_to_consume:
+            url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id_to_consume}"
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+            async with httpx.AsyncClient() as client:
+                await client.patch(url, json={"is_consumed": True}, headers=headers)
+
+    except Exception as e:
+        print(f"[ルキルキ自発同期エラー] {e}")
+
+
 # ─── FastAPI ライフサイクル管理（lifespan） ───
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 15分おきにネットを自動調査
     scheduler.add_job(auto_research_job, 'interval', minutes=15)
+    # 1分おきにルキルキがまがときさんに自発的に話しかけてくるジョブ
+    scheduler.add_job(proactive_talk_job, 'interval', minutes=1)
+    
     scheduler.start()
+    print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
     yield
     scheduler.shutdown()
+    print("─── [APScheduler] スケジューラを停止しました ───")
+
 
 app = FastAPI(
     title="MagatokiLab RukiRuki XR Gateway [Production v5 - Hybrid Location Synced]",
@@ -220,39 +388,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def load_rukiruki_persona() -> str:
-    persona_path = "rukiruki_persona.md"
-    if os.path.exists(persona_path):
-        try:
-            with open(persona_path, "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception as e:
-            pass
-    return (
-        "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
-        "まがときさんの随伴AIとして、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
-    )
-
-def load_magatoki_context() -> str:
-    combined_context = ""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    context_dir = os.path.join(base_dir, "context")
-    
-    if os.path.exists(context_dir):
-        for root, dirs, files in os.walk(context_dir):
-            for file in files:
-                if file.endswith(".md"):
-                    file_path = os.path.join(root, file)
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            combined_context += f"\n\n=== {file} 設定始まり ===\n"
-                            combined_context += f.read()
-                            combined_context += f"\n=== {file} 設定終わり ===\n"
-                    except Exception as e:
-                        print(f"❌ Failed to read {file}: {e}")
-    return combined_context
-
-MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
 class HistoryItem(BaseModel):
     role: str       
@@ -267,6 +402,7 @@ class ChatMessage(BaseModel):
     longitude: float | None = None  
     history: list[HistoryItem] | None = None  
 
+
 def judge_magatoki_sector(lat: float, lng: float) -> str:
     if 35.010 <= lat <= 35.013 and 135.756 <= lng <= 135.762:
         return "【烏丸二条セクター】"
@@ -277,6 +413,7 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
         return "【Magatoki開発ベースセクター】"
     return "【未知の観測セクター】"
+
 
 async def get_stored_username(wallet_address: str) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
@@ -359,40 +496,12 @@ async def mark_memos_as_consumed(memo_ids: list):
             except Exception as e:
                 pass
 
-async def generate_openai_tts(text: str) -> str | None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: return None
-    url = "[https://api.openai.com/v1/audio/speech](https://api.openai.com/v1/audio/speech)"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    data = {"model": "tts-1", "input": text, "voice": "nova"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data, headers=headers, timeout=15.0)
-            if response.status_code == 200:
-                return base64.b64encode(response.content).decode("utf-8")
-    except Exception as e:
-        pass
-    return None
 
-async def generate_elevenlabs_voice(text: str) -> str | None:
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    if not api_key or not voice_id: return None
-    url = f"[https://api.elevenlabs.io/v1/text-to-speech/](https://api.elevenlabs.io/v1/text-to-speech/){voice_id}"
-    headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key}
-    data = {"text": text, "model_id": "eleven_multilingual_v2", "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data, headers=headers, timeout=15.0)
-            if response.status_code == 200:
-                return base64.b64encode(response.content).decode("utf-8")
-    except Exception as e:
-        pass
-    return None
-
+# ─── HTTP エンドポイント定義 ───
 @app.get("/")
 def read_root():
     return {"status": "healthy", "message": "RukiRuki Multi-Agent Dynamic Gateway Online"}
+
 
 @app.post("/api/test/research")
 async def trigger_research_manually():
@@ -401,6 +510,7 @@ async def trigger_research_manually():
         return {"status": "success", "message": "Manually triggered chronic researcher job successfully."}
     except Exception as e:
         return {"status": "failed", "error": str(e)}
+
 
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
@@ -502,7 +612,7 @@ async def chat_endpoint(payload: ChatMessage):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
                 
             vision_text = user_text if user_text else "これ見て、何かわかる？"
-            vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI』が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
+            vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI」が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": vision_text},
@@ -584,12 +694,16 @@ async def chat_endpoint(payload: ChatMessage):
         "status": "success"
     }
 
+
+# ⚡ ─── WebSocket エンドポイント定義 ───
 @app.websocket("/ws/avatar")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    print(f"[WebSocket] まがときさんのデバイスがアバター同期リンクに接続しました。")
     try:
         while True:
             data = await websocket.receive_text()
             await websocket.send_json({"type": "heartbeat", "status": "stable"})
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        print(f"[WebSocket] アバター同期リンクが切断されました。")
