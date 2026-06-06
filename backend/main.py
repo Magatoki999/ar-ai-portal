@@ -67,8 +67,8 @@ async def fetch_street_address(lat: float, lng: float) -> str:
 
 @tool
 async def locate_current_position(lat: float, lng: float) -> str:
-    """教授の現在の緯度・経度（lat, lng）から、実際の物理住所や周辺の有名なスポット・施設名を逆ジオコーディングで特定して返すツールです。
-    教授から『今どこにいる？』『現在地を教えて』『場所を特定して』など、直接場所の特定を求められた場合に、システムプロンプトに提示されている現在の座標値（緯度・経度）を引数に渡して呼び出してください。"""
+    """まがときさんの現在の緯度・経度（lat, lng）から、実際の物理住所や周辺の有名なスポット・施設名を逆ジオコーディングで特定して返すツールです。
+    まがときさんから『今どこにいる？』『現在地を教えて』『場所を特定して』など、直接場所の特定を求められた場合に、システムプロンプトに提示されている現在の座標値（緯度・経度）を引数に渡して呼び出してください。"""
     return await fetch_street_address(lat, lng)
 
 # ネット検索と位置特定ツールの2つをルキルキの脳にバインド
@@ -77,7 +77,7 @@ llm_with_tools = llm.bind_tools([search_tool, locate_current_position])
 # 【最高精度版】座標と実住所のハイブリッド型クエリ最適化プロンプト
 query_refine_prompt = ChatPromptTemplate.from_template(
     "あなたは検索クエリ最適化の専門家です。ユーザーの要望、現在の正確なGPS座標、および"
-    "逆ジオコーディングによって得られた実際の住所情報から、そのエリアの空間的文脈（繁華街、自然、周辺スポットなど）を高度に咀嚼し、"
+    "逆ジオコーディングによって得られた実際の住所情報から、そのエリアの空間的文メントを高度に咀嚼し、"
     "検索エンジン（Tavily）で最も的確なローカル情報がヒットする検索キーワード（3語程度、スペース区切り）のみを出力してください。\n"
     "余計な解説、挨拶、文章、引用符（\"\"）は一切含めず、キーワードの羅列だけを返してください。\n\n"
     "【現在の観測座標】: 緯度 {lat} / 経度 {lng}\n"
@@ -230,7 +230,7 @@ def load_rukiruki_persona() -> str:
             pass
     return (
         "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
-        "まがとき教授の教え子として、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
+        "まがときさんの随伴AIとして、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
     )
 
 def load_magatoki_context() -> str:
@@ -414,19 +414,18 @@ async def chat_endpoint(payload: ChatMessage):
 
     base_persona = load_rukiruki_persona()
 
-    # 💡 修正2: プロンプト制約を厳格化。ARカードの除外と、DB知識の最優先使用を明記
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
         "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキストだけで自己完結して回答できる場合は、絶対に検索ツールを起動しないでください。\n"
-        "   - 教授から「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+        "   - まがときさんから「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクトの【完全除外】:\n"
         "   - 画面内に映り込んでいる『ARマーカー』『ルキルキのカード』『システムUI』等は【絶対に無視】してください。これらに言及することは固く禁じます。\n"
         "   - 上記のカードやマーカー以外の「現実の風景」「物体」「人物」などについてのみフォーカスを当ててください。\n"
         "3. バックグラウンドDB情報の最優先活用:\n"
         "   - 【🧠 バックグラウンド思考層からのリアルタイム共有知識】がプロンプトに含まれている場合、それは裏でDBから取得した最新情報です。ユーザーへの回答においてはこの情報を【最優先】で組み込んで答えてください。\n"
         "4. リンク（URL）の出力完全禁止:\n"
-        "   - 教授への応答テキスト内には絶対にURLやソースリンク（httpやhttps）を含めないでください。\n\n"
+        "   - まがときさんへの応答テキスト内には絶対にURLやソースリンク（httpやhttps）を含めないでください。\n\n"
     )
 
     JST = timezone(timedelta(hours=+9))
@@ -461,7 +460,6 @@ async def chat_endpoint(payload: ChatMessage):
     memo_context = ""
     active_memo_ids = []
     
-    # 💡 修正1: ルーターの判定に関わらず、常に「chronicle(最新のDB調査情報)」を検索対象に含める
     agents_to_fetch = list(set(router_res.selected_agents + ["chronicle"]))
     
     if agents_to_fetch:
@@ -476,12 +474,12 @@ async def chat_endpoint(payload: ChatMessage):
 
     if wallet_address:
         if stored_name:
-            identity_context = f"【対話コンテキスト】\n対話相手は、あなたの最高の相棒である『{stored_name}』教授です。"
+            identity_context = f"【対話コンテキスト】\n対話相手は、あなたの最高の相棒である『{stored_name}』さんです。"
         else:
             short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-            identity_context = f"【対話コンテキスト】\nウォレット（{short_addr}）が接続されました。教授の呼び名を聞いてみてください。"
+            identity_context = f"【対話コンテキスト】\nウォレット（{short_addr}）が接続されました。まがときさんの呼び名を聞いてみてください。"
     else:
-        identity_context = "【対話コンテキスト】\nまだウォレット接続が確認できていません。認証を通すよう教授に促してください。"
+        identity_context = "【対話コンテキスト】\nまだウォレット接続が確認できていません。認証を通すようまがときさんに促してください。"
 
     world_context = f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
     dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{time_context}{location_context}{memo_context}{identity_context}"
@@ -503,9 +501,8 @@ async def chat_endpoint(payload: ChatMessage):
             if not image_base64.startswith("data:image/"):
                 image_base64 = f"data:image/jpeg;base64,{image_base64}"
                 
-            # 💡 修正4: Visionモデル特有の「ネガティブプロンプト無視」対策として、画像添付時に直接強力な指示を付与
             vision_text = user_text if user_text else "これ見て、何かわかる？"
-            vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI」が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
+            vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI』が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": vision_text},
@@ -514,7 +511,6 @@ async def chat_endpoint(payload: ChatMessage):
         else:
             messages.append(HumanMessage(content=user_text if user_text else ""))
 
-        # 💡 修正3: memo_contextの有無に関わらず、常にllm_with_toolsを使用する（ツール機能を喪失させないため）
         response = await llm_with_tools.ainvoke(messages)
         
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -577,7 +573,7 @@ async def chat_endpoint(payload: ChatMessage):
 
     except Exception as e:
         print(f"LLM/Vision/Search Error: {e}")
-        ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、教授？"
+        ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、まがときさん？"
         audio_base64 = None
 
     await manager.broadcast({"type": "status", "status": "idle"})

@@ -176,7 +176,6 @@ export default function MindARViewer() {
         try {
           const data = JSON.parse(event.data);
           
-          // 空間エフェクト指示のリアルタイムハッキング
           if (data.spatial_effect) {
             setSpatialEffect(data.spatial_effect);
             currentEffectRef.current = data.spatial_effect;
@@ -271,7 +270,6 @@ export default function MindARViewer() {
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0; 
 
-        // 🔥【超重要】カメラ映像透過バグの修正。クリアアルファを0にして透過
         renderer.setClearColor(0x000000, 0);
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
@@ -283,8 +281,7 @@ export default function MindARViewer() {
 
         const anchor = mindarThree.addAnchor(0);
 
-        // クチュール・パーティクルジオメトリ生成
-        const particleCount = 120; // 密度を少し強化
+        const particleCount = 120; 
         const particleGeometry = new THREE.BufferGeometry();
         const particlePositions = new Float32Array(particleCount * 3);
         const particleVelocities = new Float32Array(particleCount * 3);
@@ -439,7 +436,6 @@ export default function MindARViewer() {
             avatarSceneRef.current.position.y = Math.sin(elapsedTime * 1.8) * 0.012;
           }
 
-          // まばたき制御
           if (blinkTargetsRef.current.length > 0) {
             blinkTimer += delta;
             if (!isBlinking && blinkTimer >= nextBlinkTime) { isBlinking = true; blinkTimer = 0; }
@@ -454,41 +450,35 @@ export default function MindARViewer() {
             }
           }
 
-          // 🔮【新設】環境適応型パーティクル物理シミュレーションループ
           if (particlesRef.current && particleVelocitiesRef.current) {
             const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
             const vels = particleVelocitiesRef.current;
             const currentEffect = currentEffectRef.current;
             const mat = particlesRef.current.material as any;
 
-            // 情緒パラメータに合わせたマテリアルカラー変更
-            if (currentEffect === "sakura") mat.color.setHex(0xfbcfe8);      // 桜：薄桃
-            else if (currentEffect === "snow") mat.color.setHex(0xffffff);  // 雪：純白
-            else if (currentEffect === "rain") mat.color.setHex(0x3b82f6);  // 雨：蒼
-            else mat.color.setHex(0x8b5cf6);                                // デフォルト：サイバー紫
+            if (currentEffect === "sakura") mat.color.setHex(0xfbcfe8);      
+            else if (currentEffect === "snow") mat.color.setHex(0xffffff);  
+            else if (currentEffect === "rain") mat.color.setHex(0x3b82f6);  
+            else mat.color.setHex(0x8b5cf6);                                
 
             for (let i = 0; i < particleCount; i++) {
               if (currentEffect === "sakura") {
-                // ひらひらと斜めに舞い散る風の動き
                 posArr[i * 3] += vels[i * 3] * delta * 0.4 + Math.sin(elapsedTime + i) * 0.002;
                 posArr[i * 3 + 1] -= Math.abs(vels[i * 3 + 1]) * delta * 0.3;
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta * 0.4 + Math.cos(elapsedTime + i) * 0.002;
                 if (posArr[i * 3 + 1] < -0.4) posArr[i * 3 + 1] = 0.4;
               } else if (currentEffect === "snow") {
-                // 静かに垂直降下
                 posArr[i * 3] += vels[i * 3] * delta * 0.1;
                 posArr[i * 3 + 1] -= 0.12 * delta;
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta * 0.1;
                 if (posArr[i * 3 + 1] < -0.4) posArr[i * 3 + 1] = 0.4;
               } else if (currentEffect === "rain") {
-                // 高速で地面へ突き刺さる
                 posArr[i * 3 + 1] -= 1.9 * delta;
                 if (posArr[i * 3 + 1] < -0.4) {
                   posArr[i * 3 + 1] = 0.4;
                   posArr[i * 3] = (Math.random() - 0.5) * 0.3;
                 }
               } else {
-                // 通常サイバー：下から湧き上がるホログラム粒子
                 posArr[i * 3] += vels[i * 3] * delta; 
                 posArr[i * 3 + 1] += vels[i * 3 + 1] * delta; 
                 posArr[i * 3 + 2] += vels[i * 3 + 2] * delta;
@@ -501,14 +491,13 @@ export default function MindARViewer() {
               if (mat.opacity < 0.9) mat.opacity += delta * 2.0;
             } else {
               if (["sakura", "snow", "rain"].includes(currentEffect)) {
-                mat.opacity = 0.75; // 環境エフェクト時は常時維持
+                mat.opacity = 0.75; 
               } else if (mat.opacity > 0) {
                 mat.opacity -= delta * 1.2;
               }
             }
           }
 
-          // リップシンク処理
           const audioInstance = audioInstanceRef.current;
           if (audioInstance && !audioInstance.paused && analyserRef.current && freqDataRef.current && mouthTargetsRef.current.length > 0) {
             analyserRef.current.getByteFrequencyData(freqDataRef.current);
@@ -538,13 +527,18 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 💡 修正箇所: GPS精度向上のためにチューニング（timeoutの延長とキャッシュの厳格な完全拒否）
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) { resolve(null); return; }
       navigator.geolocation.getCurrentPosition(
         (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
         () => resolve(null),
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        { 
+          enableHighAccuracy: true, // ⚡真のGPSチップを強制起動
+          timeout: 10000,           // ⚡同期時間を10秒に引き伸ばして衛星補正の猶予を確保
+          maximumAge: 0             // ⚡キャッシュされた古い座標を完全に弾く
+        }
       );
     });
   };
@@ -622,7 +616,6 @@ export default function MindARViewer() {
         const data = await response.json();
         if (inputRef.current) inputRef.current.value = "";
         
-        // HTTP応答からエフェクト指令を取り出して物理エンジンに即時同期
         if (data.spatial_effect) {
           setSpatialEffect(data.spatial_effect);
           currentEffectRef.current = data.spatial_effect;
@@ -663,7 +656,6 @@ export default function MindARViewer() {
 
   return (
     <>
-      {/* 💥 レイヤー不透過バグをCSSでも徹底破壊 */}
       <style dangerouslySetInnerHTML={{ __html: `
         .mindar-full-container video {
           width: 100vw !important; height: 100vh !important; object-fit: cover !important;
@@ -679,10 +671,8 @@ export default function MindARViewer() {
         .animate-cyber-scan { animation: cyber-scan 1.5s infinite linear; }
       `}} />
 
-      {/* コンテナ自体は完全に透過。背景黒を撤廃 */}
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1 }} />
 
-      {/* UIコンソールレイヤー(z-50)で描画キャンバスの前面に固定 */}
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         {/* 上部ヘッダーエリア */}
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
@@ -742,6 +732,7 @@ export default function MindARViewer() {
             </button>
 
             <div className="relative flex-1 flex items-center">
+              {/* 💡 修正箇所: プレースホルダーの「まがとき教授」を「まがときさん」へ変更 */}
               <input 
                 ref={inputRef}
                 type="text" 
@@ -750,7 +741,7 @@ export default function MindARViewer() {
                 placeholder={
                   !isTargetFound 
                     ? "::: ターゲットを見失っています :::" 
-                    : isListening ? "::: 空間音響データをスキャン中 :::" : "まがとき教授、ルキルキへコマンドを入力..."
+                    : isListening ? "::: 空間音響データをスキャン中 :::" : "まがときさん、ルキルキへコマンドを入力..."
                 } 
                 className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
               />
@@ -800,8 +791,9 @@ export default function MindARViewer() {
                   }`}
                 >
                   <div className="flex justify-between items-center mb-1.5 text-[10px] font-bold">
+                    {/* 💡 修正箇所: ログ内表示の「まがとき教授」を「まがときさん」へ変更 */}
                     <span className={item.role === "user" ? "text-cyan-400" : "text-purple-400"}>
-                      {item.role === "user" ? "▶ まがとき教授" : "◁ ルキルキ SYSTEM"}
+                      {item.role === "user" ? "▶ まがときさん" : "◁ ルキルキ SYSTEM"}
                     </span>
                     <span className="text-gray-500 font-normal">{item.timestamp}</span>
                   </div>
