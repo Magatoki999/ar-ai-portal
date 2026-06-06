@@ -65,7 +65,7 @@ def _sync_reverse_geocode(lat: float, lng: float) -> str:
 
 async def fetch_street_address(lat: float, lng: float) -> str:
     """緯度経度から実際の物理住所・周辺施設を抽出する非同期ラッパーヘルパー"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_reverse_geocode, lat, lng)
 
 @tool
@@ -482,9 +482,30 @@ async def chat_endpoint(payload: ChatMessage):
             f"識別セクター: {sector_info}\n\n"
         )
 
-    print(f"─── [Router] 思考調停を開始します ───")
-    router_res = analyze_and_route(user_text if user_text else "[画像送信のみ]", sector_info, now_str)
-    print(f"[Router 結果] Intent: {router_res.intent} | Selected: {router_res.selected_agents}")
+    print("─── [Router] 思考調停を開始します ───")
+
+    try:
+        router_res = await analyze_and_route(
+            user_text if user_text else "[画像送信のみ]",
+            now_str,
+            sector_info,
+            image_base64
+        )
+
+    except Exception as router_error:
+        print(f"[Router Fatal Error] {router_error}")
+
+        class FallbackRouter:
+            intent = "chat"
+            selected_agents = ["pulse"]
+
+        router_res = FallbackRouter()
+
+    print(
+        f"[Router 結果] "
+        f"Intent: {router_res.intent} | "
+        f"Selected: {router_res.selected_agents}"
+    )
 
     memo_context = ""
     active_memo_ids = []
@@ -542,7 +563,7 @@ async def chat_endpoint(payload: ChatMessage):
             response = await llm_with_tools.ainvoke(messages)
         
         # ─── 🛠️ ツール呼び出し（外部検索 ＆ 位置特定）のインターセプト ───
-        if response.tool_calls:
+        if hasattr(response, "tool_calls") and response.tool_calls:
             messages.append(response)  # 💡 ツール要求メッセージを履歴に追加
             
             for tool_call in response.tool_calls:
@@ -569,7 +590,7 @@ async def chat_endpoint(payload: ChatMessage):
                     
                     print(f"─── ルキルキがネット検索中... ───")
                     search_results = await search_tool.ainvoke(tool_call["args"])
-                    messages.append(ToolMessage(content=str(search_results), tool_call_id=tool_call["id"]))
+                    messages.append(ToolMessage(content=str(search_results), tool_call_id=str(tool_call["id"])))
                 
                 # 分岐2: 💡 位置特定ツール（locate_current_position）が直接呼ばれた場合
                 elif tool_call["name"] == "locate_current_position":
@@ -581,7 +602,7 @@ async def chat_endpoint(payload: ChatMessage):
                     if not address_result:
                         address_result = "空間の歪みにより座標から具体的な住所を特定できませんでした。"
                     
-                    messages.append(ToolMessage(content=str(address_result), tool_call_id=tool_call["id"]))
+                    messages.append(ToolMessage(content=str(address_result), tool_call_id=str(tool_call["id"])))
             
             # すべてのツール実行結果を反映させて、ルキルキの最終回答を再生成
             response = await llm_with_tools.ainvoke(messages)
