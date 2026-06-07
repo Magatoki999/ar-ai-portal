@@ -265,7 +265,7 @@ async def auto_research_job():
         print(f"[脳内リサーチ] リサーチプロセスでエラーが発生しました: {e}")
 
 
-# 💡 【検証済・最適化版】1分おきにルキルキが自発的に雑談・ニュース報告してくるAIコアジョブ
+# 💡 【自発同期コア】1分おきにルキルキが自発的に雑談・ニュース報告してくるジョブ
 async def proactive_talk_job():
     if not manager.active_connections:
         return
@@ -276,9 +276,6 @@ async def proactive_talk_job():
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%H時%M分")
-
-    # 💡 自発的なプッシュ時にも現在の時間帯のエフェクトを決定
-    spatial_effect = determine_spatial_effect(None, None, now_jst)
 
     fetched_memos = []
     memo_id_to_consume = None
@@ -296,11 +293,14 @@ async def proactive_talk_job():
         except Exception as e:
             print(f"[自発エラー] DB取得失敗（日常雑談にフォールバックします）: {e}")
 
-    system_constraints = (
+    # 自発話専用のシステムプロンプト制約（エフェクトタグ強制ルール付き）
+    proactive_system_constraints = (
         "【ルキルキ自発システム発話制約】\n"
         "1. あなたは、今まがときさんの隣に漂っているAIパートナーとして、自発的にひとりごとや雑談を発話します。\n"
         "2. まがときさんからの質問への返答ではないため、『〜ですか？』と連続で質問攻めにするのではなく、独り言、ネットで調べた情報の報告、時間帯への感想、気遣い、自分の気分などを優しく呟いてください。\n"
-        "3. 文字数は50〜100文字以内で短く、親しみのある丁寧語でまとめてください。URLは絶対に出力禁止です。\n\n"
+        "3. 文字数は50〜100文字以内で短く、親しみのある丁寧語でまとめてください。URLは絶対に出力禁止です。\n"
+        "4. 【重要】会話の雰囲気や時間帯、内容に合わせて、セリフの末尾に必ず空間エフェクト指示タグを 『||EFFECT:エフェクト名||』 の形式で埋め込んでください。\n"
+        "   - 指定可能なエフェクト名は [sakura, snow, rain, cyber] の4つのみです。最も適したものを1つ選択してください。\n\n"
     )
 
     if fetched_memos:
@@ -321,11 +321,18 @@ async def proactive_talk_job():
 
     try:
         messages = [
-            SystemMessage(content=f"{base_persona}\n\n{system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
+            SystemMessage(content=f"{base_persona}\n\n{proactive_system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
         ]
         
         response = await llm.ainvoke(messages)
         ai_reply = response.content.strip()
+
+        # 💡 エフェクトタグの抽出とセリフからの除去
+        spatial_effect = "cyber"  # デフォルト
+        effect_match = re.search(r"\|\|EFFECT:(.*?)\|\|", ai_reply)
+        if effect_match:
+            spatial_effect = effect_match.group(1).strip()
+            ai_reply = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_reply).strip()
 
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
         audio_base64 = None
@@ -336,14 +343,14 @@ async def proactive_talk_job():
         else:
             audio_base64 = await generate_openai_tts(ai_reply)
 
-        # 💡 ブロードキャストメッセージに spatial_effect を追加
+        # 💡 WebSocketのブロードキャストデータに spatial_effect を追加して送信
         await manager.broadcast({
             "type": "proactive_speech",
             "reply": ai_reply,
             "audio_data": audio_base64,
             "spatial_effect": spatial_effect
         })
-        print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply}")
+        print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply} [Effect: {spatial_effect}]")
 
         if memo_id_to_consume:
             url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id_to_consume}"
@@ -368,7 +375,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MagatokiLab RukiRuki XR Gateway [Production v5 - Hybrid Location Synced]",
+    title="MagatokiLab RukiRuki XR Gateway [Production v6 - Fixed Spatial Sync]",
     lifespan=lifespan
 )
 
@@ -409,22 +416,6 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
         return "【Magatoki開発ベースセクター】"
     return "【未知の観測セクター】"
-
-
-# 💡 【新規】時間帯や位置情報からARエフェクトを動的判定するコアロジック
-def determine_spatial_effect(lat: float | None, lng: float | None, now_jst: datetime) -> str:
-    """現在の時間帯（JST）からAR空間の演出エフェクト（sakura / cyber / rain / snow）を決定します。
-    ※将来的にOpenWeatherMapなどの天候APIと連携して、実際の天気（雨・雪など）を割り込ませることも可能です。"""
-    hour = now_jst.hour
-    
-    if 5 <= hour < 11:
-        return "sakura"   # 朝（5:00〜10:59）：桜エフェクト
-    elif 11 <= hour < 17:
-        return "cyber"    # 昼（11:00〜16:59）：サイバーエフェクト（デフォルト）
-    elif 17 <= hour < 22:
-        return "rain"     # 夕方〜夜（17:00〜21:59）：雨の情緒エフェクト
-    else:
-        return "snow"     # 深夜〜早朝（22:00〜4:59）：静かな雪エフェクト
 
 
 async def get_stored_username(wallet_address: str) -> str | None:
@@ -512,16 +503,7 @@ async def mark_memos_as_consumed(memo_ids: list):
 # ─── HTTP エンドポイント定義 ───
 @app.get("/")
 def read_root():
-    return {"status": "healthy", "message": "RukiRuki Multi-Agent Dynamic Gateway Online"}
-
-
-@app.post("/api/test/research")
-async def trigger_research_manually():
-    try:
-        await auto_research_job()
-        return {"status": "success", "message": "Manually triggered chronic researcher job successfully."}
-    except Exception as e:
-        return {"status": "failed", "error": str(e)}
+    return {"status": "healthy", "message": "RukiRuki Dynamic Sync Gateway Online"}
 
 
 @app.post("/api/chat")
@@ -536,16 +518,16 @@ async def chat_endpoint(payload: ChatMessage):
 
     base_persona = load_rukiruki_persona()
 
-    # フロントエンドからの初期検知時シグナルを検知して歓迎プロンプトへ置換
+    # フロントエンドからの初期検知時シグナルを歓迎プロンプトへ置換
     is_initial_greeting = (user_text == "[INITIAL_GREETING]")
     if is_initial_greeting:
         user_text = (
             "（システム絶対指示：まがときさんがARカメラをターゲットにかざし、あなたが現実世界に出現した【最初の瞬間】です。"
-            "現在の時間帯、識別された位置情報、もし手に入るなら外部検索ツール等を用いて周辺のリアルタイムの天気や話題を絡め、"
-            "実体化できた喜びと、まがときさんを歓迎する気の利いた挨拶を50〜110文字の親しみのある丁寧語で呟いてください。"
-            "こちらから質問攻めにするのではなく、その時間の気遣いや空間の情緒を交えた自然なファーストコンタクトにしてください。URLの出力は厳禁です。）"
+            "実体化できた喜びと、まがときさんを歓迎する気の利いた挨拶を短く親しみのある丁寧語で呟いてください。"
+            "空間エフェクトタグの埋め込みを忘れないでください。URLの出力は厳禁です。）"
         )
 
+    # 💡 【徹底修正】ユーザーからの直接質問時の優先度・およびエフェクトタグ強制ルールを追加
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
@@ -553,19 +535,25 @@ async def chat_endpoint(payload: ChatMessage):
         "   - まがときさんから「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
         "2. 視覚情報（Vision）解析時の特定オブジェクトの【完全除外】:\n"
         "   - 画面内に映り込んでいる『ARマーカー』『ルキルキのカード』『システムUI』等は【絶対に無視】してください。これらに言及することは固く禁じます。\n"
-        "   - 上記のカードやマーカー以外の「現実の風景」「物体」「人物」などについてのみフォーカスを当ててください。\n"
-        "3. バックグラウンドDB情報の最優先活用:\n"
-        "   - 【🧠 バックグラウンド思考層からのリアルタイム共有知識】がプロンプトに含まれている場合、それは裏でDBから取得した最新情報です。ユーザーへの回答においてはこの情報を【最優先】で組み込んで答えてください。\n"
+        "   - 周囲にある『現実の風景や物体』のみを認識して答えてください。\n"
+        "3. バックグラウンドDB情報の活用方針（チャット最優先）:\n"
+        "   - 【🧠 バックグラウンド思考層からのリアルタイム共有知識】がプロンプトに含まれている場合、それは裏でDBから取得した最新情報です。\n"
+        "   - まがときさん（ユーザー）から明確な質問、呼びかけ、対話がある場合は、この【ユーザーの発話への直接的な回答】を最優先にしてください。質問や話の流れを無視して、脳内共有知識（ニュースレポート）の報告を先走らせることは絶対に禁止します。\n"
         "4. リンク（URL）の出力完全禁止:\n"
-        "   - まがときさんへの応答テキスト内には絶対にURLやソースリンク（httpやhttps）を含めないでください。\n\n"
+        "   - まがときさんへの応答テキスト内には絶対にURLやソースリンクを含めないでください。\n"
+        "5. 空間エフェクトタグの強制埋め込み:\n"
+        "   - 会話の雰囲気、現在の時間帯、話題の内容に合わせて、セリフの末尾に必ず空間エフェクト指示タグを 『||EFFECT:エフェクト名||』 の形式で埋め込んでください。\n"
+        "   - 指定可能なエフェクト名は以下の4つのみです。最も適したものを1つ選択してください：\n"
+        "     * sakura : 桜が舞う（お祝い、和風の話題、のんびり・穏やかな雑談など）\n"
+        "     * snow   : 雪が降る（冬、冷たい・静かな話題、寂しい雰囲気など）\n"
+        "     * rain   : 雨が降る（憂鬱な雰囲気、悲しい話題、天気の雨、しっとりした会話など）\n"
+        "     * cyber  : サイバー演出（デフォルト、技術・開発・コード系の話題、通常時など）\n"
+        "   - 例: 『まがときさん、エフェクトの同期なら任せてよ！サイバー空間、出力するね！||EFFECT:cyber||』\n\n"
     )
 
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
-    
-    # 💡 今回のリクエスト時点での空間エフェクトを動的決定
-    spatial_effect = determine_spatial_effect(lat, lng, now_jst)
     
     time_context = f"【現在の観測日時（日本時間）】\n現在時刻: {now_str}\n\n"
 
@@ -638,7 +626,7 @@ async def chat_endpoint(payload: ChatMessage):
                 
             vision_text = user_text if user_text else "これ見て、何かわかる？"
             if not is_initial_greeting:
-                vision_text += "\n\n(※システム絶対指示: 画像内にAR認識用の「カード」「マーカー」「システムUI」が写っていても完全に無視し、絶対に言及しないでください。カードの向こう側や周囲にある『現実の風景や物体』のみを認識して答えてください。)"
+                vision_text += "\n\n(※システム絶対指示: 画像内のARカード等は完全無視し、その向こうの現実の物体のみに言及してください。)"
 
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": vision_text},
@@ -659,7 +647,7 @@ async def chat_endpoint(payload: ChatMessage):
                     if lat is not None and lng is not None:
                         address_keywords = await fetch_street_address(lat, lng)
                         if not address_keywords:
-                            address_keywords = "（空間変換一時エラー：日本の主要都市周辺と推測）"
+                            address_keywords = "（日本の主要都市周辺）"
                         
                         refine_chain = query_refine_prompt | llm
                         refined_query = await refine_chain.ainvoke({
@@ -687,6 +675,14 @@ async def chat_endpoint(payload: ChatMessage):
 
         ai_response = response.content
 
+        # 💡 [新設] LLMの応答からエフェクトタグを正規表現で抽出
+        spatial_effect = "cyber"  # デフォルト値
+        effect_match = re.search(r"\|\|EFFECT:(.*?)\|\|", ai_response)
+        if effect_match:
+            spatial_effect = effect_match.group(1).strip()
+            ai_response = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_response).strip()
+
+        # 名前の保存ロジック（既存）
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
@@ -711,10 +707,11 @@ async def chat_endpoint(payload: ChatMessage):
         print(f"LLM/Vision/Search Error: {e}")
         ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、まがときさん？"
         audio_base64 = None
+        spatial_effect = "cyber"
 
     await manager.broadcast({"type": "status", "status": "idle"})
 
-    # 💡 JSONレスポンスに spatial_effect を追加してフロントエンドに返却！
+    # 💡 HTTPレスポンスの辞書型に spatial_effect を持たせてフロントエンドに同期！
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
