@@ -183,14 +183,24 @@ export default function MindARViewer() {
       socket.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
-          
-          if (data.spatial_effect) {
-            setSpatialEffect(data.spatial_effect);
-            currentEffectRef.current = data.spatial_effect;
+
+          // type別に明示分岐
+          if (data.type === "status") {
+            // バックエンドからのステータス通知（thinking / idle など）
+            // HTTP経由の会話フローで使用するため、WSでは表示制御のみ行う
+            if (data.status === "idle") setAiStatus("idle");
+            return;
           }
 
           if (data.type === "proactive_speech") {
             console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
+
+            // エフェクトを先に確定させてからパーティクルに反映
+            if (data.spatial_effect) {
+              setSpatialEffect(data.spatial_effect);
+              currentEffectRef.current = data.spatial_effect;
+            }
+
             if (audioInstanceRef.current) {
               audioInstanceRef.current.pause();
               audioInstanceRef.current.src = "";
@@ -215,7 +225,13 @@ export default function MindARViewer() {
                 initAudioPipeline(audioInstanceRef.current);
                 audioInstanceRef.current.src = audioUrl;
                 setAiStatus("talking");
-                await audioInstanceRef.current.play();
+
+                // AutoPlay Policy ブロック対策：play() 失敗時も必ず idle へ遷移
+                audioInstanceRef.current.play().catch((playErr) => {
+                  console.log("自発発話の自動再生がブロックされました:", playErr);
+                  setAiStatus("idle");
+                  URL.revokeObjectURL(audioUrl);
+                });
               } catch (audioErr) {
                 console.log("自発的発話の音声生成に失敗:", audioErr);
                 setAiStatus("talking");
@@ -225,7 +241,10 @@ export default function MindARViewer() {
               setAiStatus("talking");
               setTimeout(() => setAiStatus("idle"), 5000);
             }
+            return;
           }
+
+          // 上記以外の未知のメッセージタイプ（heartbeat など）は無視
         } catch (err) {
           console.log("WSメッセージのリアルタイムパースに失敗:", err);
         }

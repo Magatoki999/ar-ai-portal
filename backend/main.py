@@ -180,6 +180,9 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 # ─── バックグラウンドタスク（情報調査部 ＆ 自発的話し掛け部）の設定 ───
 scheduler = AsyncIOScheduler()
 
+# 最後にユーザーと会話した時刻
+last_user_interaction = datetime.now(timezone.utc)
+
 def load_research_keywords() -> dict:
     keywords_path = "keywords.json"
     if os.path.exists(keywords_path):
@@ -229,7 +232,7 @@ async def auto_research_job():
     keyword = random.choice(keywords_list)
 
     try:
-        search_results = await search_tool.add_item({"query": keyword})
+        search_results = await search_tool.ainvoke({"query": keyword})
         
         research_prompt = (
             f"あなたはルキルキの脳内エージェント「情報調査部（クロニクル・リサーチャー）」です。\n"
@@ -267,7 +270,16 @@ async def auto_research_job():
 
 # 💡 【自発同期コア】1分おきにルキルキが自発的に雑談・ニュース報告してくるジョブ
 async def proactive_talk_job():
+    global last_user_interaction
+
     if not manager.active_connections:
+        return
+
+    # 最後の会話からの経過時間
+    silence_duration = datetime.now(timezone.utc) - last_user_interaction
+
+    # 60秒未満なら自律会話しない
+    if silence_duration.total_seconds() < 60:
         return
 
     print("─── [ルキルキ自発同期コア] まがときさんへの話し掛けを生成中... ───")
@@ -351,6 +363,9 @@ async def proactive_talk_job():
             "spatial_effect": spatial_effect
         })
         print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply} [Effect: {spatial_effect}]")
+
+        # 自律発話成功後に更新
+        last_user_interaction = datetime.now(timezone.utc)
 
         if memo_id_to_consume:
             url = f"{SUPABASE_URL}/rest/v1/agent_memos?id=eq.{memo_id_to_consume}"
@@ -534,6 +549,12 @@ def read_root():
 
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
+
+    global last_user_interaction
+
+    # ユーザー発話時刻を更新
+    last_user_interaction = datetime.now(timezone.utc)
+
     user_text = payload.message
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
