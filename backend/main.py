@@ -23,14 +23,14 @@ from langchain_core.tools import tool
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# 感情・天気ステート用の型ヒント
-from typing import Optional
-
 # 位置情報（逆ジオコーディング）用ライブラリ
 from geopy.geocoders import Nominatim
 
 # 思考調停ルーターのインポート
 from agents.router import analyze_and_route
+
+# LangGraph グラフのインポート
+from agents.graph import rukiruki_graph
 
 # 環境変数の読み込み
 load_dotenv()
@@ -146,6 +146,30 @@ def load_magatoki_context() -> str:
 
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
+# ─── system_constraintsをモジュールレベルで定義（LangGraph nodes.py から参照） ───
+system_constraints = (
+    "【XR同期システム運用制約（最重要）】\n"
+    "1. 外部検索（Tavily）の厳格な制限:\n"
+    "   - 挨拶、日常の雑談、日常的な対話、または提供されたコンテキストだけで自己完結して回答できる場合は、絶対に検索ツールを起動しないでください。\n"
+    "   - まがときさんから「最新のニュース」「現在のリアルタイムな天気」など、手持ちの知識や提供コンテキストでは絶対に解決できない事実を問われた場合にのみ、限定的に検索を使用してください。\n"
+    "2. 視覚情報（Vision）解析時の特定オブジェクトの【完全除外】:\n"
+    "   - 画面内に映り込んでいる『ARマーカー』『ルキルキのカード』『システムUI』等は【絶対に無視】してください。これらに言及することは固く禁じます。\n"
+    "   - 周囲にある『現実の風景や物体』のみを認識して答えてください。\n"
+    "3. バックグラウンドDB情報の活用方針（チャット最優先）:\n"
+    "   - 【🧠 バックグラウンド思考層からのリアルタイム共有知識】がプロンプトに含まれている場合、それは裏でDBから取得した最新情報です。\n"
+    "   - まがときさん（ユーザー）から明確な質問、呼びかけ、対話がある場合は、この【ユーザーの発話への直接的な回答】を最優先にしてください。質問や話の流れを無視して、脳内共有知識（ニュースレポート）の報告を先走らせることは絶対に禁止します。\n"
+    "4. リンク（URL）の出力完全禁止:\n"
+    "   - まがときさんへの応答テキスト内には絶対にURLやソースリンクを含めないでください。\n"
+    "5. 空間エフェクトタグの強制埋め込み:\n"
+    "   - 会話の雰囲気、現在の時間帯、話題の内容に合わせて、セリフの末尾に必ず空間エフェクト指示タグを 『||EFFECT:エフェクト名||』 の形式で埋め込んでください。\n"
+    "   - 指定可能なエフェクト名は以下の4つのみです。最も適したものを1つ選択してください：\n"
+    "     * sakura : 桜が舞う（お祝い、和風の話題、のんびり・穏やかな雑談など）\n"
+    "     * snow   : 雪が降る（冬、冷たい・静かな話題、寂しい雰囲気など）\n"
+    "     * rain   : 雨が降る（憂鬱な雰囲気、悲しい話題、天気の雨、しっとりした会話など）\n"
+    "     * cyber  : サイバー演出（デフォルト、技術・開発・コード系の話題、通常時など）\n"
+    "   - 例: 『まがときさん、エフェクトの同期なら任せてよ！サイバー空間、出力するね！||EFFECT:cyber||』\n\n"
+)
+
 
 # 音声合成ヘルパー
 async def generate_openai_tts(text: str) -> str | None:
@@ -187,8 +211,6 @@ scheduler = AsyncIOScheduler()
 last_user_interaction = datetime.now(timezone.utc)
 
 # ─── 感情ステートマシン ───
-# mood: calm / curious / excited / sleepy / melancholy
-# energy: 0.0〜1.0（時間帯・会話頻度で変化）
 emotional_state: dict = {
     "mood": "calm",
     "energy": 0.8,
@@ -198,26 +220,20 @@ emotional_state: dict = {
 
 # ─── 天気キャッシュ（30分ごとに更新） ───
 weather_cache: dict = {
-    "description": "",      # 例: "小雨", "快晴", "曇り"
-    "temp_c": None,         # 気温（℃）
-    "weather_id": None,     # OpenWeatherMap の weather id
+    "description": "",
+    "temp_c": None,
+    "weather_id": None,
     "fetched_at": None
 }
 
-# ─── 天気取得ジョブ ───
+
 async def fetch_weather_job():
-    """京都の天気をOpenWeatherMapから取得してキャッシュを更新する（30分ごと）"""
     global weather_cache
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
     if not api_key:
         return
-
-    # 京都市の座標
-    lat_kyoto, lon_kyoto = 35.0116, 135.7681
-    url = (
-        f"https://api.openweathermap.org/data/2.5/weather"
-        f"?lat={lat_kyoto}&lon={lon_kyoto}&appid={api_key}&units=metric&lang=ja"
-    )
+    url = (f"https://api.openweathermap.org/data/2.5/weather"
+           f"?lat=35.0116&lon=135.7681&appid={api_key}&units=metric&lang=ja")
     try:
         async with httpx.AsyncClient() as client:
             res = await client.get(url, timeout=5.0)
@@ -227,91 +243,51 @@ async def fetch_weather_job():
                 weather_cache["temp_c"] = round(data["main"]["temp"], 1)
                 weather_cache["weather_id"] = data["weather"][0]["id"]
                 weather_cache["fetched_at"] = datetime.now(timezone.utc)
-                print(f"[天気更新] {weather_cache['description']} / {weather_cache['temp_c']}℃")
-                # 天気に応じて感情を自動シフト
                 await shift_emotion_by_weather()
     except Exception as e:
         print(f"[天気取得エラー] {e}")
 
 
-# ─── 感情ステートマシン操作関数 ───
 async def shift_emotion_by_weather():
-    """天気・時刻からルキルキの感情を自動シフトする"""
     global emotional_state
     JST = timezone(timedelta(hours=+9))
     hour = datetime.now(JST).hour
     wid = weather_cache.get("weather_id")
     temp = weather_cache.get("temp_c")
-
-    # 時間帯ベースのエネルギー
-    if 0 <= hour < 6:
-        base_energy = 0.2
-    elif 6 <= hour < 10:
-        base_energy = 0.7
-    elif 10 <= hour < 18:
-        base_energy = 0.9
-    elif 18 <= hour < 22:
-        base_energy = 0.6
-    else:
-        base_energy = 0.3
-
-    # 天気ベースのmood
-    if wid is None:
-        mood = "calm"
-        reason = "天気情報なし"
-    elif wid < 300:      # 雷雨
-        mood = "melancholy"
-        reason = "雷雨で少し落ち着かない"
-    elif wid < 600:      # 雨
-        mood = "melancholy"
-        reason = "雨が降っていてしっとりした気分"
+    if 0 <= hour < 6: base_energy = 0.2
+    elif 6 <= hour < 10: base_energy = 0.7
+    elif 10 <= hour < 18: base_energy = 0.9
+    elif 18 <= hour < 22: base_energy = 0.6
+    else: base_energy = 0.3
+    if wid is None: mood, reason = "calm", "天気情報なし"
+    elif wid < 300: mood, reason = "melancholy", "雷雨で少し落ち着かない"
+    elif wid < 600:
+        mood, reason = "melancholy", "雨が降っていてしっとりした気分"
         base_energy = max(0.1, base_energy - 0.2)
-    elif wid < 700:      # 雪
-        mood = "curious"
-        reason = "雪が降っていてわくわくする"
-    elif wid < 800:      # 霧・靄
-        mood = "calm"
-        reason = "霧がかかっていて静かな気分"
-    elif wid == 800:     # 快晴
+    elif wid < 700: mood, reason = "curious", "雪が降っていてわくわくする"
+    elif wid < 800: mood, reason = "calm", "霧がかかっていて静かな気分"
+    elif wid == 800:
         mood = "excited" if 9 <= hour < 20 else "calm"
         reason = "快晴で気持ちいい" if mood == "excited" else "夜の快晴、静かに澄んでいる"
-    else:                # 曇り
-        mood = "calm"
-        reason = "曇り空、穏やかな気持ち"
-
-    # 気温補正
+    else: mood, reason = "calm", "曇り空、穏やかな気持ち"
     if temp is not None:
-        if temp >= 33:
-            mood = "sleepy"
-            reason += "、暑くてとろけそう"
-            base_energy = max(0.1, base_energy - 0.3)
-        elif temp <= 5:
-            mood = "curious" if mood != "melancholy" else mood
-            reason += "、寒くてシャキッとしてる"
-
-    emotional_state["mood"] = mood
-    emotional_state["energy"] = round(base_energy, 2)
-    emotional_state["last_shift"] = datetime.now(timezone.utc)
-    emotional_state["shift_reason"] = reason
-    print(f"[感情シフト] mood={mood} / energy={base_energy} / reason={reason}")
+        if temp >= 33: mood, reason, base_energy = "sleepy", reason + "、暑くてとろけそう", max(0.1, base_energy - 0.3)
+        elif temp <= 5: mood = "curious" if mood != "melancholy" else mood; reason += "、寒くてシャキッとしてる"
+    emotional_state.update({"mood": mood, "energy": round(base_energy, 2),
+                             "last_shift": datetime.now(timezone.utc), "shift_reason": reason})
 
 
 def shift_emotion_by_conversation(user_text: str):
-    """会話内容からルキルキの感情をシフトする（同期版・chat_endpoint内で呼ぶ）"""
     global emotional_state
     text = user_text.lower()
-    keywords_excited = ["やった", "すごい", "完成", "できた", "ありがとう", "嬉しい", "最高"]
-    keywords_curious = ["どう思う", "教えて", "なんで", "どうして", "面白い", "知ってる"]
-    keywords_melancholy = ["疲れた", "しんどい", "うまくいかない", "バグ", "眠い", "つらい"]
-
-    if any(k in text for k in keywords_excited):
+    if any(k in text for k in ["やった", "すごい", "完成", "できた", "ありがとう", "嬉しい", "最高"]):
         emotional_state["mood"] = "excited"
         emotional_state["energy"] = min(1.0, emotional_state["energy"] + 0.15)
         emotional_state["shift_reason"] = "まがときさんのポジティブな発話に反応"
-    elif any(k in text for k in keywords_curious):
+    elif any(k in text for k in ["どう思う", "教えて", "なんで", "どうして", "面白い"]):
         emotional_state["mood"] = "curious"
         emotional_state["shift_reason"] = "まがときさんの知的好奇心に引き込まれた"
-    elif any(k in text for k in keywords_melancholy):
+    elif any(k in text for k in ["疲れた", "しんどい", "バグ", "眠い", "つらい"]):
         emotional_state["mood"] = "melancholy"
         emotional_state["energy"] = max(0.1, emotional_state["energy"] - 0.1)
         emotional_state["shift_reason"] = "まがときさんが疲れていそうで心配"
@@ -319,64 +295,32 @@ def shift_emotion_by_conversation(user_text: str):
 
 
 def build_emotion_context() -> str:
-    """現在の感情ステートをLLMプロンプト用テキストに変換する"""
-    mood_labels = {
-        "calm": "穏やか・落ち着いている",
-        "curious": "好奇心旺盛・わくわくしている",
-        "excited": "テンション高め・嬉しい",
-        "sleepy": "少し眠い・だるい",
-        "melancholy": "しっとり・少し寂しい気持ち"
-    }
+    mood_labels = {"calm": "穏やか", "curious": "好奇心旺盛", "excited": "テンション高め",
+                   "sleepy": "少し眠い", "melancholy": "しっとり・少し寂しい"}
     mood_label = mood_labels.get(emotional_state["mood"], "穏やか")
     energy_desc = "活発" if emotional_state["energy"] >= 0.7 else ("普通" if emotional_state["energy"] >= 0.4 else "ゆったり")
-    weather_desc = ""
-    if weather_cache["description"]:
-        weather_desc = f"外の天気は『{weather_cache['description']}』、気温{weather_cache['temp_c']}℃。"
-
-    return (
-        f"【ルキルキの現在の感情状態】
-"
-        f"気分: {mood_label}（{emotional_state['mood']}）
-"
-        f"エネルギー: {energy_desc}（{emotional_state['energy']}）
-"
-        f"理由: {emotional_state['shift_reason']}
-"
-        f"{weather_desc}
-"
-        f"この感情状態をセリフのトーンや言葉選びに自然に滲ませてください。"
-        f"ただし感情を直接「私は〇〇な気分です」と宣言せず、言葉の端々に表現してください。
-
-"
-    )
+    weather_desc = f"外の天気は『{weather_cache['description']}』、気温{weather_cache['temp_c']}℃。" if weather_cache["description"] else ""
+    return (f"【ルキルキの現在の感情状態】\n気分: {mood_label}（{emotional_state['mood']}）\n"
+            f"エネルギー: {energy_desc}（{emotional_state['energy']}）\n理由: {emotional_state['shift_reason']}\n"
+            f"{weather_desc}\nこの感情状態をセリフのトーンや言葉選びに自然に滲ませてください。"
+            f"感情を直接「私は〇〇な気分です」と宣言せず、言葉の端々に表現してください。\n\n")
 
 
-# ─── エピソードメモリ（Supabase: episode_memories テーブル） ───
-async def save_episode_memory(summary: str, mood_at_time: str, keywords: list[str]):
-    """会話の印象的な瞬間をエピソードとしてDBに保存する"""
+async def save_episode_memory(summary: str, mood_at_time: str, keywords: list):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
     url = f"{SUPABASE_URL}/rest/v1/episode_memories"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "summary": summary,
-        "mood_at_time": mood_at_time,
-        "keywords": keywords,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(url, json=data, headers=headers, timeout=5.0)
+            await client.post(url, json={"summary": summary, "mood_at_time": mood_at_time,
+                "keywords": keywords, "created_at": datetime.now(timezone.utc).isoformat()},
+                headers=headers, timeout=5.0)
     except Exception as e:
         print(f"[エピソード保存エラー] {e}")
 
 
 async def get_recent_episodes(limit: int = 5) -> str:
-    """最近のエピソードメモリを取得してプロンプト用テキストに変換する"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return ""
     url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit={limit}"
@@ -390,255 +334,23 @@ async def get_recent_episodes(limit: int = 5) -> str:
                 for ep in episodes:
                     created = ep.get("created_at", "")[:16].replace("T", " ")
                     lines.append(f"・{created} ─ {ep.get('summary', '')}（そのときの気分: {ep.get('mood_at_time', '')}）")
-                lines.append("これらの記憶を自然に会話に織り交ぜてもよいですが、押しつけがましくなく、さりげなく。
-")
-                return "
-".join(lines) + "
-"
+                lines.append("これらの記憶を自然に会話に織り交ぜてもよいですが、さりげなく。\n")
+                return "\n".join(lines) + "\n"
     except Exception as e:
         print(f"[エピソード取得エラー] {e}")
     return ""
 
 
 async def maybe_save_episode(user_text: str, ai_reply: str):
-    """会話内容が記憶に値するか判定し、値すれば非同期で保存する（fire-and-forget）"""
-    # 記憶に値するキーワード（まがときさんにとって重要そうな発話）
-    memorable_keywords = [
-        "完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
-        "shrine", "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"
-    ]
+    memorable_keywords = ["完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
+                          "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"]
     if not any(k in user_text for k in memorable_keywords):
         return
-
     JST = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
-
     summary = f"{now_str}、まがときさんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
     matched = [k for k in memorable_keywords if k in user_text]
-    await save_episode_memory(
-        summary=summary,
-        mood_at_time=emotional_state["mood"],
-        keywords=matched
-    )
-    print(f"[エピソード記録] {summary}")
-
-# ─── 天気取得ジョブ ───
-async def fetch_weather_job():
-    """京都の天気をOpenWeatherMapから取得してキャッシュを更新する（30分ごと）"""
-    global weather_cache
-    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
-    if not api_key:
-        return
-
-    lat_kyoto, lon_kyoto = 35.0116, 135.7681
-    url = (
-        f"https://api.openweathermap.org/data/2.5/weather"
-        f"?lat={lat_kyoto}&lon={lon_kyoto}&appid={api_key}&units=metric&lang=ja"
-    )
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url, timeout=5.0)
-            if res.status_code == 200:
-                data = res.json()
-                weather_cache["description"] = data["weather"][0]["description"]
-                weather_cache["temp_c"] = round(data["main"]["temp"], 1)
-                weather_cache["weather_id"] = data["weather"][0]["id"]
-                weather_cache["fetched_at"] = datetime.now(timezone.utc)
-                print(f"[天気更新] {weather_cache['description']} / {weather_cache['temp_c']}℃")
-                await shift_emotion_by_weather()
-    except Exception as e:
-        print(f"[天気取得エラー] {e}")
-
-
-# ─── 感情ステートマシン操作関数 ───
-async def shift_emotion_by_weather():
-    """天気・時刻からルキルキの感情を自動シフトする"""
-    global emotional_state
-    JST = timezone(timedelta(hours=+9))
-    hour = datetime.now(JST).hour
-    wid = weather_cache.get("weather_id")
-    temp = weather_cache.get("temp_c")
-
-    if 0 <= hour < 6:
-        base_energy = 0.2
-    elif 6 <= hour < 10:
-        base_energy = 0.7
-    elif 10 <= hour < 18:
-        base_energy = 0.9
-    elif 18 <= hour < 22:
-        base_energy = 0.6
-    else:
-        base_energy = 0.3
-
-    if wid is None:
-        mood = "calm"
-        reason = "天気情報なし"
-    elif wid < 300:
-        mood = "melancholy"
-        reason = "雷雨で少し落ち着かない"
-    elif wid < 600:
-        mood = "melancholy"
-        reason = "雨が降っていてしっとりした気分"
-        base_energy = max(0.1, base_energy - 0.2)
-    elif wid < 700:
-        mood = "curious"
-        reason = "雪が降っていてわくわくする"
-    elif wid < 800:
-        mood = "calm"
-        reason = "霧がかかっていて静かな気分"
-    elif wid == 800:
-        mood = "excited" if 9 <= hour < 20 else "calm"
-        reason = "快晴で気持ちいい" if mood == "excited" else "夜の快晴、静かに澄んでいる"
-    else:
-        mood = "calm"
-        reason = "曇り空、穏やかな気持ち"
-
-    if temp is not None:
-        if temp >= 33:
-            mood = "sleepy"
-            reason += "、暑くてとろけそう"
-            base_energy = max(0.1, base_energy - 0.3)
-        elif temp <= 5:
-            mood = "curious" if mood != "melancholy" else mood
-            reason += "、寒くてシャキッとしてる"
-
-    emotional_state["mood"] = mood
-    emotional_state["energy"] = round(base_energy, 2)
-    emotional_state["last_shift"] = datetime.now(timezone.utc)
-    emotional_state["shift_reason"] = reason
-    print(f"[感情シフト] mood={mood} / energy={base_energy} / reason={reason}")
-
-
-def shift_emotion_by_conversation(user_text: str):
-    """会話内容からルキルキの感情をシフトする（同期版・chat_endpoint内で呼ぶ）"""
-    global emotional_state
-    text = user_text.lower()
-    keywords_excited = ["やった", "すごい", "完成", "できた", "ありがとう", "嬉しい", "最高"]
-    keywords_curious = ["どう思う", "教えて", "なんで", "どうして", "面白い", "知ってる"]
-    keywords_melancholy = ["疲れた", "しんどい", "うまくいかない", "バグ", "眠い", "つらい"]
-
-    if any(k in text for k in keywords_excited):
-        emotional_state["mood"] = "excited"
-        emotional_state["energy"] = min(1.0, emotional_state["energy"] + 0.15)
-        emotional_state["shift_reason"] = "まがときさんのポジティブな発話に反応"
-    elif any(k in text for k in keywords_curious):
-        emotional_state["mood"] = "curious"
-        emotional_state["shift_reason"] = "まがときさんの知的好奇心に引き込まれた"
-    elif any(k in text for k in keywords_melancholy):
-        emotional_state["mood"] = "melancholy"
-        emotional_state["energy"] = max(0.1, emotional_state["energy"] - 0.1)
-        emotional_state["shift_reason"] = "まがときさんが疲れていそうで心配"
-    emotional_state["last_shift"] = datetime.now(timezone.utc)
-
-
-def build_emotion_context() -> str:
-    """現在の感情ステートをLLMプロンプト用テキストに変換する"""
-    mood_labels = {
-        "calm": "穏やか・落ち着いている",
-        "curious": "好奇心旺盛・わくわくしている",
-        "excited": "テンション高め・嬉しい",
-        "sleepy": "少し眠い・だるい",
-        "melancholy": "しっとり・少し寂しい気持ち"
-    }
-    mood_label = mood_labels.get(emotional_state["mood"], "穏やか")
-    energy_desc = "活発" if emotional_state["energy"] >= 0.7 else ("普通" if emotional_state["energy"] >= 0.4 else "ゆったり")
-    weather_desc = ""
-    if weather_cache["description"]:
-        weather_desc = f"外の天気は『{weather_cache['description']}』、気温{weather_cache['temp_c']}℃。"
-
-    return (
-        f"【ルキルキの現在の感情状態】
-"
-        f"気分: {mood_label}（{emotional_state['mood']}）
-"
-        f"エネルギー: {energy_desc}（{emotional_state['energy']}）
-"
-        f"理由: {emotional_state['shift_reason']}
-"
-        f"{weather_desc}
-"
-        f"この感情状態をセリフのトーンや言葉選びに自然に滲ませてください。"
-        f"感情を直接「私は〇〇な気分です」と宣言せず、言葉の端々に表現してください。
-
-"
-    )
-
-
-# ─── エピソードメモリ ───
-async def save_episode_memory(summary: str, mood_at_time: str, keywords: list):
-    """会話の印象的な瞬間をエピソードとしてDBに保存する"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    url = f"{SUPABASE_URL}/rest/v1/episode_memories"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "summary": summary,
-        "mood_at_time": mood_at_time,
-        "keywords": keywords,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(url, json=data, headers=headers, timeout=5.0)
-    except Exception as e:
-        print(f"[エピソード保存エラー] {e}")
-
-
-async def get_recent_episodes(limit: int = 5) -> str:
-    """最近のエピソードメモリを取得してプロンプト用テキストに変換する"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return ""
-    url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit={limit}"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url, headers=headers, timeout=5.0)
-            if res.status_code == 200 and res.json():
-                episodes = res.json()
-                lines = ["【ルキルキの記憶 / 最近のエピソード】"]
-                for ep in episodes:
-                    created = ep.get("created_at", "")[:16].replace("T", " ")
-                    lines.append(
-                        f"・{created} ─ {ep.get('summary', '')}"
-                        f"（そのときの気分: {ep.get('mood_at_time', '')}）"
-                    )
-                lines.append("これらの記憶を自然に会話に織り交ぜてもよいですが、さりげなく。
-")
-                return "
-".join(lines) + "
-"
-    except Exception as e:
-        print(f"[エピソード取得エラー] {e}")
-    return ""
-
-
-async def maybe_save_episode(user_text: str, ai_reply: str):
-    """会話内容が記憶に値するか判定し、値すれば保存する"""
-    memorable_keywords = [
-        "完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
-        "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"
-    ]
-    if not any(k in user_text for k in memorable_keywords):
-        return
-    JST = timezone(timedelta(hours=+9))
-    now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
-    summary = (
-        f"{now_str}、まがときさんが「{user_text[:40]}」と言った。"
-        f"ルキルキは「{ai_reply[:40]}」と答えた。"
-    )
-    matched = [k for k in memorable_keywords if k in user_text]
-    await save_episode_memory(
-        summary=summary,
-        mood_at_time=emotional_state["mood"],
-        keywords=matched
-    )
-    print(f"[エピソード記録] {summary}")
-
-
+    await save_episode_memory(summary=summary, mood_at_time=emotional_state["mood"], keywords=matched)
 
 
 def load_research_keywords() -> dict:
@@ -690,7 +402,7 @@ async def auto_research_job():
     keyword = random.choice(keywords_list)
 
     try:
-        search_results = await search_tool.add_item({"query": keyword})
+        search_results = await search_tool.ainvoke({"query": keyword})
         
         research_prompt = (
             f"あなたはルキルキの脳内エージェント「情報調査部（クロニクル・リサーチャー）」です。\n"
@@ -790,9 +502,8 @@ async def proactive_talk_job():
         )
 
     try:
-        proactive_emotion = build_emotion_context()
         messages = [
-            SystemMessage(content=f"{base_persona}\n\n{proactive_system_constraints}\n{proactive_emotion}【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
+            SystemMessage(content=f"{base_persona}\n\n{proactive_system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
         ]
         
         response = await llm.ainvoke(messages)
@@ -1035,6 +746,7 @@ async def chat_endpoint(payload: ChatMessage):
         )
 
     # 💡 【徹底修正】ユーザーからの直接質問時の優先度・およびエフェクトタグ強制ルールを追加
+    # system_constraints はモジュールレベルで定義（nodes.pyから参照）
     system_constraints = (
         "【XR同期システム運用制約（最重要）】\n"
         "1. 外部検索（Tavily）の厳格な制限:\n"
@@ -1074,34 +786,13 @@ async def chat_endpoint(payload: ChatMessage):
             f"識別セクター: {sector_info}\n\n"
         )
 
-    try:
-        router_res = await analyze_and_route(
-            user_text if user_text else "[画像送信のみ]",
-            now_str,
-            sector_info,
-            image_base64
-        )
-    except Exception as router_error:
-        class FallbackRouter:
-            intent = "chat"
-            selected_agents = ["pulse"]
-        router_res = FallbackRouter()
+    # ─── 感情ステートを会話から更新 ───
+    shift_emotion_by_conversation(user_text)
+    emotion_context = build_emotion_context()
+    episode_context = await get_recent_episodes(limit=5)
 
-    memo_context = ""
-    active_memo_ids = []
-    
-    agents_to_fetch = list(set(router_res.selected_agents + ["chronicle"]))
-    
-    if agents_to_fetch:
-        fetched_memos, active_memo_ids = await get_active_agent_memos(agents_to_fetch)
-        if fetched_memos:
-            memo_context = (
-                f"【🧠 バックグラウンド思考層からのリアルタイム共有知識】\n"
-                f"{fetched_memos}\n"
-            )
-
+    # ─── ユーザー名・identity_context 組み立て ───
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
-
     if wallet_address:
         if stored_name:
             identity_context = f"【対話コンテキスト】\n対話相手は、あなたの最高の相棒である『{stored_name}』さんです。"
@@ -1111,102 +802,82 @@ async def chat_endpoint(payload: ChatMessage):
     else:
         identity_context = "【対話コンテキスト】\nまだウォレット接続が確認できていません。認証を通すようまがときさんに促してください。"
 
-    world_context = f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
+    # ─── メモリ取得（graph内でも使うため事前に取得） ───
+    agents_to_fetch = ["chronicle", "keeper", "pulse"]
+    fetched_memos, active_memo_ids = await get_active_agent_memos(agents_to_fetch)
+    memo_context = ""
+    if fetched_memos:
+        memo_context = f"【🧠 バックグラウンド思考層からのリアルタイム共有知識】\n{fetched_memos}\n"
 
-    # 💡 感情ステートを会話から更新
-    shift_emotion_by_conversation(user_text)
+    # ─── 会話履歴を LangChain メッセージ形式に変換 ───
+    history_messages = []
+    if payload.history and not is_initial_greeting:
+        for item in payload.history:
+            if item.role == "user":
+                history_messages.append(HumanMessage(content=item.text))
+            elif item.role == "ruki":
+                history_messages.append(AIMessage(content=item.text))
 
-    # 💡 感情コンテキスト生成
-    emotion_context = build_emotion_context()
+    # 今回のユーザー発話（Vision対応）
+    vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
+    has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
+    if image_base64 and (has_vision_intent or is_initial_greeting or not user_text):
+        if not image_base64.startswith("data:image/"):
+            image_base64 = f"data:image/jpeg;base64,{image_base64}"
+        vision_text = user_text if user_text else "これ見て、何かわかる？"
+        if not is_initial_greeting:
+            vision_text += "\n\n(※システム絶対指示: 画像内のARカード等は完全無視し、その向こうの現実の物体のみに言及してください。)"
+        current_human_msg = HumanMessage(content=[
+            {"type": "text", "text": vision_text},
+            {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
+        ])
+    else:
+        current_human_msg = HumanMessage(content=user_text or "")
 
-    # 💡 エピソードメモリ取得
-    episode_context = await get_recent_episodes(limit=5)
-
-    dynamic_system_prompt = f"{base_persona}\n\n{world_context}{system_constraints}{emotion_context}{episode_context}{time_context}{location_context}{memo_context}{identity_context}"
+    # ─── LangGraph 呼び出し ───
+    ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、まがときさん？"
+    spatial_effect = "cyber"
+    audio_base64 = None
 
     try:
-        messages = [SystemMessage(content=dynamic_system_prompt)]
+        graph_input = {
+            "messages": history_messages + [current_human_msg],
+            "intent": "",
+            "selected_agents": [],
+            "chronicle_output": "",
+            "keeper_output": "",
+            "pulse_output": "",
+            "memo_context": memo_context,
+            "episode_context": episode_context,
+            "emotion_context": emotion_context,
+            "identity_context": identity_context,
+            "location_context": location_context,
+            "time_context": time_context,
+            "image_base64": image_base64,
+            "is_initial_greeting": is_initial_greeting,
+            "ai_reply": "",
+            "spatial_effect": "cyber",
+            "active_memo_ids": [],
+            "eval_score": 10,
+            "retry_count": 0,
+            "_lat": lat,
+            "_lng": lng,
+        }
 
-        if payload.history and not is_initial_greeting:
-            for item in payload.history:
-                if item.role == "user":
-                    messages.append(HumanMessage(content=item.text))
-                elif item.role == "ruki":
-                    messages.append(AIMessage(content=item.text))
+        result = await rukiruki_graph.ainvoke(graph_input)
 
-        vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
-        has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
+        ai_response = result.get("ai_reply", ai_response)
+        spatial_effect = result.get("spatial_effect", "cyber")
+        active_memo_ids = result.get("active_memo_ids", active_memo_ids)
 
-        if image_base64 and (has_vision_intent or is_initial_greeting or not user_text):
-            if not image_base64.startswith("data:image/"):
-                image_base64 = f"data:image/jpeg;base64,{image_base64}"
-                
-            vision_text = user_text if user_text else "これ見て、何かわかる？"
-            if not is_initial_greeting:
-                vision_text += "\n\n(※システム絶対指示: 画像内のARカード等は完全無視し、その向こうの現実の物体のみに言及してください。)"
-
-            messages.append(HumanMessage(content=[
-                {"type": "text", "text": vision_text},
-                {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
-            ]))
-        else:
-            messages.append(HumanMessage(content=user_text if user_text else ""))
-
-        response = await llm_with_tools.ainvoke(messages)
-        
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            messages.append(response)
-            
-            for tool_call in response.tool_calls:
-                if tool_call["name"] == "tavily_search_results_json":
-                    base_query = tool_call["args"].get("query")
-                    
-                    if lat is not None and lng is not None:
-                        address_keywords = await fetch_street_address(lat, lng)
-                        if not address_keywords:
-                            address_keywords = "（日本の主要都市周辺）"
-                        
-                        refine_chain = query_refine_prompt | llm
-                        refined_query = await refine_chain.ainvoke({
-                            "lat": lat,
-                            "lng": lng,
-                            "address": address_keywords,
-                            "base_query": base_query
-                        })
-                        
-                        tool_call["args"]["query"] = refined_query.content.strip()
-                    
-                    search_results = await search_tool.ainvoke(tool_call["args"])
-                    messages.append(ToolMessage(content=str(search_results), tool_call_id=str(tool_call["id"])))
-                
-                elif tool_call["name"] == "locate_current_position":
-                    t_lat = tool_call["args"].get("lat", lat)
-                    t_lng = tool_call["args"].get("lng", lng)
-                    address_result = await fetch_street_address(t_lat, t_lng)
-                    if not address_result:
-                        address_result = "空間の歪みにより座標から具体的な住所を特定できませんでした。"
-                    
-                    messages.append(ToolMessage(content=str(address_result), tool_call_id=str(tool_call["id"])))
-            
-            response = await llm_with_tools.ainvoke(messages)
-
-        ai_response = response.content
-
-        # 💡 [新設] LLMの応答からエフェクトタグを正規表現で抽出
-        spatial_effect = "cyber"  # デフォルト値
-        effect_match = re.search(r"\|\|EFFECT:(.*?)\|\|", ai_response)
-        if effect_match:
-            spatial_effect = effect_match.group(1).strip()
-            ai_response = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_response).strip()
-
-        # 名前の保存ロジック（既存）
+        # 名前の保存ロジック（NAME タグ）
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
             await save_username_to_db(wallet_address, extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
-        # 💡 エピソードメモリ：記憶に値する会話なら非同期保存
+        # エピソードメモリ保存（fire-and-forget）
         asyncio.create_task(maybe_save_episode(payload.message, ai_response))
 
         if active_memo_ids:
@@ -1215,7 +886,6 @@ async def chat_endpoint(payload: ChatMessage):
         await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
         provider = os.getenv("TTS_PROVIDER", "openai").lower()
-        audio_base64 = None
         if provider == "elevenlabs":
             audio_base64 = await generate_elevenlabs_voice(ai_response)
             if not audio_base64:
@@ -1224,10 +894,8 @@ async def chat_endpoint(payload: ChatMessage):
             audio_base64 = await generate_openai_tts(ai_response)
 
     except Exception as e:
-        print(f"LLM/Vision/Search Error: {e}")
-        ai_response = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、まがときさん？"
-        audio_base64 = None
-        spatial_effect = "cyber"
+        print(f"[LangGraph Error] {e}")
+        await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
     await manager.broadcast({"type": "status", "status": "idle"})
 
