@@ -168,12 +168,12 @@ export default function MindARViewer() {
     let reconnectTimeout: NodeJS.Timeout;
 
     const connectWebSocket = () => {
-      print(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
+      console.log(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
       socket = new WebSocket(wsUrl);
       wsRef.current = socket;
 
       socket.onopen = () => {
-        print("✨ [空間同期リンク] ルキルキとの常時接続（脳内リンク）が成功しました！");
+        console.log("✨ [空間同期リンク] ルキルキとの常時接続（脳内リンク）が成功しました！");
       };
 
       socket.onmessage = async (event) => {
@@ -186,7 +186,7 @@ export default function MindARViewer() {
           }
 
           if (data.type === "proactive_speech") {
-            print("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
+            console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
             if (audioInstanceRef.current) {
               audioInstanceRef.current.pause();
               audioInstanceRef.current.src = "";
@@ -214,7 +214,7 @@ export default function MindARViewer() {
                 setAiStatus("talking");
                 await audioInstanceRef.current.play();
               } catch (audioErr) {
-                print("自発的発話の音声生成に失敗:", audioErr);
+                console.log("自発的発話の音声生成に失敗:", audioErr);
                 setAiStatus("talking");
                 setTimeout(() => setAiStatus("idle"), 5000);
               }
@@ -224,17 +224,17 @@ export default function MindARViewer() {
             }
           }
         } catch (err) {
-          print("WSメッセージのリアルタイムパースに失敗:", err);
+          console.log("WSメッセージのリアルタイムパースに失敗:", err);
         }
       };
 
       socket.onclose = () => {
-        print("🍂 [空間同期リンク] 切断。5秒後に再接続を試みます。");
+        console.log("🍂 [空間同期リンク] 切断。5秒後に再接続を試みます。");
         reconnectTimeout = setTimeout(connectWebSocket, 5000);
       };
 
       socket.onerror = (error) => {
-        print("⚠️ WebSocketエラー:", error);
+        console.log("⚠️ WebSocketエラー:", error);
       };
     };
 
@@ -373,7 +373,7 @@ export default function MindARViewer() {
           if (lostTimeoutRef.current) {
             clearTimeout(lostTimeoutRef.current);
             lostTimeoutRef.current = null;
-            print("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
+            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
             isSeamlessReturn = true;
           }
 
@@ -408,7 +408,7 @@ export default function MindARViewer() {
 
         anchor.onTargetLost = () => {
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
-          print("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
+          console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
 
           lostTimeoutRef.current = setTimeout(() => {
             setIsTargetFound(false); 
@@ -420,7 +420,7 @@ export default function MindARViewer() {
               try { recognitionRef.current.stop(); } catch(e){}
             }
             lostTimeoutRef.current = null;
-            print("[XRシステム] 完全にロストしました。");
+            console.log("[XRシステム] 完全にロストしました。");
           }, 4000); 
         };
 
@@ -527,7 +527,7 @@ export default function MindARViewer() {
         });
 
       } catch (initError: any) {
-        print("MindAR起動失敗:", initError);
+        console.log("MindAR起動失敗:", initError);
         setSubtitle(`システム初期化エラー: ${initError?.message || String(initError)}`);
       }
     };
@@ -616,7 +616,7 @@ export default function MindARViewer() {
           setAiStatus("talking"); setTimeout(() => setAiStatus("idle"), 5000);
         }
       } catch (err) {
-        print("ルキルキの初期挨拶取得に失敗:", err);
+        console.log("ルキルキの初期挨拶取得に失敗:", err);
         setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
         setAiStatus("idle");
         setSearchPhase("STABLE");
