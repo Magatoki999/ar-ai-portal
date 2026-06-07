@@ -233,7 +233,14 @@ export default function MindARViewer() {
 
       socket.onclose = () => {
         console.log("🍂 [空間同期リンク] 切断。5秒後に再接続を試みます。");
-        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+
+        wsRef.current = null;
+
+        reconnectTimeout = setTimeout(() => {
+          if (!wsRef.current) {
+            connectWebSocket();
+          }
+        }, 5000);
       };
 
       socket.onerror = (error) => {
@@ -401,9 +408,7 @@ export default function MindARViewer() {
 
           if (!isSeamlessReturn && !isWithinOneMinute) {
             // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
-            getGPSLocation().then((loc) => {
-              triggerInitialGreeting(loc);
-            });
+            playFixedGreeting();
           } else {
             // 手ブレ、または1分以内の連続再認識時は強制思考を禁止し、即座にアイドルスタンバイへ
             setAiStatus("idle");
@@ -561,6 +566,102 @@ export default function MindARViewer() {
     });
   };
 
+
+  const playFixedGreeting = async () => {
+    lastGreetingTimeRef.current = Date.now();
+
+    if (audioInstanceRef.current) {
+      audioInstanceRef.current.pause();
+      audioInstanceRef.current.src = "";
+    }
+
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    const fixedGreeting =
+      "こんにちは、まがときさん。ルキルキ、現実空間への同期完了です。";
+
+    setSubtitle(fixedGreeting);
+    setAiStatus("talking");
+    setSearchPhase("STABLE");
+
+    setSpatialEffect("cyber");
+    currentEffectRef.current = "cyber";
+
+    const timeStampStr = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    setChatHistory((prev) => [
+      ...prev,
+      {
+        role: "ruki",
+        text: fixedGreeting,
+        timestamp: timeStampStr,
+      },
+    ]);
+
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+
+      if (!baseUrl) {
+        setAiStatus("idle");
+        return;
+      }
+
+      const response = await fetch(`${baseUrl}/api/tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: fixedGreeting,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("TTS生成失敗");
+      }
+
+      const data = await response.json();
+
+      if (data.audio_data && audioInstanceRef.current) {
+        const binaryString = window.atob(data.audio_data);
+
+        const bytes = new Uint8Array(binaryString.length);
+
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const audioUrl = URL.createObjectURL(
+          new Blob([bytes], { type: "audio/mpeg" })
+        );
+
+        audioInstanceRef.current.onended = () => {
+          setAiStatus("idle");
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        initAudioPipeline(audioInstanceRef.current);
+
+        audioInstanceRef.current.src = audioUrl;
+
+        await audioInstanceRef.current.play();
+      } else {
+        setAiStatus("idle");
+      }
+    } catch (err) {
+      console.log("固定挨拶TTS失敗:", err);
+
+      setTimeout(() => {
+        setAiStatus("idle");
+      }, 3000);
+    }
+  };
+
+
   const triggerInitialGreeting = async (forcedLocation?: { lat: number; lng: number } | null) => {
     // 💡 挨拶（思考初期化）が走ったら現在のタイムスタンプをセット
     lastGreetingTimeRef.current = Date.now();
@@ -673,7 +774,16 @@ export default function MindARViewer() {
     setSearchPhase("CONNECTING..."); 
 
     const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setChatHistory(prev => [...prev, { role: "user", text, timestamp: timeStampStr }]);
+    const updatedHistory = [
+      ...chatHistory,
+      {
+        role: "user",
+        text,
+        timestamp: timeStampStr,
+      },
+    ];
+
+    setChatHistory(updatedHistory);
 
     timersRef.current.push(
       setTimeout(() => { setSearchPhase("TAVILY_SEARCHING..."); setSubtitle(`🌐 外部情報空間を走査中...\n（Tavilyサーチを同期しています）`); }, 1800),
@@ -695,7 +805,7 @@ export default function MindARViewer() {
             image_base64: imageBase64,       
             latitude: location ? location.lat : null, 
             longitude: location ? location.lng : null,
-            history: chatHistory 
+            history: updatedHistory 
           }),
         });
 

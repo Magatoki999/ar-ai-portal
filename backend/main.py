@@ -379,7 +379,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,[https://ar-ai-portal.vercel.app](https://ar-ai-portal.vercel.app)")
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
 app.add_middleware(
@@ -396,6 +396,10 @@ class HistoryItem(BaseModel):
     role: str       
     text: str       
     timestamp: str | None = None
+
+class TTSRequest(BaseModel):
+    text: str
+
 
 class ChatMessage(BaseModel):
     message: str
@@ -498,6 +502,28 @@ async def mark_memos_as_consumed(memo_ids: list):
                 await client.patch(url, json={"is_consumed": True}, headers=headers, timeout=5.0)
             except Exception as e:
                 pass
+
+
+
+
+@app.post("/api/tts")
+async def tts_endpoint(payload: TTSRequest):
+
+    provider = os.getenv("TTS_PROVIDER", "openai").lower()
+
+    audio_base64 = None
+
+    if provider == "elevenlabs":
+        audio_base64 = await generate_elevenlabs_voice(payload.text)
+
+        if not audio_base64:
+            audio_base64 = await generate_openai_tts(payload.text)
+    else:
+        audio_base64 = await generate_openai_tts(payload.text)
+
+    return {
+        "audio_data": audio_base64
+    }
 
 
 # ─── HTTP エンドポイント定義 ───
