@@ -229,7 +229,7 @@ async def auto_research_job():
     keyword = random.choice(keywords_list)
 
     try:
-        search_results = await search_tool.ainvoke({"query": keyword})
+        search_results = await search_tool.add_item({"query": keyword})
         
         research_prompt = (
             f"あなたはルキルキの脳内エージェント「情報調査部（クロニクル・リサーチャー）」です。\n"
@@ -274,7 +274,11 @@ async def proactive_talk_job():
     
     base_persona = load_rukiruki_persona()
     JST = timezone(timedelta(hours=+9))
-    now_str = datetime.now(JST).strftime("%H時%M分")
+    now_jst = datetime.now(JST)
+    now_str = now_jst.strftime("%H時%M分")
+
+    # 💡 自発的なプッシュ時にも現在の時間帯のエフェクトを決定
+    spatial_effect = determine_spatial_effect(None, None, now_jst)
 
     fetched_memos = []
     memo_id_to_consume = None
@@ -332,10 +336,12 @@ async def proactive_talk_job():
         else:
             audio_base64 = await generate_openai_tts(ai_reply)
 
+        # 💡 ブロードキャストメッセージに spatial_effect を追加
         await manager.broadcast({
             "type": "proactive_speech",
             "reply": ai_reply,
-            "audio_data": audio_base64
+            "audio_data": audio_base64,
+            "spatial_effect": spatial_effect
         })
         print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply}")
 
@@ -403,6 +409,22 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     elif 35.020 <= lat <= 35.026 and 135.750 <= lng <= 135.760:
         return "【Magatoki開発ベースセクター】"
     return "【未知の観測セクター】"
+
+
+# 💡 【新規】時間帯や位置情報からARエフェクトを動的判定するコアロジック
+def determine_spatial_effect(lat: float | None, lng: float | None, now_jst: datetime) -> str:
+    """現在の時間帯（JST）からAR空間の演出エフェクト（sakura / cyber / rain / snow）を決定します。
+    ※将来的にOpenWeatherMapなどの天候APIと連携して、実際の天気（雨・雪など）を割り込ませることも可能です。"""
+    hour = now_jst.hour
+    
+    if 5 <= hour < 11:
+        return "sakura"   # 朝（5:00〜10:59）：桜エフェクト
+    elif 11 <= hour < 17:
+        return "cyber"    # 昼（11:00〜16:59）：サイバーエフェクト（デフォルト）
+    elif 17 <= hour < 22:
+        return "rain"     # 夕方〜夜（17:00〜21:59）：雨の情緒エフェクト
+    else:
+        return "snow"     # 深夜〜早朝（22:00〜4:59）：静かな雪エフェクト
 
 
 async def get_stored_username(wallet_address: str) -> str | None:
@@ -514,7 +536,7 @@ async def chat_endpoint(payload: ChatMessage):
 
     base_persona = load_rukiruki_persona()
 
-    # 💡 【新設】フロントエンドからの初期検知時シグナルを検知して歓迎プロンプトへ置換
+    # フロントエンドからの初期検知時シグナルを検知して歓迎プロンプトへ置換
     is_initial_greeting = (user_text == "[INITIAL_GREETING]")
     if is_initial_greeting:
         user_text = (
@@ -541,6 +563,9 @@ async def chat_endpoint(payload: ChatMessage):
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%Y年%m月%d日 %H時%M分%S秒")
+    
+    # 💡 今回のリクエスト時点での空間エフェクトを動的決定
+    spatial_effect = determine_spatial_effect(lat, lng, now_jst)
     
     time_context = f"【現在の観測日時（日本時間）】\n現在時刻: {now_str}\n\n"
 
@@ -689,9 +714,11 @@ async def chat_endpoint(payload: ChatMessage):
 
     await manager.broadcast({"type": "status", "status": "idle"})
 
+    # 💡 JSONレスポンスに spatial_effect を追加してフロントエンドに返却！
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
+        "spatial_effect": spatial_effect,
         "status": "success"
     }
 
