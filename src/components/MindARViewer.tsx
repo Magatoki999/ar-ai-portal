@@ -32,6 +32,9 @@ export default function MindARViewer() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
   const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null); 
+  
+  // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
+  const lastGreetingTimeRef = useRef<number>(0);
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +171,7 @@ export default function MindARViewer() {
     let reconnectTimeout: NodeJS.Timeout;
 
     const connectWebSocket = () => {
+      // ⭕ 印刷バグ修正：単体 print() から console.log() へ完全移行
       console.log(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
       socket = new WebSocket(wsUrl);
       wsRef.current = socket;
@@ -194,8 +198,7 @@ export default function MindARViewer() {
             timersRef.current.forEach(clearTimeout);
             timersRef.current = [];
 
-            // 💡 字幕への表示と音声再生のみを行い、履歴(chatHistory)への混入を完全に停止。
-            // これによりユーザー質問時に前回のひとりごとをオウム返しするバグを解決。
+            // ⭕ 履歴汚染修正：字幕への表示と音声再生のみを行い、履歴(chatHistory)への混入を完全にシャットアウト。
             setSubtitle(data.reply);
 
             if (data.audio_data && audioInstanceRef.current) {
@@ -393,16 +396,19 @@ export default function MindARViewer() {
             particlesRef.current.geometry.attributes.position.needsUpdate = true;
           }
 
-          if (!isSeamlessReturn) {
+          // 💡 ロスト復帰制御：前回の初期思考から1分（60,000ミリ秒）以内かどうかを判定
+          const isWithinOneMinute = (Date.now() - lastGreetingTimeRef.current) < 60000;
+
+          if (!isSeamlessReturn && !isWithinOneMinute) {
+            // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
             getGPSLocation().then((loc) => {
               triggerInitialGreeting(loc);
             });
           } else {
-            setSubtitle(prev => 
-              prev === "（カメラをターゲットにかざしてください）" 
-                ? "ルキルキを現実世界に固定しました。話しかけてください。" 
-                : prev
-            );
+            // 手ブレ、または1分以内の連続再認識時は強制思考を禁止し、即座にアイドルスタンバイへ
+            setAiStatus("idle");
+            setSearchPhase("STABLE");
+            setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           }
         };
 
@@ -556,6 +562,9 @@ export default function MindARViewer() {
   };
 
   const triggerInitialGreeting = async (forcedLocation?: { lat: number; lng: number } | null) => {
+    // 💡 挨拶（思考初期化）が走ったら現在のタイムスタンプをセット
+    lastGreetingTimeRef.current = Date.now();
+
     if (audioInstanceRef.current) { audioInstanceRef.current.pause(); audioInstanceRef.current.src = ""; }
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
