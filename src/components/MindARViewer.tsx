@@ -31,7 +31,9 @@ export default function MindARViewer() {
 
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
-  const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null); 
+  const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
+  const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名 
   
   // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
   const lastGreetingTimeRef = useRef<number>(0);
@@ -183,24 +185,14 @@ export default function MindARViewer() {
       socket.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
-
-          // type別に明示分岐
-          if (data.type === "status") {
-            // バックエンドからのステータス通知（thinking / idle など）
-            // HTTP経由の会話フローで使用するため、WSでは表示制御のみ行う
-            if (data.status === "idle") setAiStatus("idle");
-            return;
+          
+          if (data.spatial_effect) {
+            setSpatialEffect(data.spatial_effect);
+            currentEffectRef.current = data.spatial_effect;
           }
 
           if (data.type === "proactive_speech") {
             console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
-
-            // エフェクトを先に確定させてからパーティクルに反映
-            if (data.spatial_effect) {
-              setSpatialEffect(data.spatial_effect);
-              currentEffectRef.current = data.spatial_effect;
-            }
-
             if (audioInstanceRef.current) {
               audioInstanceRef.current.pause();
               audioInstanceRef.current.src = "";
@@ -225,13 +217,7 @@ export default function MindARViewer() {
                 initAudioPipeline(audioInstanceRef.current);
                 audioInstanceRef.current.src = audioUrl;
                 setAiStatus("talking");
-
-                // AutoPlay Policy ブロック対策：play() 失敗時も必ず idle へ遷移
-                audioInstanceRef.current.play().catch((playErr) => {
-                  console.log("自発発話の自動再生がブロックされました:", playErr);
-                  setAiStatus("idle");
-                  URL.revokeObjectURL(audioUrl);
-                });
+                await audioInstanceRef.current.play();
               } catch (audioErr) {
                 console.log("自発的発話の音声生成に失敗:", audioErr);
                 setAiStatus("talking");
@@ -241,10 +227,7 @@ export default function MindARViewer() {
               setAiStatus("talking");
               setTimeout(() => setAiStatus("idle"), 5000);
             }
-            return;
           }
-
-          // 上記以外の未知のメッセージタイプ（heartbeat など）は無視
         } catch (err) {
           console.log("WSメッセージのリアルタイムパースに失敗:", err);
         }
@@ -722,6 +705,19 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
+        // メモリースポット提案
+        if (data.spot_proposal) {
+          setSpotProposal(data.spot_proposal);
+        }
+
+        // Arweave刻印完了トースト
+        if (data.arweave_tx_id) {
+          setEngraveToast(data.arweave_tx_id);
+          setSpatialEffect("sakura"); // 刻印時は桜エフェクト
+          currentEffectRef.current = "sakura";
+          setTimeout(() => setEngraveToast(""), 8000);
+        }
+
         setSubtitle(data.reply);
         const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
@@ -840,7 +836,20 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
-        setSubtitle(data.reply);
+                // メモリースポット提案
+        if (data.spot_proposal) {
+          setSpotProposal(data.spot_proposal);
+        }
+
+        // Arweave刻印完了トースト
+        if (data.arweave_tx_id) {
+          setEngraveToast(data.arweave_tx_id);
+          setSpatialEffect("sakura");
+          currentEffectRef.current = "sakura";
+          setTimeout(() => setEngraveToast(""), 8000);
+        }
+
+setSubtitle(data.reply);
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
         if (data.audio_data && audioInstanceRef.current) {
@@ -875,6 +884,27 @@ export default function MindARViewer() {
 
   return (
     <>
+      {/* ✨ Arweave刻印完了トースト */}
+      {engraveToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-2 pointer-events-none">
+          <div className="bg-gradient-to-r from-purple-900/90 to-indigo-900/90 border border-purple-400/60 backdrop-blur-lg px-5 py-3 rounded-2xl shadow-[0_0_30px_rgba(168,85,247,0.5)] text-white text-center">
+            <div className="text-lg font-bold text-purple-200 mb-1">✨ 記憶を永遠に刻みました</div>
+            <div className="text-[10px] text-purple-400 font-mono break-all max-w-[280px]">tx: {engraveToast}</div>
+          </div>
+        </div>
+      )}
+
+      {/* 📍 メモリースポット提案バナー */}
+      {spotProposal && (
+        <div className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
+          <div className="bg-black/80 border border-emerald-400/50 backdrop-blur-lg px-4 py-2 rounded-xl text-white text-center text-xs shadow-[0_0_15px_rgba(52,211,153,0.3)]">
+            <span className="text-emerald-400">📍 {spotProposal}</span>
+            <span className="text-gray-400 ml-2">の近くにいます</span>
+            <button onClick={() => setSpotProposal("")} className="ml-3 text-gray-500 hover:text-white">✕</button>
+          </div>
+        </div>
+      )}
+
       <style dangerouslySetInnerHTML={{ __html: `
         .mindar-full-container video {
           width: 100vw !important; height: 100vh !important; object-fit: cover !important;

@@ -44,3 +44,12 @@ class RukirukiState(TypedDict):
     # ─── Self-Evaluator 用 ───
     eval_score: int                    # 0〜10
     retry_count: int                   # 最大2回まで再試行
+
+    # ─── メモリースポット ───
+    spot_context: str                  # 近くのメモリースポット情報（プロンプト用）
+    nearby_spot: Optional[dict]        # 近くのスポットのdict（なければNone）
+    spot_proposal: str                 # SPOT_PROPOSALタグで抽出した場所名
+    engrave_triggered: bool            # ENGRAVEタグが立ったか
+
+    # ─── オンチェーン記憶 ───
+    arweave_tx_id: str                 # 保存されたArweaveトランザクションID（保存なしは空文字）

@@ -341,6 +341,77 @@ async def get_recent_episodes(limit: int = 5) -> str:
     return ""
 
 
+
+# ─── 特別な場所（メモリースポット）管理 ───
+MEMORY_SPOTS_TABLE = "memory_spots"
+
+
+async def get_memory_spots() -> list:
+    """Supabaseから登録済みのメモリースポット一覧を取得する"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{MEMORY_SPOTS_TABLE}?order=created_at.desc"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, headers=headers, timeout=5.0)
+            if res.status_code == 200:
+                return res.json()
+    except Exception as e:
+        print(f"[メモリースポット取得エラー] {e}")
+    return []
+
+
+async def register_memory_spot(name: str, lat: float, lng: float, radius_m: int = 100) -> bool:
+    """新しいメモリースポットをSupabaseに登録する"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    url = f"{SUPABASE_URL}/rest/v1/{MEMORY_SPOTS_TABLE}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "name": name,
+        "lat": lat,
+        "lng": lng,
+        "radius_m": radius_m,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=data, headers=headers, timeout=5.0)
+            return res.status_code in (200, 201)
+    except Exception as e:
+        print(f"[メモリースポット登録エラー] {e}")
+        return False
+
+
+def calc_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """2点間の距離をメートルで返す（Haversine式）"""
+    import math
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+async def check_nearby_spot(lat: float, lng: float) -> dict | None:
+    """
+    現在地が登録済みメモリースポットのエリア内かチェックする。
+    エリア内なら spot dict を返す。なければ None。
+    """
+    spots = await get_memory_spots()
+    for spot in spots:
+        dist = calc_distance_m(lat, lng, spot["lat"], spot["lng"])
+        if dist <= spot.get("radius_m", 100):
+            return spot
+    return None
+
+
 async def maybe_save_episode(user_text: str, ai_reply: str):
     memorable_keywords = ["完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
                           "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"]
@@ -726,6 +797,10 @@ async def chat_endpoint(payload: ChatMessage):
     # ユーザー発話時刻を更新
     last_user_interaction = datetime.now(timezone.utc)
 
+    # ─── 「ここを登録して」コマンド検出 ───
+    register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを刻んで"]
+    is_register_command = any(k in payload.message for k in register_keywords)
+
     user_text = payload.message
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
@@ -785,6 +860,19 @@ async def chat_endpoint(payload: ChatMessage):
             f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
             f"識別セクター: {sector_info}\n\n"
         )
+
+    # ─── メモリースポットチェック ───
+    nearby_spot = None
+    spot_context = ""
+    if lat is not None and lng is not None:
+        nearby_spot = await check_nearby_spot(lat, lng)
+        if nearby_spot:
+            spot_context = (
+                f"【メモリースポット検知】\n"
+                f"まがときさんは現在、登録済みの特別な場所『{nearby_spot['name']}』の近くにいます。\n"
+                f"会話の流れが自然であれば、「ここでの記憶を刻みますか？」と提案してください。\n"
+                f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{nearby_spot['name']}|| タグを追加してください。\n\n"
+            )
 
     # ─── 感情ステートを会話から更新 ───
     shift_emotion_by_conversation(user_text)
@@ -848,6 +936,10 @@ async def chat_endpoint(payload: ChatMessage):
             "keeper_output": "",
             "pulse_output": "",
             "memo_context": memo_context,
+            "spot_context": spot_context,
+            "nearby_spot": nearby_spot,
+            "spot_proposal": "",
+            "engrave_triggered": False,
             "episode_context": episode_context,
             "emotion_context": emotion_context,
             "identity_context": identity_context,
@@ -860,6 +952,7 @@ async def chat_endpoint(payload: ChatMessage):
             "active_memo_ids": [],
             "eval_score": 10,
             "retry_count": 0,
+            "arweave_tx_id": "",
             "_lat": lat,
             "_lng": lng,
         }
@@ -869,6 +962,9 @@ async def chat_endpoint(payload: ChatMessage):
         ai_response = result.get("ai_reply", ai_response)
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
+        arweave_tx_id = result.get("arweave_tx_id", "")
+        if arweave_tx_id:
+            print(f"[記憶永続化] Arweave tx: {arweave_tx_id}")
 
         # 名前の保存ロジック（NAME タグ）
         name_match = re.search(r"\|\|NAME:(.*?)\|\|", ai_response)
@@ -899,11 +995,13 @@ async def chat_endpoint(payload: ChatMessage):
 
     await manager.broadcast({"type": "status", "status": "idle"})
 
-    # 💡 HTTPレスポンスの辞書型に spatial_effect を持たせてフロントエンドに同期！
+    # 💡 HTTPレスポンスの辞書型に spatial_effect / spot_proposal / arweave_tx_id を持たせてフロントエンドに同期
     return {
         "reply": ai_response,
         "audio_data": audio_base64,
         "spatial_effect": spatial_effect,
+        "spot_proposal": result.get("spot_proposal", "") if isinstance(result, dict) else "",
+        "arweave_tx_id": result.get("arweave_tx_id", "") if isinstance(result, dict) else "",
         "status": "success"
     }
 

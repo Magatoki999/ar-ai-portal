@@ -6,6 +6,7 @@
 
 import os
 import re
+import json
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -210,6 +211,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         f"{base_persona}\n\n"
         f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
         f"{system_constraints}"
+        f"{state.get('spot_context', '')}"
         f"{state.get('emotion_context', '')}"
         f"{state.get('episode_context', '')}"
         f"{state.get('time_context', '')}"
@@ -311,9 +313,22 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             spatial_effect = effect_match.group(1).strip()
             ai_reply = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_reply).strip()
 
+        # SPOT_PROPOSALタグ抽出（場所提案タグ、フロントに通知）
+        spot_proposal = ""
+        spot_match = re.search(r"\|\|SPOT_PROPOSAL:(.*?)\|\|", ai_reply)
+        if spot_match:
+            spot_proposal = spot_match.group(1).strip()
+            ai_reply = re.sub(r"\|\|SPOT_PROPOSAL:.*?\|\|", "", ai_reply).strip()
+
+        # ENGRAVEタグ検出（記憶を永遠に刻む）
+        engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))
+        ai_reply = re.sub(r"\|\|ENGRAVE\|\|", "", ai_reply).strip()
+
         return {
             "ai_reply": ai_reply,
             "spatial_effect": spatial_effect,
+            "spot_proposal": spot_proposal,
+            "engrave_triggered": engrave_triggered,
             "messages": [AIMessage(content=ai_reply)]
         }
 
@@ -323,6 +338,76 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             "ai_reply": "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください、まがときさん？",
             "spatial_effect": "cyber",
         }
+
+
+# ─── Arweave 永続記憶ヘルパー ───
+async def save_to_arweave(state: RukirukiState) -> str:
+    """
+    会話の記憶をArweaveに永続保存する。
+    eval_score >= 8 かつ mood が excited / melancholy の場合のみ呼ばれる。
+    成功時はトランザクションIDを返す。失敗時は空文字。
+    """
+    try:
+        import arweave
+        from arweave.arweave_lib import Wallet, Transaction
+
+        jwk_str = os.getenv("ARWEAVE_JWK")
+        if not jwk_str:
+            print("[Arweave] ARWEAVE_JWK が未設定のためスキップします")
+            return ""
+
+        wallet = Wallet(jwk_data=json.loads(jwk_str))
+
+        # 保存するデータ
+        JST = timezone(timedelta(hours=+9))
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M")
+
+        # 最後のユーザー発話を取得
+        user_text = ""
+        for msg in reversed(state.get("messages", [])):
+            if isinstance(msg, HumanMessage):
+                user_text = msg.content if isinstance(msg.content, str) else "[画像]"
+                break
+
+        nearby_spot = state.get("nearby_spot")
+        memory_data = {
+            "project": "MagatokiLab / ArtAR",
+            "character": "ルキルキ (Rukiruki)",
+            "timestamp": now_str,
+            "user_message": user_text[:100],
+            "rukiruki_reply": state.get("ai_reply", "")[:200],
+            "mood": state.get("emotion_context", "")[:50],
+            "eval_score": state.get("eval_score", 0),
+            "spatial_effect": state.get("spatial_effect", "cyber"),
+            "location_name": nearby_spot["name"] if nearby_spot else "",
+            "location_lat": nearby_spot["lat"] if nearby_spot else None,
+            "location_lng": nearby_spot["lng"] if nearby_spot else None,
+            "engrave_triggered": state.get("engrave_triggered", False),
+        }
+
+        tx = Transaction(wallet, data=json.dumps(memory_data, ensure_ascii=False))
+        tx.add_tag("App-Name", "MagatokiLab-Rukiruki")
+        tx.add_tag("Content-Type", "application/json")
+        tx.add_tag("Project", "ArtAR")
+        tx.add_tag("Timestamp", now_str)
+        # 場所情報タグ（メモリースポット名があれば追加）
+        nearby_spot = state.get("nearby_spot")
+        if nearby_spot:
+            tx.add_tag("Location-Name", nearby_spot.get("name", "unknown"))
+            tx.add_tag("Location-Lat", str(nearby_spot.get("lat", "")))
+            tx.add_tag("Location-Lng", str(nearby_spot.get("lng", "")))
+        tx.sign()
+        tx.send()
+
+        print(f"[Arweave] 記憶を永続化しました: tx={tx.id}")
+        return tx.id
+
+    except ImportError:
+        print("[Arweave] arweave-python-client が未インストールです")
+        return ""
+    except Exception as e:
+        print(f"[Arweave] 保存エラー: {e}")
+        return ""
 
 
 # ─── ⑦ Self-Evaluator Node（品質チェック） ───
@@ -356,10 +441,28 @@ async def evaluator_node(state: RukirukiState) -> dict:
         score = int(re.search(r"\d+", score_text).group())
         score = max(0, min(10, score))
         print(f"[Evaluator] score={score} retry={retry_count}")
-        return {"eval_score": score}
+
+        # ─── Arweave永続化判定 ───
+        # eval_score >= 8 かつ 感情が excited / melancholy の場合のみ保存
+        arweave_tx_id = ""
+        mood = ""
+        emotion_ctx = state.get("emotion_context", "")
+        if "excited" in emotion_ctx:
+            mood = "excited"
+        elif "melancholy" in emotion_ctx:
+            mood = "melancholy"
+
+        # ENGRAVEタグが立っているとき、またはスコア8以上かつ感情条件を満たすとき保存
+        engrave_triggered = state.get("engrave_triggered", False)
+        if engrave_triggered or (score >= 8 and mood):
+            reason = "ENGRAVEコマンド" if engrave_triggered else f"高品質({score})×感情({mood})"
+            print(f"[Arweave] 永続化条件を満たしました（理由: {reason}）")
+            arweave_tx_id = await save_to_arweave(state)
+
+        return {"eval_score": score, "arweave_tx_id": arweave_tx_id}
     except Exception as e:
         print(f"[Evaluator Node Error] {e}")
-        return {"eval_score": 10}
+        return {"eval_score": 10, "arweave_tx_id": ""}
 
 
 # ─── ⑧ 条件分岐関数（should_retry） ───
