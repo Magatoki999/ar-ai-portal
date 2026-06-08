@@ -328,7 +328,12 @@ async def save_episode_memory(summary: str, mood_at_time: str, keywords: list):
         print(f"[エピソード保存エラー] {e}")
 
 
-async def get_recent_episodes(limit: int = 5) -> str:
+async def get_recent_episodes(limit: int = 8) -> str:
+    """
+    エピソードメモリを取得し、時間軸を意識した形でプロンプトに渡す。
+    - 今日・昨日・今週・それ以前でグループ分けして渡す
+    - 節目（ちょうど1週間前・1ヶ月前）があれば特別に記載
+    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return ""
     url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit={limit}"
@@ -336,14 +341,87 @@ async def get_recent_episodes(limit: int = 5) -> str:
     try:
         async with httpx.AsyncClient() as client:
             res = await client.get(url, headers=headers, timeout=5.0)
-            if res.status_code == 200 and res.json():
-                episodes = res.json()
-                lines = ["【ルキルキの記憶 / 最近のエピソード】"]
-                for ep in episodes:
-                    created = ep.get("created_at", "")[:16].replace("T", " ")
-                    lines.append(f"・{created} ─ {ep.get('summary', '')}（そのときの気分: {ep.get('mood_at_time', '')}）")
-                lines.append("これらの記憶を自然に会話に織り交ぜてもよいですが、さりげなく。\n")
-                return "\n".join(lines) + "\n"
+            if res.status_code != 200 or not res.json():
+                return ""
+
+            episodes = res.json()
+            JST = timezone(timedelta(hours=+9))
+            now_jst = datetime.now(JST)
+            today = now_jst.date()
+
+            # 時間グループに分類
+            groups = {"today": [], "yesterday": [], "this_week": [], "older": []}
+            milestones = []  # 節目エピソード（ちょうど7日前・30日前）
+
+            for ep in episodes:
+                raw = ep.get("created_at", "")
+                if not raw:
+                    continue
+                try:
+                    ep_dt = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(JST)
+                    ep_date = ep_dt.date()
+                    diff_days = (today - ep_date).days
+                    summary = ep.get("summary", "")
+                    mood = ep.get("mood_at_time", "")
+                    time_str = ep_dt.strftime("%m月%d日 %H時%M分")
+
+                    entry = f"・{time_str} ─ {summary}（気分: {mood}）"
+
+                    # 節目チェック
+                    if diff_days == 7:
+                        milestones.append(f"📅 ちょうど1週間前（{time_str}）─ {summary}")
+                    elif diff_days == 30:
+                        milestones.append(f"📅 ちょうど1ヶ月前（{time_str}）─ {summary}")
+
+                    if diff_days == 0:
+                        groups["today"].append(entry)
+                    elif diff_days == 1:
+                        groups["yesterday"].append(entry)
+                    elif diff_days <= 7:
+                        groups["this_week"].append(entry)
+                    else:
+                        groups["older"].append(entry)
+                except Exception:
+                    continue
+
+            if not any(groups.values()) and not milestones:
+                return ""
+
+            lines = ["【ルキルキの記憶 / 時間軸エピソード】"]
+
+            if milestones:
+                lines.append("【節目の記憶】")
+                lines.extend(milestones)
+                lines.append("")
+
+            if groups["today"]:
+                lines.append("【今日の記憶】")
+                lines.extend(groups["today"])
+            if groups["yesterday"]:
+                lines.append("【昨日の記憶】")
+                lines.extend(groups["yesterday"])
+            if groups["this_week"]:
+                lines.append("【今週の記憶】")
+                lines.extend(groups["this_week"])
+            if groups["older"]:
+                lines.append("【それ以前の記憶】")
+                lines.extend(groups["older"])
+
+            lines.append(
+                "
+記憶の使い方："
+                "
+- 節目（1週間前・1ヶ月前）の記憶があれば「あれからちょうど〇〇ですね」と自然に触れてください。"
+                "
+- 今日・昨日の記憶は会話の流れで自然に言及してください。"
+                "
+- 押しつけがましくならず、さりげなく織り交ぜてください。
+"
+            )
+            return "
+".join(lines) + "
+"
+
     except Exception as e:
         print(f"[エピソード取得エラー] {e}")
     return ""
