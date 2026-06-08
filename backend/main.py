@@ -210,6 +210,10 @@ scheduler = AsyncIOScheduler()
 # 最後にユーザーと会話した時刻
 last_user_interaction = datetime.now(timezone.utc)
 
+# ─── 場所登録ペンディング状態（ウォレットアドレスをキーに管理） ───
+# { wallet_address: { 'waiting': True, 'lat': float, 'lng': float } }
+registration_pending: dict = {}
+
 # ─── 感情ステートマシン ───
 emotional_state: dict = {
     "mood": "calm",
@@ -797,15 +801,89 @@ async def chat_endpoint(payload: ChatMessage):
     # ユーザー発話時刻を更新
     last_user_interaction = datetime.now(timezone.utc)
 
-    # ─── 「ここを登録して」コマンド検出 ───
-    register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを刻んで"]
-    is_register_command = any(k in payload.message for k in register_keywords)
-
     user_text = payload.message
     wallet_address = payload.wallet_address
     image_base64 = payload.image_base64
     lat = payload.latitude
     lng = payload.longitude
+
+    # ─── 場所登録フロー（2ターン完結） ───
+    register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを刻んで"]
+    session_key = wallet_address or "anonymous"
+
+    # ペンディング中（名前待ち）の場合：このターンの発話を場所名として登録
+    if registration_pending.get(session_key, {}).get("waiting"):
+        spot_name = user_text.strip()
+        pending = registration_pending.pop(session_key)
+        reg_lat = pending["lat"]
+        reg_lng = pending["lng"]
+
+        success = await register_memory_spot(spot_name, reg_lat, reg_lng)
+        if success:
+            reply_text = (
+                f"『{spot_name}』として登録しました。"
+                f"次回ここに来たとき、記憶を刻むか聞きますね。||EFFECT:sakura||"
+            )
+        else:
+            reply_text = "ごめんなさい、登録に失敗しました。もう一度試してみてください。||EFFECT:cyber||"
+
+        await manager.broadcast({"type": "status", "status": "talking", "text": reply_text})
+        provider = os.getenv("TTS_PROVIDER", "openai").lower()
+        audio_base64_reg = None
+        if provider == "elevenlabs":
+            audio_base64_reg = await generate_elevenlabs_voice(reply_text)
+            if not audio_base64_reg:
+                audio_base64_reg = await generate_openai_tts(reply_text)
+        else:
+            audio_base64_reg = await generate_openai_tts(reply_text)
+        await manager.broadcast({"type": "status", "status": "idle"})
+        return {
+            "reply": re.sub(r"\|\|EFFECT:.*?\|\|", "", reply_text).strip(),
+            "audio_data": audio_base64_reg,
+            "spatial_effect": "sakura" if success else "cyber",
+            "spot_proposal": "",
+            "arweave_tx_id": "",
+            "status": "success"
+        }
+
+    # 登録コマンド検出：GPSがあれば名前待ち状態に移行
+    is_register_command = any(k in user_text for k in register_keywords)
+    if is_register_command:
+        if lat is not None and lng is not None:
+            registration_pending[session_key] = {"waiting": True, "lat": lat, "lng": lng}
+            ask_text = "この場所にどんな名前をつけますか？||EFFECT:cyber||"
+            await manager.broadcast({"type": "status", "status": "talking", "text": ask_text})
+            provider = os.getenv("TTS_PROVIDER", "openai").lower()
+            audio_base64_ask = None
+            if provider == "elevenlabs":
+                audio_base64_ask = await generate_elevenlabs_voice(ask_text)
+                if not audio_base64_ask:
+                    audio_base64_ask = await generate_openai_tts(ask_text)
+            else:
+                audio_base64_ask = await generate_openai_tts(ask_text)
+            await manager.broadcast({"type": "status", "status": "idle"})
+            return {
+                "reply": "この場所にどんな名前をつけますか？",
+                "audio_data": audio_base64_ask,
+                "spatial_effect": "cyber",
+                "spot_proposal": "",
+                "arweave_tx_id": "",
+                "status": "success"
+            }
+        else:
+            # GPSが取得できていない場合
+            no_gps_text = "GPSが取得できていません。位置情報の許可を確認してください。||EFFECT:cyber||"
+            await manager.broadcast({"type": "status", "status": "talking", "text": no_gps_text})
+            audio_base64_gps = await generate_openai_tts(no_gps_text)
+            await manager.broadcast({"type": "status", "status": "idle"})
+            return {
+                "reply": "GPSが取得できていません。位置情報の許可を確認してください。",
+                "audio_data": audio_base64_gps,
+                "spatial_effect": "cyber",
+                "spot_proposal": "",
+                "arweave_tx_id": "",
+                "status": "success"
+            }
 
     await manager.broadcast({"type": "status", "status": "thinking"})
 
