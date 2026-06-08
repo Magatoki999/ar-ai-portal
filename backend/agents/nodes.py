@@ -351,12 +351,19 @@ async def save_to_arweave(state: RukirukiState) -> str:
         import arweave
         from arweave.arweave_lib import Wallet, Transaction
 
+        import tempfile
+
         jwk_str = os.getenv("ARWEAVE_JWK")
         if not jwk_str:
             print("[Arweave] ARWEAVE_JWK が未設定のためスキップします")
             return ""
 
-        wallet = Wallet(jwk_data=json.loads(jwk_str))
+        # Wallet はファイルパスを受け取るため一時ファイルに書き出す
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+            f.write(jwk_str)
+            jwk_path = f.name
+
+        wallet = Wallet(jwk_path)
 
         # 保存するデータ
         JST = timezone(timedelta(hours=+9))
@@ -398,6 +405,13 @@ async def save_to_arweave(state: RukirukiState) -> str:
             tx.add_tag("Location-Lng", str(nearby_spot.get("lng", "")))
         tx.sign()
         tx.send()
+
+        # 一時ファイルを削除
+        import os as _os
+        try:
+            _os.unlink(jwk_path)
+        except Exception:
+            pass
 
         print(f"[Arweave] 記憶を永続化しました: tx={tx.id}")
         return tx.id
