@@ -1143,7 +1143,6 @@ async def chat_endpoint(payload: ChatMessage):
 
     await manager.broadcast({"type": "status", "status": "thinking"})
 
-    base_persona = load_rukiruki_persona()
 
     # フロントエンドからの初期検知時シグナルを歓迎プロンプトへ置換
     is_initial_greeting = (user_text == "[INITIAL_GREETING]")
@@ -1188,14 +1187,6 @@ async def chat_endpoint(payload: ChatMessage):
                 f"会話の流れが自然であれば、「ここでの記憶を刻みますか？」と提案してください。\n"
                 f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{nearby_spot['name']}|| タグを追加してください。\n\n"
             )
-
-    # base_personaとdynamic_system_constraintsをuser_call確定後に生成
-    base_persona = load_rukiruki_persona(user_call)
-    dynamic_system_constraints = system_constraints.replace(
-        "まがときさん", f"{user_call}さん"
-    ).replace(
-        "まがとき", user_call
-    )
 
     # ─── 感情ステートを会話から更新 ───
     shift_emotion_by_conversation(user_text)
@@ -1258,6 +1249,14 @@ async def chat_endpoint(payload: ChatMessage):
             "まだウォレット接続が確認できていません。認証を促してください。\n"
         )
         user_call = "まがとき"
+
+    # base_personaとdynamic_system_constraintsをuser_call確定後に生成
+    base_persona = load_rukiruki_persona(user_call)
+    dynamic_system_constraints = system_constraints.replace(
+        "まがときさん", f"{user_call}さん"
+    ).replace(
+        "まがとき", user_call
+    )
 
     # ─── メモリ取得（graph内でも使うため事前に取得） ───
     agents_to_fetch = ["chronicle", "keeper", "pulse"]
