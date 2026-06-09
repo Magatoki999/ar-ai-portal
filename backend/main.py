@@ -368,8 +368,16 @@ async def generate_gemini_tts(text: str) -> str | None:
                     .get("inlineData", {})
                     .get("data", None)
                 )
+                mime_type = (
+                    res_json
+                    .get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("inlineData", {})
+                    .get("mimeType", "unknown")
+                )
                 if audio_b64:
-                    print("[Gemini TTS] 音声生成成功")
+                    print(f"[Gemini TTS] 音声生成成功 mimeType={mime_type}")
                     return audio_b64
                 else:
                     print(f"[TTSエラー] Gemini TTS レスポンス構造が予期しない形式: {res_json}")
