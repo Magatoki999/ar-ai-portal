@@ -210,7 +210,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     dynamic_system_prompt = (
         f"{base_persona}\n\n"
         f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
-        f"{system_constraints}"
+        f"{state.get('system_constraints_override') or system_constraints}"
         f"{state.get('spot_context', '')}"
         f"{state.get('calendar_context', '')}"
         f"{state.get('growth_context', '')}"

@@ -112,17 +112,23 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-def load_rukiruki_persona() -> str:
+def load_rukiruki_persona(user_call: str = "まがとき") -> str:
+    """
+    rukiruki_persona.md を読み込み、{USER_CALL} をユーザーの呼び名に置換して返す。
+    user_call: DBから取得したpreferred_callまたはuser_name。未登録なら「まがとき」。
+    """
     persona_path = "rukiruki_persona.md"
     if os.path.exists(persona_path):
         try:
             with open(persona_path, "r", encoding="utf-8") as f:
-                return f.read()
+                raw = f.read()
+            # {USER_CALL}をユーザーの呼び名に置換
+            return raw.replace("{USER_CALL}", f"「{user_call}」")
         except Exception as e:
             pass
     return (
-        "あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
-        "まがときさんの随伴AIとして、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
+        f"あなたは『MagatokiLab』のXR観測ナビゲーター「ルキルキ」です。\n"
+        f"{user_call}さんの随伴AIとして、親しみのある丁寧語で50〜100文字以内で短く返答してください。"
     )
 
 def load_magatoki_context() -> str:
@@ -624,7 +630,7 @@ async def maybe_save_episode(user_text: str, ai_reply: str):
         return
     JST = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
-    summary = f"{now_str}、まがときさんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
+    summary = f"{now_str}、{user_call}さんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
     matched = [k for k in memorable_keywords if k in user_text]
     await save_episode_memory(summary=summary, mood_at_time=emotional_state["mood"], keywords=matched)
 
@@ -730,7 +736,7 @@ async def proactive_talk_job():
 
     print("─── [ルキルキ自発同期コア] まがときさんへの話し掛けを生成中... ───")
     
-    base_persona = load_rukiruki_persona()
+    base_persona = load_rukiruki_persona(user_call)
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%H時%M分")
@@ -897,10 +903,18 @@ def judge_magatoki_sector(lat: float, lng: float) -> str:
     return "【未知の観測セクター】"
 
 
-async def get_stored_username(wallet_address: str) -> str | None:
+async def get_user_profile(wallet_address: str) -> dict | None:
+    """
+    user_profilesテーブルからユーザーのプロフィールをすべて取得する。
+    戻り値: {"user_name": str, "preferred_call": str|None, "birthday": str|None}
+    """
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
         return None
-    url = f"{SUPABASE_URL}/rest/v1/user_profiles?wallet_address=eq.{wallet_address.lower()}&select=user_name"
+    url = (
+        f"{SUPABASE_URL}/rest/v1/user_profiles"
+        f"?wallet_address=eq.{wallet_address.lower()}"
+        f"&select=user_name,preferred_call,birthday"
+    )
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
@@ -908,10 +922,38 @@ async def get_stored_username(wallet_address: str) -> str | None:
             if response.status_code == 200:
                 data = response.json()
                 if data and len(data) > 0:
-                    return data[0].get("user_name")
+                    return data[0]
     except Exception as e:
-        print(f"Error fetching user name: {e}")
+        print(f"[プロフィール取得エラー] {e}")
     return None
+
+
+async def get_stored_username(wallet_address: str) -> str | None:
+    """後方互換のため残す。get_user_profile()を内部で呼ぶ。"""
+    profile = await get_user_profile(wallet_address)
+    if profile:
+        return profile.get("preferred_call") or profile.get("user_name")
+    return None
+
+
+async def save_user_profile_field(wallet_address: str, field: str, value: str):
+    """user_profilesの特定フィールドを更新する汎用関数。"""
+    if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/user_profiles"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+    data = {"wallet_address": wallet_address.lower(), field: value}
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=data, headers=headers, timeout=5.0)
+            print(f"[プロフィール更新] {field} = {value}")
+    except Exception as e:
+        print(f"[プロフィール更新エラー] {e}")
 
 async def save_username_to_db(wallet_address: str, name: str):
     if not SUPABASE_URL or not SUPABASE_KEY or not wallet_address:
@@ -1113,7 +1155,13 @@ async def chat_endpoint(payload: ChatMessage):
         )
 
     # 💡 【徹底修正】ユーザーからの直接質問時の優先度・およびエフェクトタグ強制ルールを追加
-    # system_constraints はモジュールレベル変数を使用（ENGRAVE指示含む・モジュール先頭で定義済み）
+    # system_constraintsをユーザー名で動的生成
+    # （モジュールレベルの定義を元に{user_call}を差し込む）
+    dynamic_system_constraints = system_constraints.replace(
+        "まがときさん", f"{user_call}さん"
+    ).replace(
+        "まがとき", user_call
+    )
 
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
@@ -1157,16 +1205,58 @@ async def chat_endpoint(payload: ChatMessage):
     calendar_context = get_calendar_context()
     growth_context = get_growth_context()
 
-    # ─── ユーザー名・identity_context 組み立て ───
-    stored_name = await get_stored_username(wallet_address) if wallet_address else None
-    if wallet_address:
-        if stored_name:
-            identity_context = f"【対話コンテキスト】\n対話相手は、あなたの最高の相棒である『{stored_name}』さんです。"
-        else:
-            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-            identity_context = f"【対話コンテキスト】\nウォレット（{short_addr}）が接続されました。まがときさんの呼び名を聞いてみてください。"
+    # ─── ユーザープロフィール取得・identity_context組み立て ───
+    user_profile = await get_user_profile(wallet_address) if wallet_address else None
+    user_call = "まがとき"  # デフォルト（未登録時）
+    user_birthday_context = ""
+
+    if user_profile:
+        # 呼び名：preferred_call > user_name の優先順
+        user_call = user_profile.get("preferred_call") or user_profile.get("user_name") or "まがとき"
+
+        # 誕生日コンテキスト
+        birthday_raw = user_profile.get("birthday")
+        if birthday_raw:
+            try:
+                from datetime import date
+                bday = date.fromisoformat(birthday_raw[:10])
+                JST = timezone(timedelta(hours=+9))
+                today = datetime.now(JST).date()
+                # 今年の誕生日
+                bday_this_year = bday.replace(year=today.year)
+                diff = (bday_this_year - today).days
+                if diff < 0:
+                    bday_this_year = bday.replace(year=today.year + 1)
+                    diff = (bday_this_year - today).days
+                if diff == 0:
+                    user_birthday_context = f"🎂【今日は{user_call}さんの誕生日です！】心を込めてお祝いしてください。\n"
+                elif diff <= 3:
+                    user_birthday_context = f"📅【{diff}日後に{user_call}さんの誕生日】さりげなく楽しみにしていることを伝えてもよいです。\n"
+            except Exception:
+                pass
+
+        identity_context = (
+            f"【対話コンテキスト】\n"
+            f"対話相手の呼び名: 『{user_call}』さん\n"
+            f"この呼び名で自然に呼びかけてください。「まがとき」という固有名詞ではなく、"
+            f"必ず『{user_call}』さんと呼んでください。\n"
+            f"{user_birthday_context}"
+        )
+    elif wallet_address:
+        short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+        identity_context = (
+            f"【対話コンテキスト】\n"
+            f"ウォレット（{short_addr}）が接続されました。\n"
+            f"まだお名前が登録されていません。自然な流れで「なんてお呼びすればいいですか？」と聞いてください。\n"
+            f"名前を教えてもらったら ||NAME:名前|| タグを使って保存してください。\n"
+        )
+        user_call = "まがとき"
     else:
-        identity_context = "【対話コンテキスト】\nまだウォレット接続が確認できていません。認証を通すようまがときさんに促してください。"
+        identity_context = (
+            "【対話コンテキスト】\n"
+            "まだウォレット接続が確認できていません。認証を促してください。\n"
+        )
+        user_call = "まがとき"
 
     # ─── メモリ取得（graph内でも使うため事前に取得） ───
     agents_to_fetch = ["chronicle", "keeper", "pulse"]
@@ -1214,6 +1304,7 @@ async def chat_endpoint(payload: ChatMessage):
             "keeper_output": "",
             "pulse_output": "",
             "memo_context": memo_context,
+            "system_constraints_override": dynamic_system_constraints,
             "spot_context": spot_context,
             "nearby_spot": nearby_spot,
             "spot_proposal": "",
@@ -1251,6 +1342,7 @@ async def chat_endpoint(payload: ChatMessage):
         if name_match and wallet_address:
             extracted_name = name_match.group(1).strip()
             await save_username_to_db(wallet_address, extracted_name)
+            await save_user_profile_field(wallet_address, "preferred_call", extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
         # エピソードメモリ保存（fire-and-forget）

@@ -45,6 +45,9 @@ class RukirukiState(TypedDict):
     eval_score: int                    # 0〜10
     retry_count: int                   # 最大2回まで再試行
 
+    # ─── 動的制約オーバーライド ───
+    system_constraints_override: str  # ユーザー名で動的生成したconstraints
+
     # ─── カレンダー・成長 ───
     calendar_context: str              # 京都行事・誕生日コンテキスト
     growth_context: str                # 成長・日数コンテキスト
