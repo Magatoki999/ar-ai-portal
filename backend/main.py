@@ -379,8 +379,17 @@ async def fetch_weather_by_location(lat: float, lng: float):
                 weather_cache["description"] = data["weather"][0]["description"]
                 weather_cache["temp_c"] = round(data["main"]["temp"], 1)
                 weather_cache["weather_id"] = data["weather"][0]["id"]
-                weather_cache["city"] = data.get("name", "")
                 weather_cache["fetched_at"] = datetime.now(timezone.utc)
+                # city名はgeopyの日本語逆ジオコーディング結果を優先
+                try:
+                    import asyncio as _asyncio
+                    loop = _asyncio.get_event_loop()
+                    jp_address = await loop.run_in_executor(None, _sync_reverse_geocode, lat, lng)
+                    # 「市区町村」レベルの名前だけ抽出（最初の単語）
+                    city_ja = jp_address.split()[0] if jp_address else data.get("name", "")
+                    weather_cache["city"] = city_ja
+                except Exception:
+                    weather_cache["city"] = data.get("name", "")
                 print(f"[天気更新] {weather_cache['city']} / {weather_cache['description']} / {weather_cache['temp_c']}℃")
                 await shift_emotion_by_weather()
     except Exception as e:
