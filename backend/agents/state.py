@@ -45,6 +45,10 @@ class RukirukiState(TypedDict):
     eval_score: int                    # 0〜10
     retry_count: int                   # 最大2回まで再試行
 
+    # ─── カレンダー・成長 ───
+    calendar_context: str              # 京都行事・誕生日コンテキスト
+    growth_context: str                # 成長・日数コンテキスト
+
     # ─── メモリースポット ───
     spot_context: str                  # 近くのメモリースポット情報（プロンプト用）
     nearby_spot: Optional[dict]        # 近くのスポットのdict（なければNone）

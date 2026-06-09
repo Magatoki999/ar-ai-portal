@@ -212,6 +212,8 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         f"【MagatokiLab公式設定・世界観アーカイブ】\n{MAGATOKI_KNOWLEDGE}\n\n"
         f"{system_constraints}"
         f"{state.get('spot_context', '')}"
+        f"{state.get('calendar_context', '')}"
+        f"{state.get('growth_context', '')}"
         f"{state.get('emotion_context', '')}"
         f"{state.get('episode_context', '')}"
         f"{state.get('time_context', '')}"

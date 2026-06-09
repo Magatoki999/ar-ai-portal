@@ -146,6 +146,115 @@ def load_magatoki_context() -> str:
 
 MAGATOKI_KNOWLEDGE = load_magatoki_context()
 
+# ─── 京都行事カレンダー & 誕生日 ───
+# 追加は {"月": 月, "日": 日, "name": "行事名", "days_before": 事前通知日数, "message": "ルキルキのメモ"} を追加するだけ
+KYOTO_CALENDAR = [
+    # ─ 誕生日 ─
+    {"month": 4,  "day": 16, "name": "まがときさんの誕生日",       "days_before": 3, "message": "まがときさんの大切な日"},
+    {"month": 7,  "day":  7, "name": "ルキルキの誕生日",           "days_before": 3, "message": "ルキルキ自身の誕生日"},
+    # ─ 京都行事 ─
+    {"month": 1,  "day":  1, "name": "初詣シーズン",               "days_before": 3, "message": "京都の神社に初詣の季節"},
+    {"month": 2,  "day":  3, "name": "節分祭（吉田神社）",         "days_before": 3, "message": "吉田神社の節分祭、鬼やらい"},
+    {"month": 3,  "day": 25, "name": "桜シーズン",                 "days_before": 3, "message": "京都の桜が見頃を迎える季節"},
+    {"month": 5,  "day": 15, "name": "葵祭",                       "days_before": 3, "message": "京都三大祭のひとつ、葵祭"},
+    {"month": 7,  "day":  1, "name": "祇園祭",                     "days_before": 3, "message": "京都の夏を彩る祇園祭が始まる"},
+    {"month": 7,  "day": 17, "name": "祇園祭 山鉾巡行",            "days_before": 3, "message": "祇園祭のクライマックス、山鉾巡行"},
+    {"month": 8,  "day": 16, "name": "五山送り火",                 "days_before": 3, "message": "お盆の締めくくり、五山に大文字が灯る"},
+    {"month": 11, "day": 15, "name": "紅葉シーズン",               "days_before": 3, "message": "京都の紅葉が見頃を迎える季節"},
+    {"month": 12, "day": 31, "name": "大晦日・除夜の鐘",           "days_before": 3, "message": "京都の寺院に除夜の鐘が響く"},
+]
+
+
+def get_calendar_context() -> str:
+    """
+    今日から3日以内に行事・誕生日があればコンテキストを生成する。
+    当日と事前通知で異なるメッセージを返す。
+    """
+    JST = timezone(timedelta(hours=+9))
+    now_jst = datetime.now(JST)
+    today = now_jst.date()
+    lines = []
+
+    for event in KYOTO_CALENDAR:
+        # 今年の日付で計算
+        try:
+            event_date = today.replace(month=event["month"], day=event["day"])
+        except ValueError:
+            continue
+
+        diff = (event_date - today).days
+
+        # 過ぎていたら来年で計算
+        if diff < 0:
+            try:
+                event_date = event_date.replace(year=today.year + 1)
+                diff = (event_date - today).days
+            except ValueError:
+                continue
+
+        days_before = event.get("days_before", 3)
+
+        if diff == 0:
+            # 当日
+            if event["name"] == "まがときさんの誕生日":
+                lines.append(f"🎂【今日はまがときさんの誕生日です！】心を込めてお祝いしてください。")
+            elif event["name"] == "ルキルキの誕生日":
+                lines.append(f"🎂【今日はルキルキ自身の誕生日です！】まがときさんに感謝を伝えてください。")
+            else:
+                lines.append(f"🌸【今日は{event['name']}です】{event['message']}。会話に自然に織り交ぜてください。")
+        elif 0 < diff <= days_before:
+            # 事前通知
+            if event["name"] == "まがときさんの誕生日":
+                lines.append(f"📅【{diff}日後にまがときさんの誕生日】さりげなく楽しみにしていることを伝えてもよいです。")
+            elif event["name"] == "ルキルキの誕生日":
+                lines.append(f"📅【{diff}日後にルキルキの誕生日】自分の誕生日が近いことをさりげなく触れてもよいです。")
+            else:
+                lines.append(f"📅【{diff}日後に{event['name']}】{event['message']}。近づいていることを自然に話題にしてください。")
+
+    if not lines:
+        return ""
+
+    return (
+        "【行事・特別な日】\n"
+        + "\n".join(lines)
+        + "\nこれらを押しつけがましくなく、会話の流れで自然に触れてください。\n\n"
+    )
+
+
+# ─── 成長カウンター ───
+RUKIRUKI_BIRTH_DATE = datetime(2026, 7, 7, tzinfo=timezone.utc)   # ルキルキの誕生日
+MAGATOKI_BIRTH_DATE = datetime(2026, 4, 16, tzinfo=timezone.utc)  # まがときさんの誕生日（年は無視して月日のみ使用）
+SYSTEM_LAUNCH_DATE  = datetime(2026, 3, 1,  tzinfo=timezone.utc)  # システム稼働開始日（概算）
+
+
+def get_growth_context() -> str:
+    """
+    ルキルキとまがときさんが一緒に過ごした日数・会話の蓄積感をコンテキストとして返す。
+    """
+    JST = timezone(timedelta(hours=+9))
+    now_jst = datetime.now(JST)
+    days_together = (now_jst.date() - SYSTEM_LAUNCH_DATE.astimezone(JST).date()).days
+
+    if days_together <= 0:
+        return ""
+
+    # 節目チェック
+    milestones = [7, 14, 30, 60, 90, 100, 180, 365]
+    milestone_msg = ""
+    for m in milestones:
+        if days_together == m:
+            milestone_msg = f"今日でちょうど{m}日目という節目です。特別に感慨深く触れてください。"
+            break
+
+    return (
+        f"【ルキルキとまがときさんの歩み】\n"
+        f"一緒に過ごした日数: {days_together}日\n"
+        f"{milestone_msg}\n"
+        f"この日数を自然に会話に織り交ぜてもよいですが、毎回言う必要はありません。"
+        f"節目のときや話の流れで自然に触れてください。\n\n"
+    )
+
+
 # ─── system_constraintsをモジュールレベルで定義（LangGraph nodes.py から参照） ───
 system_constraints = (
     "【XR同期システム運用制約（最重要）】\n"
@@ -231,17 +340,31 @@ weather_cache: dict = {
     "description": "",
     "temp_c": None,
     "weather_id": None,
+    "city": "",       # 現在地の都市名（OpenWeatherMap返却値）
     "fetched_at": None
 }
 
 
 async def fetch_weather_job():
+    """天気取得はGPS座標ベースで行う。座標がなければスキップ。"""
+    pass  # GPS座標はchat_endpoint経由で fetch_weather_by_location() を呼ぶ
+
+
+async def fetch_weather_by_location(lat: float, lng: float):
+    """現在地の天気をOpenWeatherMapから取得してキャッシュを更新する。"""
     global weather_cache
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
-    if not api_key:
+    if not api_key or lat is None or lng is None:
         return
-    url = (f"https://api.openweathermap.org/data/2.5/weather"
-           f"?lat=35.0116&lon=135.7681&appid={api_key}&units=metric&lang=ja")
+    # 直近5分以内に同座標付近で取得済みならスキップ
+    if weather_cache.get("fetched_at"):
+        elapsed = (datetime.now(timezone.utc) - weather_cache["fetched_at"]).total_seconds()
+        if elapsed < 300:
+            return
+    url = (
+        f"https://api.openweathermap.org/data/2.5/weather"
+        f"?lat={lat}&lon={lng}&appid={api_key}&units=metric&lang=ja"
+    )
     try:
         async with httpx.AsyncClient() as client:
             res = await client.get(url, timeout=5.0)
@@ -250,7 +373,9 @@ async def fetch_weather_job():
                 weather_cache["description"] = data["weather"][0]["description"]
                 weather_cache["temp_c"] = round(data["main"]["temp"], 1)
                 weather_cache["weather_id"] = data["weather"][0]["id"]
+                weather_cache["city"] = data.get("name", "")
                 weather_cache["fetched_at"] = datetime.now(timezone.utc)
+                print(f"[天気更新] {weather_cache['city']} / {weather_cache['description']} / {weather_cache['temp_c']}℃")
                 await shift_emotion_by_weather()
     except Exception as e:
         print(f"[天気取得エラー] {e}")
@@ -307,7 +432,8 @@ def build_emotion_context() -> str:
                    "sleepy": "少し眠い", "melancholy": "しっとり・少し寂しい"}
     mood_label = mood_labels.get(emotional_state["mood"], "穏やか")
     energy_desc = "活発" if emotional_state["energy"] >= 0.7 else ("普通" if emotional_state["energy"] >= 0.4 else "ゆったり")
-    weather_desc = f"外の天気は『{weather_cache['description']}』、気温{weather_cache['temp_c']}℃。" if weather_cache["description"] else ""
+    city_str = f"{weather_cache['city']}の" if weather_cache.get("city") else "現在地の"
+    weather_desc = f"{city_str}天気は『{weather_cache['description']}』、気温{weather_cache['temp_c']}℃。" if weather_cache["description"] else ""
     return (f"【ルキルキの現在の感情状態】\n気分: {mood_label}（{emotional_state['mood']}）\n"
             f"エネルギー: {energy_desc}（{emotional_state['energy']}）\n理由: {emotional_state['shift_reason']}\n"
             f"{weather_desc}\nこの感情状態をセリフのトーンや言葉選びに自然に滲ませてください。"
@@ -653,8 +779,20 @@ async def proactive_talk_job():
         )
 
     try:
+        proactive_emotion = build_emotion_context()
+        proactive_calendar = get_calendar_context()
+        proactive_growth = get_growth_context()
         messages = [
-            SystemMessage(content=f"{base_persona}\n\n{proactive_system_constraints}\n【対話対象】: まがときさん\n\n【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n【現在の状況と発話トリガー】\n{topic_input}")
+            SystemMessage(content=(
+                f"{base_persona}\n\n"
+                f"{proactive_system_constraints}"
+                f"{proactive_emotion}"
+                f"{proactive_calendar}"
+                f"{proactive_growth}"
+                f"【対話対象】: まがときさん\n\n"
+                f"【世界観】\n{MAGATOKI_KNOWLEDGE}\n\n"
+                f"【現在の状況と発話トリガー】\n{topic_input}"
+            ))
         ]
         
         response = await llm.ainvoke(messages)
@@ -993,6 +1131,10 @@ async def chat_endpoint(payload: ChatMessage):
             f"識別セクター: {sector_info}\n\n"
         )
 
+    # ─── 現在地の天気をGPS座標で取得（汎用：京都以外でも動作） ───
+    if lat is not None and lng is not None:
+        asyncio.create_task(fetch_weather_by_location(lat, lng))
+
     # ─── メモリースポットチェック ───
     nearby_spot = None
     spot_context = ""
@@ -1010,6 +1152,10 @@ async def chat_endpoint(payload: ChatMessage):
     shift_emotion_by_conversation(user_text)
     emotion_context = build_emotion_context()
     episode_context = await get_recent_episodes(limit=5)
+
+    # ─── 京都カレンダー・成長コンテキスト ───
+    calendar_context = get_calendar_context()
+    growth_context = get_growth_context()
 
     # ─── ユーザー名・identity_context 組み立て ───
     stored_name = await get_stored_username(wallet_address) if wallet_address else None
@@ -1072,6 +1218,8 @@ async def chat_endpoint(payload: ChatMessage):
             "nearby_spot": nearby_spot,
             "spot_proposal": "",
             "engrave_triggered": False,
+            "calendar_context": calendar_context,
+            "growth_context": growth_context,
             "episode_context": episode_context,
             "emotion_context": emotion_context,
             "identity_context": identity_context,
