@@ -736,7 +736,7 @@ async def proactive_talk_job():
 
     print("─── [ルキルキ自発同期コア] まがときさんへの話し掛けを生成中... ───")
     
-    base_persona = load_rukiruki_persona(user_call)
+    base_persona = load_rukiruki_persona()  # proactiveはデフォルト名を使用
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     now_str = now_jst.strftime("%H時%M分")
@@ -1155,13 +1155,6 @@ async def chat_endpoint(payload: ChatMessage):
         )
 
     # 💡 【徹底修正】ユーザーからの直接質問時の優先度・およびエフェクトタグ強制ルールを追加
-    # system_constraintsをユーザー名で動的生成
-    # （モジュールレベルの定義を元に{user_call}を差し込む）
-    dynamic_system_constraints = system_constraints.replace(
-        "まがときさん", f"{user_call}さん"
-    ).replace(
-        "まがとき", user_call
-    )
 
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
@@ -1195,6 +1188,14 @@ async def chat_endpoint(payload: ChatMessage):
                 f"会話の流れが自然であれば、「ここでの記憶を刻みますか？」と提案してください。\n"
                 f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{nearby_spot['name']}|| タグを追加してください。\n\n"
             )
+
+    # base_personaとdynamic_system_constraintsをuser_call確定後に生成
+    base_persona = load_rukiruki_persona(user_call)
+    dynamic_system_constraints = system_constraints.replace(
+        "まがときさん", f"{user_call}さん"
+    ).replace(
+        "まがとき", user_call
+    )
 
     # ─── 感情ステートを会話から更新 ───
     shift_emotion_by_conversation(user_text)
