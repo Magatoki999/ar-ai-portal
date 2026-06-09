@@ -323,27 +323,31 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
     return None
 
 
-async def generate_gemini_tts(text: str) -> str | None:
+async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
     """
-    Gemini Speech Generation API を使って音声を生成する。
-    モデル: gemini-2.5-flash-preview-tts
-    声: Kore（落ち着いた女性声、日本語自然）
-    環境変数: GEMINI_API_KEY
+    Gemini Speech Generation API で音声を生成する。
+    戻り値: (base64_audio, mime_type) または None
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("[TTSエラー] GEMINI_API_KEY が未設定です")
         return None
 
-    # Gemini TTS エンドポイント
+    voice_name = os.getenv("GEMINI_VOICE_NAME", "Kore")
+
+    # テキストをそのまま渡す（システムプロンプト等を含まないこと）
+    # エフェクトタグ等の残留を念のため除去
+    import re as _re
+    clean_text = _re.sub(r"\|\|.*?\|\|", "", text).strip()
+    if not clean_text:
+        return None
+
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
-    voice_name = os.getenv("GEMINI_VOICE_NAME", "Kore")
     payload = {
-        "model": "gemini-2.5-flash-preview-tts",
         "contents": [{
             "role": "user",
-            "parts": [{"text": text}]
+            "parts": [{"text": clean_text}]
         }],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
@@ -361,33 +365,50 @@ async def generate_gemini_tts(text: str) -> str | None:
             response = await client.post(url, json=payload, headers=headers, timeout=20.0)
             if response.status_code == 200:
                 res_json = response.json()
-                # audioDataはbase64エンコードされたPCM/MP3が返る
-                audio_b64 = (
+                inline_data = (
                     res_json
                     .get("candidates", [{}])[0]
                     .get("content", {})
                     .get("parts", [{}])[0]
                     .get("inlineData", {})
-                    .get("data", None)
                 )
-                mime_type = (
-                    res_json
-                    .get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("inlineData", {})
-                    .get("mimeType", "unknown")
-                )
+                audio_b64 = inline_data.get("data")
+                mime_type = inline_data.get("mimeType", "audio/L16;codec=pcm;rate=24000")
                 if audio_b64:
-                    print(f"[Gemini TTS] 音声生成成功 mimeType={mime_type}")
-                    return audio_b64
+                    print(f"[Gemini TTS] 音声生成成功 voice={voice_name} mimeType={mime_type}")
+                    return audio_b64, mime_type
                 else:
-                    print(f"[TTSエラー] Gemini TTS レスポンス構造が予期しない形式: {res_json}")
+                    print(f"[TTSエラー] Gemini TTS レスポンスにaudioデータなし: {res_json}")
             else:
                 print(f"[TTSエラー] Gemini TTS HTTP {response.status_code}: {response.text[:200]}")
     except Exception as e:
         print(f"[TTSエラー] Gemini TTSに失敗しました: {e}")
     return None
+
+async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
+    """
+    GeminiのPCMレスポンス（audio/L16）をWAVに変換してbase64で返す。
+    ブラウザのAudio APIで再生可能な形式にする。
+    """
+    import wave, io, struct
+    # mime_typeからサンプルレートを抽出（例: audio/L16;codec=pcm;rate=24000）
+    rate = 24000
+    for part in mime_type.split(";"):
+        part = part.strip()
+        if part.startswith("rate="):
+            try: rate = int(part.split("=")[1])
+            except: pass
+
+    pcm_bytes = base64.b64decode(pcm_b64)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)      # モノラル
+        wf.setsampwidth(2)      # 16bit = 2bytes
+        wf.setframerate(rate)
+        wf.writeframes(pcm_bytes)
+
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 async def generate_tts(text: str) -> str | None:
@@ -408,9 +429,13 @@ async def generate_tts(text: str) -> str | None:
         return await generate_openai_tts(text)
 
     else:  # gemini（デフォルト）
-        audio = await generate_gemini_tts(text)
-        if audio:
-            return audio
+        result = await generate_gemini_tts(text)
+        if result:
+            audio_b64, mime_type = result
+            # PCM（audio/L16）はWAVヘッダを付与してブラウザで再生可能にする
+            if "L16" in mime_type or "pcm" in mime_type.lower():
+                audio_b64 = await pcm_to_wav_base64(audio_b64, mime_type)
+            return audio_b64
         print("[TTS] Gemini失敗 → OpenAIにフォールバック")
         return await generate_openai_tts(text)
 
@@ -924,10 +949,12 @@ async def proactive_talk_job():
         audio_base64 = await generate_tts(ai_reply)
 
         # 💡 WebSocketのブロードキャストデータに spatial_effect を追加して送信
+        _tts_mime = "audio/wav" if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini" else "audio/mpeg"
         await manager.broadcast({
             "type": "proactive_speech",
             "reply": ai_reply,
             "audio_data": audio_base64,
+            "audio_mime": _tts_mime,
             "spatial_effect": spatial_effect
         })
         print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply} [Effect: {spatial_effect}]")
@@ -1447,6 +1474,7 @@ async def chat_endpoint(payload: ChatMessage):
         "spatial_effect": spatial_effect,
         "spot_proposal": result.get("spot_proposal", "") if isinstance(result, dict) else "",
         "arweave_tx_id": result.get("arweave_tx_id", "") if isinstance(result, dict) else "",
+        "audio_mime": "audio/wav" if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini" else "audio/mpeg",
         "status": "success"
     }
 

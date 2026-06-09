@@ -216,7 +216,8 @@ export default function MindARViewer() {
                 const binaryString = window.atob(data.audio_data);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+                const audioMime = data.audio_mime || "audio/mpeg";
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
 
                 audioInstanceRef.current.onended = () => { 
                   setAiStatus("idle"); 
@@ -747,7 +748,8 @@ export default function MindARViewer() {
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+            const audioMime = data.audio_mime || "audio/mpeg";
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
@@ -877,7 +879,8 @@ setSubtitle(data.reply);
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+            const audioMime = data.audio_mime || "audio/mpeg";
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
