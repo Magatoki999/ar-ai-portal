@@ -388,6 +388,7 @@ async def generate_tts(text: str) -> str | None:
     フォールバック: gemini → openai の順で試みる
     """
     provider = os.getenv("TTS_PROVIDER", "gemini").lower()
+    print(f"[TTS] provider={provider} / text={text[:20]}...")
 
     if provider == "elevenlabs":
         audio = await generate_elevenlabs_voice(text)
