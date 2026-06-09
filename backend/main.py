@@ -336,19 +336,21 @@ async def generate_gemini_tts(text: str) -> str | None:
         return None
 
     # Gemini TTS エンドポイント
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash-preview-tts:generateContent?key={api_key}"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
+    voice_name = os.getenv("GEMINI_VOICE_NAME", "Kore")
     payload = {
-        "contents": [{"parts": [{"text": text}]}],
+        "model": "gemini-2.5-flash-preview-tts",
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": text}]
+        }],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
-                        "voiceName": os.getenv("GEMINI_VOICE_NAME", "Kore")
+                        "voiceName": voice_name
                     }
                 }
             }
