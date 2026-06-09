@@ -323,6 +323,87 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
     return None
 
 
+async def generate_gemini_tts(text: str) -> str | None:
+    """
+    Gemini Speech Generation API を使って音声を生成する。
+    モデル: gemini-2.5-flash-preview-tts
+    声: Kore（落ち着いた女性声、日本語自然）
+    環境変数: GEMINI_API_KEY
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("[TTSエラー] GEMINI_API_KEY が未設定です")
+        return None
+
+    # Gemini TTS エンドポイント
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.5-flash-preview-tts:generateContent?key={api_key}"
+    )
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": os.getenv("GEMINI_VOICE_NAME", "Kore")
+                    }
+                }
+            }
+        }
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers, timeout=20.0)
+            if response.status_code == 200:
+                res_json = response.json()
+                # audioDataはbase64エンコードされたPCM/MP3が返る
+                audio_b64 = (
+                    res_json
+                    .get("candidates", [{}])[0]
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("inlineData", {})
+                    .get("data", None)
+                )
+                if audio_b64:
+                    print("[Gemini TTS] 音声生成成功")
+                    return audio_b64
+                else:
+                    print(f"[TTSエラー] Gemini TTS レスポンス構造が予期しない形式: {res_json}")
+            else:
+                print(f"[TTSエラー] Gemini TTS HTTP {response.status_code}: {response.text[:200]}")
+    except Exception as e:
+        print(f"[TTSエラー] Gemini TTSに失敗しました: {e}")
+    return None
+
+
+async def generate_tts(text: str) -> str | None:
+    """
+    TTS_PROVIDER環境変数に応じてTTSプロバイダーを切り替える統合関数。
+    デフォルト: gemini
+    選択肢: gemini / elevenlabs / openai
+    フォールバック: gemini → openai の順で試みる
+    """
+    provider = os.getenv("TTS_PROVIDER", "gemini").lower()
+
+    if provider == "elevenlabs":
+        audio = await generate_elevenlabs_voice(text)
+        return audio or await generate_openai_tts(text)
+
+    elif provider == "openai":
+        return await generate_openai_tts(text)
+
+    else:  # gemini（デフォルト）
+        audio = await generate_gemini_tts(text)
+        if audio:
+            return audio
+        print("[TTS] Gemini失敗 → OpenAIにフォールバック")
+        return await generate_openai_tts(text)
+
+
 # ─── バックグラウンドタスク（情報調査部 ＆ 自発的話し掛け部）の設定 ───
 scheduler = AsyncIOScheduler()
 
@@ -829,14 +910,7 @@ async def proactive_talk_job():
             spatial_effect = effect_match.group(1).strip()
             ai_reply = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_reply).strip()
 
-        provider = os.getenv("TTS_PROVIDER", "openai").lower()
-        audio_base64 = None
-        if provider == "elevenlabs":
-            audio_base64 = await generate_elevenlabs_voice(ai_reply)
-            if not audio_base64:
-                audio_base64 = await generate_openai_tts(ai_reply)
-        else:
-            audio_base64 = await generate_openai_tts(ai_reply)
+        audio_base64 = await generate_tts(ai_reply)
 
         # 💡 WebSocketのブロードキャストデータに spatial_effect を追加して送信
         await manager.broadcast({
@@ -1044,17 +1118,7 @@ async def mark_memos_as_consumed(memo_ids: list):
 @app.post("/api/tts")
 async def tts_endpoint(payload: TTSRequest):
 
-    provider = os.getenv("TTS_PROVIDER", "openai").lower()
-
-    audio_base64 = None
-
-    if provider == "elevenlabs":
-        audio_base64 = await generate_elevenlabs_voice(payload.text)
-
-        if not audio_base64:
-            audio_base64 = await generate_openai_tts(payload.text)
-    else:
-        audio_base64 = await generate_openai_tts(payload.text)
+    audio_base64 = await generate_tts(payload.text)
 
     return {
         "audio_data": audio_base64
@@ -1102,14 +1166,7 @@ async def chat_endpoint(payload: ChatMessage):
             reply_text = "ごめんなさい、登録に失敗しました。もう一度試してみてください。||EFFECT:cyber||"
 
         await manager.broadcast({"type": "status", "status": "talking", "text": reply_text})
-        provider = os.getenv("TTS_PROVIDER", "openai").lower()
-        audio_base64_reg = None
-        if provider == "elevenlabs":
-            audio_base64_reg = await generate_elevenlabs_voice(reply_text)
-            if not audio_base64_reg:
-                audio_base64_reg = await generate_openai_tts(reply_text)
-        else:
-            audio_base64_reg = await generate_openai_tts(reply_text)
+        audio_base64_reg = await generate_tts(reply_text)
         await manager.broadcast({"type": "status", "status": "idle"})
         return {
             "reply": re.sub(r"\|\|EFFECT:.*?\|\|", "", reply_text).strip(),
@@ -1127,14 +1184,7 @@ async def chat_endpoint(payload: ChatMessage):
             registration_pending[session_key] = {"waiting": True, "lat": lat, "lng": lng}
             ask_text = "この場所にどんな名前をつけますか？||EFFECT:cyber||"
             await manager.broadcast({"type": "status", "status": "talking", "text": ask_text})
-            provider = os.getenv("TTS_PROVIDER", "openai").lower()
-            audio_base64_ask = None
-            if provider == "elevenlabs":
-                audio_base64_ask = await generate_elevenlabs_voice(ask_text)
-                if not audio_base64_ask:
-                    audio_base64_ask = await generate_openai_tts(ask_text)
-            else:
-                audio_base64_ask = await generate_openai_tts(ask_text)
+            audio_base64_ask = await generate_tts(ask_text)
             await manager.broadcast({"type": "status", "status": "idle"})
             return {
                 "reply": "この場所にどんな名前をつけますか？",
@@ -1148,7 +1198,7 @@ async def chat_endpoint(payload: ChatMessage):
             # GPSが取得できていない場合
             no_gps_text = "GPSが取得できていません。位置情報の許可を確認してください。||EFFECT:cyber||"
             await manager.broadcast({"type": "status", "status": "talking", "text": no_gps_text})
-            audio_base64_gps = await generate_openai_tts(no_gps_text)
+            audio_base64_gps = await generate_tts(no_gps_text)
             await manager.broadcast({"type": "status", "status": "idle"})
             return {
                 "reply": "GPSが取得できていません。位置情報の許可を確認してください。",
@@ -1371,13 +1421,7 @@ async def chat_endpoint(payload: ChatMessage):
 
         await manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
-        provider = os.getenv("TTS_PROVIDER", "openai").lower()
-        if provider == "elevenlabs":
-            audio_base64 = await generate_elevenlabs_voice(ai_response)
-            if not audio_base64:
-                audio_base64 = await generate_openai_tts(ai_response)
-        else:
-            audio_base64 = await generate_openai_tts(ai_response)
+        audio_base64 = await generate_tts(ai_response)
 
     except Exception as e:
         print(f"[LangGraph Error] {e}")
