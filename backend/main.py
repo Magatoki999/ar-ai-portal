@@ -333,6 +333,10 @@ last_user_interaction = datetime.now(timezone.utc)
 # { wallet_address: { 'waiting': True, 'lat': float, 'lng': float } }
 registration_pending: dict = {}
 
+# ─── ARマーカー認識状態（フロントからWSで通知） ───
+# Trueのときのみ自発発話を行う
+is_target_found: bool = False
+
 # ─── 感情ステートマシン ───
 emotional_state: dict = {
     "mood": "calm",
@@ -734,6 +738,11 @@ async def proactive_talk_job():
     global last_user_interaction
 
     if not manager.active_connections:
+        return
+
+    # ARマーカーがロスト中は自発発話しない
+    if not is_target_found:
+        print("[自発発話スキップ] ターゲットロスト中")
         return
 
     # 最後の会話からの経過時間
@@ -1390,12 +1399,26 @@ async def chat_endpoint(payload: ChatMessage):
 # ⚡ ─── WebSocket エンドポイント定義 ───
 @app.websocket("/ws/avatar")
 async def websocket_endpoint(websocket: WebSocket):
+    global is_target_found
     await manager.connect(websocket)
     print(f"[WebSocket] まがときさんのデバイスがアバター同期リンクに接続しました。")
     try:
         while True:
-            data = await websocket.receive_text()
-            await websocket.send_json({"type": "heartbeat", "status": "stable"})
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+                msg_type = msg.get("type", "")
+                if msg_type == "target_lost":
+                    is_target_found = False
+                    print("[WebSocket] ARマーカー: ロスト → 自発発話を停止")
+                elif msg_type == "target_found":
+                    is_target_found = True
+                    print("[WebSocket] ARマーカー: 認識 → 自発発話を再開")
+                else:
+                    await websocket.send_json({"type": "heartbeat", "status": "stable"})
+            except Exception:
+                await websocket.send_json({"type": "heartbeat", "status": "stable"})
     except WebSocketDisconnect:
+        is_target_found = False  # 切断時もロスト扱い
         manager.disconnect(websocket)
         print(f"[WebSocket] アバター同期リンクが切断されました。")
