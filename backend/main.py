@@ -385,13 +385,13 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
         print(f"[TTSエラー] Gemini TTSに失敗しました: {e}")
     return None
 
-async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
+async def pcm_to_mp3_base64(pcm_b64: str, mime_type: str) -> str | None:
     """
-    GeminiのPCMレスポンス（audio/L16）をWAVに変換してbase64で返す。
-    ブラウザのAudio APIで再生可能な形式にする。
+    GeminiのPCMレスポンス（audio/L16）をMP3に変換してbase64で返す。
+    pydub + ffmpeg が必要。失敗時はWAVにフォールバック。
     """
-    import wave, io, struct
-    # mime_typeからサンプルレートを抽出（例: audio/L16;codec=pcm;rate=24000）
+    import io, wave
+    # mime_typeからサンプルレートを抽出
     rate = 24000
     for part in mime_type.split(";"):
         part = part.strip()
@@ -401,14 +401,34 @@ async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
 
     pcm_bytes = base64.b64decode(pcm_b64)
 
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)      # モノラル
-        wf.setsampwidth(2)      # 16bit = 2bytes
-        wf.setframerate(rate)
-        wf.writeframes(pcm_bytes)
+    try:
+        from pydub import AudioSegment
+        audio_seg = AudioSegment(
+            data=pcm_bytes,
+            sample_width=2,    # 16bit
+            frame_rate=rate,
+            channels=1
+        )
+        mp3_buf = io.BytesIO()
+        audio_seg.export(mp3_buf, format="mp3", bitrate="128k")
+        print("[Gemini TTS] PCM→MP3変換成功")
+        return base64.b64encode(mp3_buf.getvalue()).decode("utf-8")
+    except Exception as e:
+        print(f"[Gemini TTS] MP3変換失敗({e}) → WAVにフォールバック")
+        # WAVフォールバック
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(pcm_bytes)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+# 後方互換のエイリアス
+async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
+    result = await pcm_to_mp3_base64(pcm_b64, mime_type)
+    return result or ""
 
 
 async def generate_tts(text: str) -> str | None:
@@ -949,12 +969,11 @@ async def proactive_talk_job():
         audio_base64 = await generate_tts(ai_reply)
 
         # 💡 WebSocketのブロードキャストデータに spatial_effect を追加して送信
-        _tts_mime = "audio/wav" if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini" else "audio/mpeg"
         await manager.broadcast({
             "type": "proactive_speech",
             "reply": ai_reply,
             "audio_data": audio_base64,
-            "audio_mime": _tts_mime,
+            "audio_mime": "audio/mpeg",  # Gemini PCMはMP3変換済み
             "spatial_effect": spatial_effect
         })
         print(f"[ルキルキ自発同期成功] 発話内容: {ai_reply} [Effect: {spatial_effect}]")
@@ -1474,7 +1493,7 @@ async def chat_endpoint(payload: ChatMessage):
         "spatial_effect": spatial_effect,
         "spot_proposal": result.get("spot_proposal", "") if isinstance(result, dict) else "",
         "arweave_tx_id": result.get("arweave_tx_id", "") if isinstance(result, dict) else "",
-        "audio_mime": "audio/wav" if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini" else "audio/mpeg",
+        "audio_mime": "audio/mpeg",  # Gemini PCMはMP3変換済み、他もMP3
         "status": "success"
     }
 
