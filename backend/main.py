@@ -339,6 +339,9 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
     # エフェクトタグ等の残留を念のため除去
     import re as _re
     clean_text = _re.sub(r"\|\|.*?\|\|", "", text).strip()
+    # 改行・制御文字も除去
+    clean_text = " ".join(clean_text.split())
+    print(f"[Gemini TTS] 送信テキスト({len(clean_text)}文字): {clean_text[:80]}")
     if not clean_text:
         return None
 
