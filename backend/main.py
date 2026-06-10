@@ -346,7 +346,7 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
         return None
 
         # 公式ドキュメント確認済みモデルID
-    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-preview-tts")
+    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     # TTS専用ペイロード（最小構成・余分なフィールド一切なし）
