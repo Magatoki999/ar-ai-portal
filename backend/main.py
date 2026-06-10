@@ -346,7 +346,7 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
         return None
 
         # 公式ドキュメント確認済みモデルID
-    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     # TTS専用ペイロード（最小構成・余分なフィールド一切なし）
@@ -397,21 +397,27 @@ async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
     フロント側は audio/wav として再生する。
     """
     import io, wave
+    # mimeType例: 'audio/L16;codec=pcm;rate=24000' or 'audio/l16; rate=24000; channels=1'
     rate = 24000
+    channels = 1
     for part in mime_type.split(";"):
-        part = part.strip()
+        part = part.strip().lower()
         if part.startswith("rate="):
-            try: rate = int(part.split("=")[1])
+            try: rate = int(part.split("=")[1].strip())
             except: pass
+        elif part.startswith("channels="):
+            try: channels = int(part.split("=")[1].strip())
+            except: pass
+    print(f"[Gemini TTS] WAV変換: rate={rate}Hz channels={channels}")
 
     pcm_bytes = base64.b64decode(pcm_b64)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)   # モノラル
+        wf.setnchannels(channels)
         wf.setsampwidth(2)   # 16bit
         wf.setframerate(rate)
         wf.writeframes(pcm_bytes)
-    print(f"[Gemini TTS] PCM→WAV変換成功 rate={rate}Hz bytes={len(pcm_bytes)}")
+    print(f"[Gemini TTS] PCM→WAV変換成功 rate={rate}Hz channels={channels} bytes={len(pcm_bytes)}")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
