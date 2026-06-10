@@ -442,9 +442,13 @@ async def generate_tts(text: str) -> str | None:
         result = await generate_gemini_tts(text)
         if result:
             audio_b64, mime_type = result
-            # PCM（audio/L16）はWAVヘッダを付与してブラウザで再生可能にする
-            if "L16" in mime_type or "pcm" in mime_type.lower():
+            print(f"[TTS分岐] mime_type={mime_type} l16check={'l16' in mime_type.lower()}")
+            # PCM（audio/L16 or audio/l16）はWAVヘッダを付与してブラウザで再生可能にする
+            if "l16" in mime_type.lower() or "pcm" in mime_type.lower():
                 audio_b64 = await pcm_to_wav_base64(audio_b64, mime_type)
+                print(f"[TTS分岐] WAV変換完了 base64長={len(audio_b64)}")
+            else:
+                print(f"[TTS分岐] WAV変換スキップ（非PCM）")
             return audio_b64
         print("[TTS] Gemini失敗 → OpenAIにフォールバック")
         return await generate_openai_tts(text)
