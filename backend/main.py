@@ -345,11 +345,12 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
     if not clean_text:
         return None
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={api_key}"
+        # 最新モデルID（preview不要）
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-tts:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
+    # TTS専用ペイロード（最小構成・余分なフィールド一切なし）
     payload = {
         "contents": [{
-            "role": "user",
             "parts": [{"text": clean_text}]
         }],
         "generationConfig": {
