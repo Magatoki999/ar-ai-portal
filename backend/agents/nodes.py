@@ -315,22 +315,37 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             spatial_effect = effect_match.group(1).strip()
             ai_reply = re.sub(r"\|\|EFFECT:.*?\|\|", "", ai_reply).strip()
 
-        # SPOT_PROPOSALタグ抽出（場所提案タグ、フロントに通知）
+        # SPOT_PROPOSALタグ抽出
         spot_proposal = ""
         spot_match = re.search(r"\|\|SPOT_PROPOSAL:(.*?)\|\|", ai_reply)
         if spot_match:
             spot_proposal = spot_match.group(1).strip()
             ai_reply = re.sub(r"\|\|SPOT_PROPOSAL:.*?\|\|", "", ai_reply).strip()
 
+        # SHOW_IMAGEタグ抽出（記憶写真をフロントに表示）
+        show_image_url = ""
+        image_match = re.search(r"\|\|SHOW_IMAGE:(.*?)\|\|", ai_reply)
+        if image_match:
+            show_image_url = image_match.group(1).strip()
+            ai_reply = re.sub(r"\|\|SHOW_IMAGE:.*?\|\|", "", ai_reply).strip()
+
         # ENGRAVEタグ検出（記憶を永遠に刻む）
         engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))
         ai_reply = re.sub(r"\|\|ENGRAVE\|\|", "", ai_reply).strip()
+
+        # SHOW_IMAGEタグ検出（思い出写真を表示）
+        show_image_url = ""
+        show_match = re.search(r"\|\|SHOW_IMAGE:(.*?)\|\|", ai_reply)
+        if show_match:
+            show_image_url = show_match.group(1).strip()
+            ai_reply = re.sub(r"\|\|SHOW_IMAGE:.*?\|\|", "", ai_reply).strip()
 
         return {
             "ai_reply": ai_reply,
             "spatial_effect": spatial_effect,
             "spot_proposal": spot_proposal,
             "engrave_triggered": engrave_triggered,
+            "show_image_url": show_image_url,
             "messages": [AIMessage(content=ai_reply)]
         }
 

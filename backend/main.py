@@ -598,7 +598,7 @@ def build_emotion_context() -> str:
             f"感情を直接「私は〇〇な気分です」と宣言せず、言葉の端々に表現してください。\n\n")
 
 
-async def save_episode_memory(summary: str, mood_at_time: str, keywords: list):
+async def save_episode_memory(summary: str, mood_at_time: str, keywords: list, arweave_tx_id: str = "", location_name: str = "", image_url: str = ""):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
     url = f"{SUPABASE_URL}/rest/v1/episode_memories"
@@ -620,7 +620,7 @@ async def get_recent_episodes(limit: int = 8) -> str:
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return ""
-    url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit={limit}"
+    url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit={limit}&select=*"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         async with httpx.AsyncClient() as client:
@@ -649,7 +649,9 @@ async def get_recent_episodes(limit: int = 8) -> str:
                     mood = ep.get("mood_at_time", "")
                     time_str = ep_dt.strftime("%m月%d日 %H時%M分")
 
-                    entry = f"・{time_str} ─ {summary}（気分: {mood}）"
+                    image_note = " 📷写真あり" if ep.get("image_url") else ""
+                    image_url_for_prompt = f" [image:{ep['image_url']}]" if ep.get("image_url") else ""
+                    entry = f"・{time_str} ─ {summary}（気分: {mood}）{image_note}{image_url_for_prompt}"
 
                     # 節目チェック
                     if diff_days == 7:
@@ -775,7 +777,7 @@ async def check_nearby_spot(lat: float, lng: float) -> dict | None:
     return None
 
 
-async def maybe_save_episode(user_text: str, ai_reply: str):
+async def maybe_save_episode(user_text: str, ai_reply: str, arweave_tx_id: str = "", location_name: str = "", image_url: str = ""):
     memorable_keywords = ["完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
                           "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"]
     if not any(k in user_text for k in memorable_keywords):
@@ -784,7 +786,14 @@ async def maybe_save_episode(user_text: str, ai_reply: str):
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
     summary = f"{now_str}、{user_call}さんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
     matched = [k for k in memorable_keywords if k in user_text]
-    await save_episode_memory(summary=summary, mood_at_time=emotional_state["mood"], keywords=matched)
+    await save_episode_memory(
+        summary=summary,
+        mood_at_time=emotional_state["mood"],
+        keywords=matched,
+        arweave_tx_id=arweave_tx_id,
+        location_name=location_name,
+        image_url=image_url
+    )
 
 
 def load_research_keywords() -> dict:
@@ -1473,7 +1482,13 @@ async def chat_endpoint(payload: ChatMessage):
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
         # エピソードメモリ保存（fire-and-forget）
-        asyncio.create_task(maybe_save_episode(payload.message, ai_response))
+        _arweave_tx = result.get("arweave_tx_id", "") if isinstance(result, dict) else ""
+        _location = nearby_spot["name"] if nearby_spot else ""
+        asyncio.create_task(maybe_save_episode(
+            payload.message, ai_response,
+            arweave_tx_id=_arweave_tx,
+            location_name=_location
+        ))
 
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
@@ -1495,9 +1510,95 @@ async def chat_endpoint(payload: ChatMessage):
         "spatial_effect": spatial_effect,
         "spot_proposal": result.get("spot_proposal", "") if isinstance(result, dict) else "",
         "arweave_tx_id": result.get("arweave_tx_id", "") if isinstance(result, dict) else "",
+        "show_image_url": result.get("show_image_url", "") if isinstance(result, dict) else "",
+        "engrave_triggered": result.get("engrave_triggered", False) if isinstance(result, dict) else False,
         "audio_mime": "audio/wav" if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini" else "audio/mpeg",
         "status": "success"
     }
+
+
+# ─── 思い出写真保存エンドポイント ───
+class MemoryImagePayload(BaseModel):
+    wallet_address: str | None = None
+    image_url: str
+
+
+@app.post("/api/save_memory_image")
+async def save_memory_image_endpoint(payload: MemoryImagePayload):
+    """
+    フロントからENGRAVE時に撮影した写真URLを受け取り、
+    直近のepisode_memoriesレコードにimage_urlを保存する。
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {"status": "skipped"}
+
+    # 直近のepisode_memoriesレコードを取得してimage_urlを更新
+    url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit=1"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, headers=headers, timeout=5.0)
+            if res.status_code == 200 and res.json():
+                record_id = res.json()[0]["id"]
+                patch_url = f"{SUPABASE_URL}/rest/v1/episode_memories?id=eq.{record_id}"
+                patch_headers = {**headers, "Content-Type": "application/json"}
+                await client.patch(
+                    patch_url,
+                    json={"image_url": payload.image_url},
+                    headers=patch_headers,
+                    timeout=5.0
+                )
+                print(f"[思い出写真] 保存完了: {payload.image_url}")
+                return {"status": "ok"}
+    except Exception as e:
+        print(f"[思い出写真] 保存エラー: {e}")
+    return {"status": "error"}
+
+
+# 📷 ─── 記憶写真保存エンドポイント ───
+class MemoryPhotoRequest(BaseModel):
+    arweave_tx_id: str = ""
+    image_url: str
+
+
+@app.post("/api/memory/photo")
+async def save_memory_photo(payload: MemoryPhotoRequest):
+    """
+    フロントからアップロードされた写真URLを最新のepisode_memoriesに紐づける。
+    arweave_tx_idがあればそのレコードを、なければ最新レコードを更新する。
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {"status": "error", "message": "Supabase未設定"}
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # 最新のepisode_memoriesレコードにimage_urlを追加
+            # まず最新レコードのidを取得
+            fetch_url = f"{SUPABASE_URL}/rest/v1/episode_memories?order=created_at.desc&limit=1"
+            res = await client.get(fetch_url, headers=headers, timeout=5.0)
+            if res.status_code == 200 and res.json():
+                latest_id = res.json()[0]["id"]
+                # image_urlを更新
+                update_url = f"{SUPABASE_URL}/rest/v1/episode_memories?id=eq.{latest_id}"
+                update_headers = {**headers, "Prefer": "return=minimal"}
+                await client.patch(
+                    update_url,
+                    json={"image_url": payload.image_url},
+                    headers=update_headers,
+                    timeout=5.0
+                )
+                print(f"[写真保存] episode_memoriesに画像を紐づけました: {payload.image_url}")
+                return {"status": "ok", "image_url": payload.image_url}
+    except Exception as e:
+        print(f"[写真保存エラー] {e}")
+
+    return {"status": "error"}
 
 
 # ⚡ ─── WebSocket エンドポイント定義 ───

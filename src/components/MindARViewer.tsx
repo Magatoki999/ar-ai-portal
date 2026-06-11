@@ -32,10 +32,10 @@ export default function MindARViewer() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
   const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // 起動挨拶の二重再生防止フラグ
-  const isGreetingPlayingRef = useRef<boolean>(false);
   const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
-  const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名 
+  const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名
+  const [showImageUrl, setShowImageUrl] = useState<string>(""); // SHOW_IMAGEタグで表示する画像URL
+  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中 
   
   // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
   const lastGreetingTimeRef = useRef<number>(0);
@@ -210,8 +210,7 @@ export default function MindARViewer() {
                 const binaryString = window.atob(data.audio_data);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-                const initialMime = data.audio_mime || "audio/mpeg";
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: initialMime }));
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 
                 audioInstanceRef.current.onended = () => { 
                   setAiStatus("idle"); 
@@ -573,12 +572,6 @@ export default function MindARViewer() {
 
 
   const playFixedGreeting = async () => {
-    // 二重呼び出し防止
-    if (isGreetingPlayingRef.current) {
-      console.log("[起動挨拶] すでに再生中のためスキップ");
-      return;
-    }
-    isGreetingPlayingRef.current = true;
     lastGreetingTimeRef.current = Date.now();
 
     if (audioInstanceRef.current) {
@@ -646,34 +639,29 @@ export default function MindARViewer() {
           bytes[i] = binaryString.charCodeAt(i);
         }
 
-        const greetingMime = data.audio_mime || "audio/mpeg";
         const audioUrl = URL.createObjectURL(
-          new Blob([bytes], { type: greetingMime })
+          new Blob([bytes], { type: "audio/mpeg" })
         );
 
         audioInstanceRef.current.onended = () => {
           setAiStatus("idle");
-          isGreetingPlayingRef.current = false;
           URL.revokeObjectURL(audioUrl);
         };
 
         initAudioPipeline(audioInstanceRef.current);
+
         audioInstanceRef.current.src = audioUrl;
 
-        // AutoPlay Policy対策
-        audioInstanceRef.current.play().catch((err) => {
-          console.log("起動挨拶AutoPlayブロック:", err);
-          setAiStatus("idle");
-          isGreetingPlayingRef.current = false;
-        });
+        await audioInstanceRef.current.play();
       } else {
         setAiStatus("idle");
-        isGreetingPlayingRef.current = false;
       }
     } catch (err) {
       console.log("固定挨拶TTS失敗:", err);
-      setAiStatus("idle");
-      isGreetingPlayingRef.current = false;
+
+      setTimeout(() => {
+        setAiStatus("idle");
+      }, 3000);
     }
   };
 
@@ -741,8 +729,7 @@ export default function MindARViewer() {
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const audioMime = data.audio_mime || "audio/mpeg";
-            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
@@ -773,6 +760,47 @@ export default function MindARViewer() {
     if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/jpeg", 0.7);
+  };
+
+  // ARフレームをSupabase Storageにアップロードしてimage_urlを返す
+  const uploadMemoryPhoto = async (base64DataUrl: string): Promise<string | null> => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey) return null;
+
+    try {
+      // base64 → Blob変換
+      const res = await fetch(base64DataUrl);
+      const blob = await res.blob();
+      const fileName = `memory_${Date.now()}.jpg`;
+
+      // Supabase Storageにアップロード
+      const uploadRes = await fetch(
+        `${supabaseUrl}/storage/v1/object/memories/${fileName}`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${supabaseKey}`,
+            "Content-Type": "image/jpeg",
+            "x-upsert": "true"
+          },
+          body: blob
+        }
+      );
+
+      if (!uploadRes.ok) {
+        console.error("[写真保存] アップロード失敗:", await uploadRes.text());
+        return null;
+      }
+
+      // Public URLを組み立て
+      const imageUrl = `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
+      console.log("[写真保存] アップロード成功:", imageUrl);
+      return imageUrl;
+    } catch (err) {
+      console.error("[写真保存] エラー:", err);
+      return null;
+    }
   };
 
   const toggleListening = () => {
@@ -812,7 +840,6 @@ export default function MindARViewer() {
         timestamp: timeStampStr,
       },
     ];
-    console.log(`[履歴] 送信: ${updatedHistory.length}件 (user:${updatedHistory.filter(h=>h.role==="user").length} ruki:${updatedHistory.filter(h=>h.role==="ruki").length})`);
 
     setChatHistory(updatedHistory);
 
@@ -836,9 +863,7 @@ export default function MindARViewer() {
             image_base64: imageBase64,       
             latitude: location ? location.lat : null, 
             longitude: location ? location.lng : null,
-            // chatHistoryには前ターンまでの履歴が入っている（updatedHistoryはuser発話追加後）
-            // バックエンドには「今回のuser発話を含む全履歴」を渡す
-            history: updatedHistory
+            history: updatedHistory 
           }),
         });
 
@@ -867,6 +892,36 @@ export default function MindARViewer() {
           setTimeout(() => setEngraveToast(""), 8000);
         }
 
+        // SHOW_IMAGEタグ：記憶写真をAR空間に表示
+        if (data.show_image_url) {
+          setShowImageUrl(data.show_image_url);
+          setTimeout(() => setShowImageUrl(""), 15000);
+        }
+
+        // ENGRAVE時：ARフレームをキャプチャしてSupabase Storageに保存
+        if (data.engrave_triggered) {
+          const frame = captureARCameraFrame();
+          if (frame) {
+            setIsUploadingMemory(true);
+            uploadMemoryPhoto(frame).then(imageUrl => {
+              setIsUploadingMemory(false);
+              if (imageUrl) {
+                const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+                if (baseUrl) {
+                  fetch(`${baseUrl}/api/memory/photo`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      arweave_tx_id: data.arweave_tx_id || "",
+                      image_url: imageUrl
+                    })
+                  }).catch(console.error);
+                }
+              }
+            });
+          }
+        }
+
 setSubtitle(data.reply);
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
@@ -875,8 +930,7 @@ setSubtitle(data.reply);
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const proactiveMime = data.audio_mime || "audio/mpeg";
-            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: proactiveMime }));
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
@@ -903,6 +957,27 @@ setSubtitle(data.reply);
 
   return (
     <>
+      {/* 📷 記憶写真表示（SHOW_IMAGEタグ受信時） */}
+      {showImageUrl && (
+        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+             onClick={() => setShowImageUrl("")}>
+          <div className="relative max-w-[85vw] max-h-[70vh]">
+            <img src={showImageUrl} alt="記憶の写真"
+                 className="rounded-2xl shadow-[0_0_40px_rgba(168,85,247,0.6)] max-w-full max-h-[70vh] object-contain" />
+            <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-purple-200 bg-black/50 py-1 rounded-b-2xl">
+              タップで閉じる
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📤 写真アップロード中インジケーター */}
+      {isUploadingMemory && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] bg-black/80 border border-purple-400/50 px-4 py-2 rounded-xl text-purple-300 text-xs">
+          📷 記憶の写真を刻んでいます...
+        </div>
+      )}
+
       {/* ✨ Arweave刻印完了トースト */}
       {engraveToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-2 pointer-events-none">
