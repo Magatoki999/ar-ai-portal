@@ -341,18 +341,26 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
     clean_text = _re.sub(r"\|\|.*?\|\|", "", text).strip()
     # 改行・制御文字も除去
     clean_text = " ".join(clean_text.split())
-    print(f"[Gemini TTS] 送信テキスト({len(clean_text)}文字): {clean_text[:80]}")
     if not clean_text:
         return None
 
+    # ルキルキのキャラクター性を声に反映するスタイル指示を前置き
+    # Gemini TTSはナチュラルランゲージでトーン・感情・ペースを制御できる
+    style_prefix = (
+        "小柄で元気な少年のように、好奇心旺盛で感情豊かに、"
+        "テンポよくいきいきと話してください: "
+    )
+    styled_text = style_prefix + clean_text
+    print(f"[Gemini TTS] 送信テキスト({len(clean_text)}文字): {clean_text[:80]}")
+
         # 公式ドキュメント確認済みモデルID
-    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+    model_id = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     # TTS専用ペイロード（最小構成・余分なフィールド一切なし）
     payload = {
         "contents": [{
-            "parts": [{"text": clean_text}]
+            "parts": [{"text": styled_text}]
         }],
         "generationConfig": {
             "responseModalities": ["AUDIO"],

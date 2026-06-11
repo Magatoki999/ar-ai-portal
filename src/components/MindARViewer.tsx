@@ -72,9 +72,6 @@ export default function MindARViewer() {
   const addressRef = useRef(address);
   useEffect(() => { addressRef.current = address; }, [address]);
 
-  // ARマーカー認識状態のRef（WSコールバック内から参照するため）
-  const isTargetFoundRef = useRef<boolean>(false);
-
   // 0. リアルタイム日時更新ロジック
   useEffect(() => {
     const updateDateTime = () => {
@@ -195,11 +192,6 @@ export default function MindARViewer() {
           }
 
           if (data.type === "proactive_speech") {
-            // ロスト中は自発発話をスキップ（ARマーカーが見えていないときはルキルキは存在しない）
-            if (!isTargetFoundRef.current) {
-              console.log("[自発発話スキップ] ターゲットロスト中のため発話を無視します");
-              return;
-            }
             console.log("🗣️ [ルキルキ自発的発話] 脳内情報調査部からの報告を受信:", data.reply);
             if (audioInstanceRef.current) {
               audioInstanceRef.current.pause();
@@ -216,8 +208,7 @@ export default function MindARViewer() {
                 const binaryString = window.atob(data.audio_data);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-                const audioMime = data.audio_mime || "audio/mpeg";
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 
                 audioInstanceRef.current.onended = () => { 
                   setAiStatus("idle"); 
@@ -398,8 +389,7 @@ export default function MindARViewer() {
             isSeamlessReturn = true;
           }
 
-          setIsTargetFound(true);
-          isTargetFoundRef.current = true;
+          setIsTargetFound(true); 
 
           spawnProgressRef.current = 0;
           isSpawningRef.current = true;
@@ -418,11 +408,6 @@ export default function MindARViewer() {
           // 💡 ロスト復帰制御：前回の初期思考から1分（60,000ミリ秒）以内かどうかを判定
           const isWithinOneMinute = (Date.now() - lastGreetingTimeRef.current) < 60000;
 
-          // バックエンドにfound通知（自発発話を再開）
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: "target_found" }));
-          }
-
           if (!isSeamlessReturn && !isWithinOneMinute) {
             // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
             playFixedGreeting();
@@ -439,23 +424,17 @@ export default function MindARViewer() {
           console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
 
           lostTimeoutRef.current = setTimeout(() => {
-            setIsTargetFound(false);
-            isTargetFoundRef.current = false;
+            setIsTargetFound(false); 
             setSubtitle("（カメラをターゲットにかざしてください）");
             isSpawningRef.current = false;
-            if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0);
-
-            // バックエンドにロスト通知（自発発話を止める）
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "target_lost" }));
-            }
-
+            if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
+            
             if (recognitionRef.current) {
               try { recognitionRef.current.stop(); } catch(e){}
             }
             lostTimeoutRef.current = null;
             console.log("[XRシステム] 完全にロストしました。");
-          }, 4000);
+          }, 4000); 
         };
 
         const clock = new Clock();
@@ -749,7 +728,7 @@ export default function MindARViewer() {
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
             const audioMime = data.audio_mime || "audio/mpeg";
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
@@ -819,6 +798,7 @@ export default function MindARViewer() {
         timestamp: timeStampStr,
       },
     ];
+    console.log(`[履歴] 送信: ${updatedHistory.length}件 (user:${updatedHistory.filter(h=>h.role==="user").length} ruki:${updatedHistory.filter(h=>h.role==="ruki").length})`);
 
     setChatHistory(updatedHistory);
 
@@ -842,7 +822,9 @@ export default function MindARViewer() {
             image_base64: imageBase64,       
             latitude: location ? location.lat : null, 
             longitude: location ? location.lng : null,
-            history: updatedHistory 
+            // chatHistoryには前ターンまでの履歴が入っている（updatedHistoryはuser発話追加後）
+            // バックエンドには「今回のuser発話を含む全履歴」を渡す
+            history: updatedHistory
           }),
         });
 
@@ -879,8 +861,7 @@ setSubtitle(data.reply);
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const audioMime = data.audio_mime || "audio/mpeg";
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMime }));
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
