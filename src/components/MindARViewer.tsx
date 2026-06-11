@@ -32,6 +32,8 @@ export default function MindARViewer() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
   const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // 起動挨拶の二重再生防止フラグ
+  const isGreetingPlayingRef = useRef<boolean>(false);
   const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
   const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名 
   
@@ -208,7 +210,8 @@ export default function MindARViewer() {
                 const binaryString = window.atob(data.audio_data);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+                const initialMime = data.audio_mime || "audio/mpeg";
+                const audioUrl = URL.createObjectURL(new Blob([bytes], { type: initialMime }));
 
                 audioInstanceRef.current.onended = () => { 
                   setAiStatus("idle"); 
@@ -570,6 +573,12 @@ export default function MindARViewer() {
 
 
   const playFixedGreeting = async () => {
+    // 二重呼び出し防止
+    if (isGreetingPlayingRef.current) {
+      console.log("[起動挨拶] すでに再生中のためスキップ");
+      return;
+    }
+    isGreetingPlayingRef.current = true;
     lastGreetingTimeRef.current = Date.now();
 
     if (audioInstanceRef.current) {
@@ -637,29 +646,34 @@ export default function MindARViewer() {
           bytes[i] = binaryString.charCodeAt(i);
         }
 
+        const greetingMime = data.audio_mime || "audio/mpeg";
         const audioUrl = URL.createObjectURL(
-          new Blob([bytes], { type: "audio/mpeg" })
+          new Blob([bytes], { type: greetingMime })
         );
 
         audioInstanceRef.current.onended = () => {
           setAiStatus("idle");
+          isGreetingPlayingRef.current = false;
           URL.revokeObjectURL(audioUrl);
         };
 
         initAudioPipeline(audioInstanceRef.current);
-
         audioInstanceRef.current.src = audioUrl;
 
-        await audioInstanceRef.current.play();
+        // AutoPlay Policy対策
+        audioInstanceRef.current.play().catch((err) => {
+          console.log("起動挨拶AutoPlayブロック:", err);
+          setAiStatus("idle");
+          isGreetingPlayingRef.current = false;
+        });
       } else {
         setAiStatus("idle");
+        isGreetingPlayingRef.current = false;
       }
     } catch (err) {
       console.log("固定挨拶TTS失敗:", err);
-
-      setTimeout(() => {
-        setAiStatus("idle");
-      }, 3000);
+      setAiStatus("idle");
+      isGreetingPlayingRef.current = false;
     }
   };
 
@@ -861,7 +875,8 @@ setSubtitle(data.reply);
             const binaryString = window.atob(data.audio_data);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+            const proactiveMime = data.audio_mime || "audio/mpeg";
+            const audioUrl = URL.createObjectURL(new Blob([bytes], { type: proactiveMime }));
 
             audioInstanceRef.current.onended = () => { setAiStatus("idle"); URL.revokeObjectURL(audioUrl); };
             initAudioPipeline(audioInstanceRef.current);
