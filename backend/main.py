@@ -20,7 +20,6 @@ from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AI
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.tools import tool
 
-
 # APScheduler 関連
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -681,6 +680,11 @@ async def get_recent_episodes(limit: int = 8) -> str:
                 except Exception:
                     continue
 
+            print(f"[エピソード取得] today={len(groups["today"])} yesterday={len(groups["yesterday"])} week={len(groups["this_week"])} older={len(groups["older"])} milestones={len(milestones)}")
+            # image_urlを含むエピソードをログ出力
+            for ep in episodes:
+                if ep.get("image_url"):
+                    print(f"[エピソード取得] 📷写真あり: {ep.get("created_at", "")[:16]} image_url={ep["image_url"][:60]}")
             if not any(groups.values()) and not milestones:
                 return ""
 
