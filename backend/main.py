@@ -1498,6 +1498,8 @@ async def chat_endpoint(payload: ChatMessage):
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
         arweave_tx_id = result.get("arweave_tx_id", "")
+        _engrave = result.get("engrave_triggered", False)
+        print(f"[DEBUG] engrave_triggered={_engrave} arweave_tx_id={bool(arweave_tx_id)}")
         if arweave_tx_id:
             print(f"[記憶永続化] Arweave tx: {arweave_tx_id}")
 
