@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
 
+
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
