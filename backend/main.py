@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
 
-
 # LangChain 関連
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -1500,7 +1499,10 @@ async def chat_endpoint(payload: ChatMessage):
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
         arweave_tx_id = result.get("arweave_tx_id", "")
         _engrave = result.get("engrave_triggered", False)
-        print(f"[DEBUG] engrave_triggered={_engrave} arweave_tx_id={bool(arweave_tx_id)}")
+        _show_image = result.get("show_image_url", "")
+        print(f"[DEBUG] engrave_triggered={_engrave} arweave_tx_id={bool(arweave_tx_id)} show_image_url={bool(_show_image)}")
+        if _show_image:
+            print(f"[DEBUG] SHOW_IMAGE URL: {_show_image[:80]}")
         if arweave_tx_id:
             print(f"[記憶永続化] Arweave tx: {arweave_tx_id}")
 
