@@ -764,8 +764,10 @@ export default function MindARViewer() {
 
   // ARフレームをSupabase Storageにアップロードしてimage_urlを返す
   const uploadMemoryPhoto = async (base64DataUrl: string): Promise<string | null> => {
+    console.log("[写真保存] uploadMemoryPhoto開始 dataLen=", base64DataUrl?.length);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    console.log("[写真保存] supabaseUrl=", supabaseUrl ? "OK" : "MISSING", "supabaseKey=", supabaseKey ? "OK" : "MISSING");
     if (!supabaseUrl || !supabaseKey) return null;
 
     try {
@@ -899,8 +901,10 @@ export default function MindARViewer() {
         }
 
         // ENGRAVE時：ARフレームをキャプチャしてSupabase Storageに保存
+        console.log("[DEBUG ENGRAVE] data.engrave_triggered=", data.engrave_triggered, "typeof=", typeof data.engrave_triggered);
         if (data.engrave_triggered) {
           const frame = captureARCameraFrame();
+          console.log("[DEBUG ENGRAVE] frame取得:", frame ? `${frame.length}文字` : "null");
           if (frame) {
             setIsUploadingMemory(true);
             uploadMemoryPhoto(frame).then(imageUrl => {
