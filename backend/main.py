@@ -605,9 +605,19 @@ async def save_episode_memory(summary: str, mood_at_time: str, keywords: list, a
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(url, json={"summary": summary, "mood_at_time": mood_at_time,
-                "keywords": keywords, "created_at": datetime.now(timezone.utc).isoformat()},
-                headers=headers, timeout=5.0)
+            data = {
+                "summary": summary,
+                "mood_at_time": mood_at_time,
+                "keywords": keywords,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            if arweave_tx_id:
+                data["arweave_tx_id"] = arweave_tx_id
+            if location_name:
+                data["location_name"] = location_name
+            if image_url:
+                data["image_url"] = image_url
+            await client.post(url, json=data, headers=headers, timeout=5.0)
     except Exception as e:
         print(f"[エピソード保存エラー] {e}")
 
@@ -780,12 +790,21 @@ async def check_nearby_spot(lat: float, lng: float) -> dict | None:
 async def maybe_save_episode(user_text: str, ai_reply: str, arweave_tx_id: str = "", location_name: str = "", image_url: str = ""):
     memorable_keywords = ["完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
                           "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"]
-    if not any(k in user_text for k in memorable_keywords):
+    # ENGRAVEトリガー時は無条件で保存
+    force_save = arweave_tx_id != ""
+    if not force_save and not any(k in user_text for k in memorable_keywords):
         return
     JST = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
-    summary = f"{now_str}、{user_call}さんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
+    # user_callはグローバルスコープにないため、まがときをデフォルトに
+    _call = "まがとき"
+    summary = f"{now_str}、{_call}さんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
     matched = [k for k in memorable_keywords if k in user_text]
+    print(f"[エピソード記録] {summary}")
+    if arweave_tx_id:
+        print(f"[エピソード記録] Arweave tx: {arweave_tx_id}")
+    if location_name:
+        print(f"[エピソード記録] 場所: {location_name}")
     await save_episode_memory(
         summary=summary,
         mood_at_time=emotional_state["mood"],
@@ -931,7 +950,9 @@ async def proactive_talk_job():
         "3. 文字数は50〜100文字以内で短く、親しみのある丁寧語でまとめてください。URLは絶対に出力禁止です。\n"
         "4. 【重要】会話の雰囲気や時間帯、内容に合わせて、セリフの末尾に必ず空間エフェクト指示タグを 『||EFFECT:エフェクト名||』 の形式で埋め込んでください。\n"
         "   - 指定可能なエフェクト名は [sakura, snow, rain, cyber] の4つのみです。最も適したものを1つ選択してください。\n"
-        "5. まがときさんが『刻んで』と言ったとき必ず ||ENGRAVE|| タグをセリフ末尾に追加してください。\n\n"
+        "5. まがときさんが『刻んで』と言ったとき必ず ||ENGRAVE|| タグをセリフ末尾に追加してください。\n"
+        "6. まがときさんが「写真を見せて」「あの時の写真」「記憶の写真」と言ったとき、"
+        "エピソードに[image:URL]が含まれていれば ||SHOW_IMAGE:URL|| をセリフ末尾に追加してください。\n\n"
     )
 
     if fetched_memos:
@@ -1392,6 +1413,13 @@ async def chat_endpoint(payload: ChatMessage):
         "まがときさん", f"{user_call}さん"
     ).replace(
         "まがとき", user_call
+    )
+    # SHOW_IMAGE指示を動的に追加（episode_contextに画像URLが含まれる場合に機能）
+    dynamic_system_constraints += (
+        "\n【記憶写真の表示】\n"
+        f"{user_call}さんが「写真を見せて」「あの時の写真」「記憶の写真」と言ったとき、\n"
+        "エピソードメモリに[image:URL]が含まれていれば、セリフ末尾に ||SHOW_IMAGE:URL|| タグを追加してください。\n"
+        "例: 'あの日の写真です！||SHOW_IMAGE:https://...||'\n"
     )
 
     # ─── メモリ取得（graph内でも使うため事前に取得） ───
