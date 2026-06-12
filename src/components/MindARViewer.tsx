@@ -911,6 +911,7 @@ export default function MindARViewer() {
               setIsUploadingMemory(false);
               if (imageUrl) {
                 const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+                console.log("[写真保存] imageUrl=", imageUrl?.substring(0,60), "baseUrl=", baseUrl ? "OK" : "MISSING");
                 if (baseUrl) {
                   fetch(`${baseUrl}/api/memory/photo`, {
                     method: "POST",
