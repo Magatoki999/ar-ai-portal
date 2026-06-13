@@ -333,6 +333,18 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))
         ai_reply = re.sub(r"\|\|ENGRAVE\|\|", "", ai_reply).strip()
 
+        # SEARCH_LOCATION_PHOTOタグ処理
+        # evaluatorに渡す前にai_replyからは除去するが、タグ自体はai_replyの末尾に再付加して
+        # main.pyのpost処理（DB検索→URLセット）に引き渡す
+        loc_match = re.search(r"\|\|SEARCH_LOCATION_PHOTO:(.*?)\|\|", ai_reply)
+        if loc_match:
+            loc_name = loc_match.group(1).strip()
+            # ai_replyからタグを除去してevaluatorの減点を防ぐ
+            ai_reply = re.sub(r"\|\|SEARCH_LOCATION_PHOTO:.*?\|\|", "", ai_reply).strip()
+            # show_image_urlが未取得の場合のみ、main.pyが検索できるようタグを末尾に再付加
+            if not show_image_url:
+                ai_reply = ai_reply + f" ||SEARCH_LOCATION_PHOTO:{loc_name}||"
+
         return {
             "ai_reply": ai_reply,
             "spatial_effect": spatial_effect,
