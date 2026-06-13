@@ -1436,6 +1436,7 @@ async def chat_endpoint(payload: ChatMessage):
         "エピソードメモリに[image:URL]が含まれていれば、セリフ末尾に ||SHOW_IMAGE:URL|| タグを追加してください。\n"
         "例: 'あの日の写真です！||SHOW_IMAGE:https://...||'\n"
     )
+    print(f"[DEBUG constraints] SHOW_IMAGE含む={'SHOW_IMAGE' in dynamic_system_constraints} 長さ={len(dynamic_system_constraints)}")
 
     # ─── メモリ取得（graph内でも使うため事前に取得） ───
     agents_to_fetch = ["chronicle", "keeper", "pulse"]
