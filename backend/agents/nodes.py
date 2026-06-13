@@ -333,13 +333,6 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))
         ai_reply = re.sub(r"\|\|ENGRAVE\|\|", "", ai_reply).strip()
 
-        # SHOW_IMAGEタグ検出（思い出写真を表示）
-        show_image_url = ""
-        show_match = re.search(r"\|\|SHOW_IMAGE:(.*?)\|\|", ai_reply)
-        if show_match:
-            show_image_url = show_match.group(1).strip()
-            ai_reply = re.sub(r"\|\|SHOW_IMAGE:.*?\|\|", "", ai_reply).strip()
-
         return {
             "ai_reply": ai_reply,
             "spatial_effect": spatial_effect,
