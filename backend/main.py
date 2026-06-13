@@ -680,11 +680,14 @@ async def get_recent_episodes(limit: int = 8) -> str:
                 except Exception:
                     continue
 
-            print(f"[エピソード取得] today={len(groups["today"])} yesterday={len(groups["yesterday"])} week={len(groups["this_week"])} older={len(groups["older"])} milestones={len(milestones)}")
+            _t = len(groups["today"]); _y = len(groups["yesterday"]); _w = len(groups["this_week"]); _o = len(groups["older"])
+            print(f"[エピソード取得] today={_t} yesterday={_y} week={_w} older={_o} milestones={len(milestones)}")
             # image_urlを含むエピソードをログ出力
             for ep in episodes:
                 if ep.get("image_url"):
-                    print(f"[エピソード取得] 📷写真あり: {ep.get("created_at", "")[:16]} image_url={ep["image_url"][:60]}")
+                    _url = ep["image_url"][:60]
+                    _dt = ep.get("created_at", "")[:16]
+                    print(f"[エピソード取得] 📷写真あり: {_dt} image_url={_url}")
             if not any(groups.values()) and not milestones:
                 return ""
 
@@ -1354,6 +1357,13 @@ async def chat_endpoint(payload: ChatMessage):
     shift_emotion_by_conversation(user_text)
     emotion_context = build_emotion_context()
     episode_context = await get_recent_episodes(limit=5)
+    if episode_context:
+        _has_image = "[image:" in episode_context
+        print(f"[episode_context] 長さ={len(episode_context)} image含む={_has_image}")
+        if _has_image:
+            # image URLの先頭部分をログ
+            _idx = episode_context.find("[image:")
+            print(f"[episode_context] image部分: {episode_context[_idx:_idx+80]}")
 
     # ─── 京都カレンダー・成長コンテキスト ───
     calendar_context = get_calendar_context()
@@ -1478,6 +1488,7 @@ async def chat_endpoint(payload: ChatMessage):
             "nearby_spot": nearby_spot,
             "spot_proposal": "",
             "engrave_triggered": False,
+            "show_image_url": "",
             "calendar_context": calendar_context,
             "growth_context": growth_context,
             "episode_context": episode_context,

@@ -58,5 +58,8 @@ class RukirukiState(TypedDict):
     spot_proposal: str                 # SPOT_PROPOSALタグで抽出した場所名
     engrave_triggered: bool            # ENGRAVEタグが立ったか
 
+    # ─── 記憶写真 ───
+    show_image_url: str                # SHOW_IMAGEタグで表示する画像URL
+
     # ─── オンチェーン記憶 ───
     arweave_tx_id: str                 # 保存されたArweaveトランザクションID（保存なしは空文字）
