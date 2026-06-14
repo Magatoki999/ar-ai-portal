@@ -175,7 +175,6 @@ export default function MindARViewer() {
     let reconnectTimeout: NodeJS.Timeout;
 
     const connectWebSocket = () => {
-      // ⭕ 印刷バグ修正：単体 print() から console.log() へ完全移行
       console.log(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
       socket = new WebSocket(wsUrl);
       wsRef.current = socket;
@@ -202,7 +201,6 @@ export default function MindARViewer() {
             timersRef.current.forEach(clearTimeout);
             timersRef.current = [];
 
-            // ⭕ 履歴汚染修正：字幕への表示と音声再生のみを行い、履歴(chatHistory)への混入を完全にシャットアウト。
             setSubtitle(data.reply);
 
             if (data.audio_data && audioInstanceRef.current) {
@@ -382,13 +380,11 @@ export default function MindARViewer() {
           }
         });
 
+        // ─── 💡 修正箇所1: onTargetFound ───
         anchor.onTargetFound = () => {
-          let isSeamlessReturn = false;
           if (lostTimeoutRef.current) {
             clearTimeout(lostTimeoutRef.current);
             lostTimeoutRef.current = null;
-            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
-            isSeamlessReturn = true;
           }
 
           setIsTargetFound(true); 
@@ -407,36 +403,29 @@ export default function MindARViewer() {
             particlesRef.current.geometry.attributes.position.needsUpdate = true;
           }
 
-          // 💡 ロスト復帰制御：前回の初期思考から1分（60,000ミリ秒）以内かどうかを判定
           const isWithinOneMinute = (Date.now() - lastGreetingTimeRef.current) < 60000;
 
-          if (!isSeamlessReturn && !isWithinOneMinute) {
-            // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
+          if (!isWithinOneMinute) {
             playFixedGreeting();
           } else {
-            // 手ブレ、または1分以内の連続再認識時は強制思考を禁止し、即座にアイドルスタンバイへ
             setAiStatus("idle");
             setSearchPhase("STABLE");
-            setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
+            setSubtitle("ルキルキを現実空間に再同期しました。");
           }
         };
 
+        // ─── 💡 修正箇所2: onTargetLost ───
         anchor.onTargetLost = () => {
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
-          console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
+          console.log("[XRシステム] ターゲットロスト。姿を消し、通信を継続します。");
 
-          lostTimeoutRef.current = setTimeout(() => {
-            setIsTargetFound(false); 
-            setSubtitle("（カメラをターゲットにかざしてください）");
-            isSpawningRef.current = false;
-            if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
-            
-            if (recognitionRef.current) {
-              try { recognitionRef.current.stop(); } catch(e){}
-            }
-            lostTimeoutRef.current = null;
-            console.log("[XRシステム] 完全にロストしました。");
-          }, 4000); 
+          setIsTargetFound(false); 
+          setSubtitle("（通信継続中... マーカーから目を離してもそのまま話しかけられます）");
+          isSpawningRef.current = false;
+          
+          if (avatarSceneRef.current) avatarSceneRef.current.scale.set(0, 0, 0); 
+          
+          // 💡 これまであった音声認識の強制停止や完全ロストタイマーは実行しません
         };
 
         const clock = new Clock();
@@ -570,7 +559,6 @@ export default function MindARViewer() {
     });
   };
 
-
   const playFixedGreeting = async () => {
     lastGreetingTimeRef.current = Date.now();
 
@@ -665,9 +653,7 @@ export default function MindARViewer() {
     }
   };
 
-
   const triggerInitialGreeting = async (forcedLocation?: { lat: number; lng: number } | null) => {
-    // 💡 挨拶（思考初期化）が走ったら現在のタイムスタンプをセット
     lastGreetingTimeRef.current = Date.now();
 
     if (audioInstanceRef.current) { audioInstanceRef.current.pause(); audioInstanceRef.current.src = ""; }
@@ -707,15 +693,13 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
-        // メモリースポット提案
         if (data.spot_proposal) {
           setSpotProposal(data.spot_proposal);
         }
 
-        // Arweave刻印完了トースト
         if (data.arweave_tx_id) {
           setEngraveToast(data.arweave_tx_id);
-          setSpatialEffect("sakura"); // 刻印時は桜エフェクト
+          setSpatialEffect("sakura"); 
           currentEffectRef.current = "sakura";
           setTimeout(() => setEngraveToast(""), 8000);
         }
@@ -762,7 +746,6 @@ export default function MindARViewer() {
     return canvas.toDataURL("image/jpeg", 0.7);
   };
 
-  // ARフレームをSupabase Storageにアップロードしてimage_urlを返す
   const uploadMemoryPhoto = async (base64DataUrl: string): Promise<string | null> => {
     console.log("[写真保存] uploadMemoryPhoto開始 dataLen=", base64DataUrl?.length);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -771,12 +754,10 @@ export default function MindARViewer() {
     if (!supabaseUrl || !supabaseKey) return null;
 
     try {
-      // base64 → Blob変換
       const res = await fetch(base64DataUrl);
       const blob = await res.blob();
       const fileName = `memory_${Date.now()}.jpg`;
 
-      // Supabase Storageにアップロード
       const uploadRes = await fetch(
         `${supabaseUrl}/storage/v1/object/memories/${fileName}`,
         {
@@ -795,7 +776,6 @@ export default function MindARViewer() {
         return null;
       }
 
-      // Public URLを組み立て
       const imageUrl = `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
       console.log("[写真保存] アップロード成功:", imageUrl);
       return imageUrl;
@@ -881,12 +861,10 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
-                // メモリースポット提案
         if (data.spot_proposal) {
           setSpotProposal(data.spot_proposal);
         }
 
-        // Arweave刻印完了トースト
         if (data.arweave_tx_id) {
           setEngraveToast(data.arweave_tx_id);
           setSpatialEffect("sakura");
@@ -894,13 +872,11 @@ export default function MindARViewer() {
           setTimeout(() => setEngraveToast(""), 8000);
         }
 
-        // SHOW_IMAGEタグ：記憶写真をAR空間に表示
         if (data.show_image_url) {
           setShowImageUrl(data.show_image_url);
           setTimeout(() => setShowImageUrl(""), 15000);
         }
 
-        // ENGRAVE時：ARフレームをキャプチャしてSupabase Storageに保存
         console.log("[DEBUG ENGRAVE] data.engrave_triggered=", data.engrave_triggered, "typeof=", typeof data.engrave_triggered);
         if (data.engrave_triggered) {
           const frame = captureARCameraFrame();
@@ -927,7 +903,7 @@ export default function MindARViewer() {
           }
         }
 
-setSubtitle(data.reply);
+        setSubtitle(data.reply);
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
         if (data.audio_data && audioInstanceRef.current) {
@@ -958,11 +934,12 @@ setSubtitle(data.reply);
     }
   };
 
-  const isControlDisabled = !isTargetFound || aiStatus === "thinking";
+  // ─── 💡 修正箇所3: ロスト時でもUI操作をブロックしない ───
+  // const isControlDisabled = !isTargetFound || aiStatus === "thinking";
+  const isControlDisabled = aiStatus === "thinking";
 
   return (
     <>
-      {/* 📷 記憶写真表示（SHOW_IMAGEタグ受信時） */}
       {showImageUrl && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-sm"
              onClick={() => setShowImageUrl("")}>
@@ -976,14 +953,12 @@ setSubtitle(data.reply);
         </div>
       )}
 
-      {/* 📤 写真アップロード中インジケーター */}
       {isUploadingMemory && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] bg-black/80 border border-purple-400/50 px-4 py-2 rounded-xl text-purple-300 text-xs">
           📷 記憶の写真を刻んでいます...
         </div>
       )}
 
-      {/* ✨ Arweave刻印完了トースト */}
       {engraveToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-2 pointer-events-none">
           <div className="bg-gradient-to-r from-purple-900/90 to-indigo-900/90 border border-purple-400/60 backdrop-blur-lg px-5 py-3 rounded-2xl shadow-[0_0_30px_rgba(168,85,247,0.5)] text-white text-center">
@@ -993,7 +968,6 @@ setSubtitle(data.reply);
         </div>
       )}
 
-      {/* 📍 メモリースポット提案バナー */}
       {spotProposal && (
         <div className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
           <div className="bg-black/80 border border-emerald-400/50 backdrop-blur-lg px-4 py-2 rounded-xl text-white text-center text-xs shadow-[0_0_15px_rgba(52,211,153,0.3)]">
@@ -1081,9 +1055,10 @@ setSubtitle(data.reply);
                 type="text" 
                 name="message"
                 disabled={isControlDisabled}
+                // ─── 💡 修正箇所4: プレースホルダーのテキストを調整 ───
                 placeholder={
                   !isTargetFound 
-                    ? "::: ターゲットを見失っています :::" 
+                    ? "::: 通信継続中... そのまま話しかけられます :::" 
                     : isListening ? "::: 空間音響データをスキャン中 :::" : "まがときさん、ルキルキへコマンドを入力..."
                 } 
                 className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
@@ -1102,7 +1077,6 @@ setSubtitle(data.reply);
         </div>
       </div>
 
-      {/* バックログ履歴モーダル */}
       {isHistoryOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-6 font-mono text-white pointer-events-auto">
           <div className="flex justify-between items-center border-b border-purple-500/30 pb-3 mb-4">
