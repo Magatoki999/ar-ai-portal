@@ -35,9 +35,27 @@ export default function MindARViewer() {
   const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
   const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名
   const [showImageUrl, setShowImageUrl] = useState<string>(""); // SHOW_IMAGEタグで表示する画像URL
-  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中 
-  
-  // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
+  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false);
+
+  // ── 平面配置モード ──
+  // "mindar"  : MindAR画像認識中（初期）
+  // "placing" : カード認識後→地面タップ待ち
+  // "placed"  : 地面に配置済み→会話モード
+  const [arPhase, setArPhase] = useState<"mindar" | "placing" | "placed">("mindar");
+  const arPhaseRef = useRef<"mindar" | "placing" | "placed">("mindar");
+
+  // 平面モード Three.js 独立レンダラー用
+  const planeRendererRef = useRef<any>(null);
+  const planeSceneRef = useRef<any>(null);
+  const planeCameraRef = useRef<any>(null);
+  const planeRootRef = useRef<any>(null);
+  const planeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const planeAnimLoopRef = useRef<number | null>(null);
+
+  // デバイスオリエンテーション（平面モード用）
+  const orientRef = useRef({ alpha: 0, beta: 0, gamma: 0, hasOri: false, screenAngle: 0 });
+
+  // 前回の初期挨拶タイムスタンプ（クールダウン管理用）
   const lastGreetingTimeRef = useRef<number>(0);
 
   const recognitionRef = useRef<any>(null);
@@ -383,45 +401,118 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          let isSeamlessReturn = false;
-          if (lostTimeoutRef.current) {
-            clearTimeout(lostTimeoutRef.current);
-            lostTimeoutRef.current = null;
-            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
-            isSeamlessReturn = true;
-          }
+          // すでに平面配置済みなら何もしない
+          if (arPhaseRef.current !== "mindar") return;
 
-          setIsTargetFound(true); 
+          console.log("[ARフェーズ] カード認識成功 → 平面配置モードへ移行");
 
-          spawnProgressRef.current = 0;
-          isSpawningRef.current = true;
+          // MindARを停止してカメラストリームを引き継ぐ
+          mindarThree.stop().catch(() => {});
+          renderer.setAnimationLoop(null);
 
-          if (particlesRef.current) {
-            (particlesRef.current.material as any).opacity = 1.0;
-            const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
-            for (let i = 0; i < particleCount; i++) {
-              posArr[i * 3] = (Math.random() - 0.5) * 0.2; 
-              posArr[i * 3 + 1] = -0.2; 
-              posArr[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
-            }
-            particlesRef.current.geometry.attributes.position.needsUpdate = true;
-          }
+          // カメラストリームを取得してplaneVideoに接続
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
+            .then((stream) => {
+              const vid = document.createElement("video");
+              vid.srcObject = stream;
+              vid.autoplay = true;
+              vid.playsInline = true;
+              vid.muted = true;
+              vid.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:cover;z-index:1;";
+              document.body.appendChild(vid);
+              planeVideoRef.current = vid;
 
-          // 💡 ロスト復帰制御：前回の初期思考から1分（60,000ミリ秒）以内かどうかを判定
-          const isWithinOneMinute = (Date.now() - lastGreetingTimeRef.current) < 60000;
+              // デバイスオリエンテーション登録
+              const onOri = (e: DeviceOrientationEvent) => {
+                if (e.alpha == null) return;
+                orientRef.current.alpha = (e.alpha * Math.PI) / 180;
+                orientRef.current.beta  = (e.beta  * Math.PI) / 180;
+                orientRef.current.gamma = (e.gamma * Math.PI) / 180;
+                orientRef.current.hasOri = true;
+              };
+              const onScreenOri = () => {
+                const angle = (window.screen.orientation?.angle ?? (window as any).orientation ?? 0);
+                orientRef.current.screenAngle = (angle * Math.PI) / 180;
+              };
+              window.addEventListener("deviceorientation", onOri);
+              window.addEventListener("orientationchange", onScreenOri);
+              onScreenOri();
 
-          if (!isSeamlessReturn && !isWithinOneMinute) {
-            // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
-            playFixedGreeting();
-          } else {
-            // 手ブレ、または1分以内の連続再認識時は強制思考を禁止し、即座にアイドルスタンバイへ
-            setAiStatus("idle");
-            setSearchPhase("STABLE");
-            setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
-          }
+              // 独立Three.jsレンダラー構築
+              const planeCanvas = document.createElement("canvas");
+              planeCanvas.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2;pointer-events:none;";
+              document.body.appendChild(planeCanvas);
+
+              const PR = THREE;
+              const planeRenderer = new PR.WebGLRenderer({ canvas: planeCanvas, alpha: true, antialias: true });
+              planeRenderer.setPixelRatio(window.devicePixelRatio);
+              planeRenderer.setSize(window.innerWidth, window.innerHeight);
+              planeRenderer.setClearColor(0x000000, 0);
+              planeRendererRef.current = planeRenderer;
+
+              const planeScene = new PR.Scene();
+              planeSceneRef.current = planeScene;
+
+              const planeCamera = new PR.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+              planeCamera.position.set(0, 1.6, 0);
+              planeCameraRef.current = planeCamera;
+
+              planeScene.add(new PR.AmbientLight(0xffffff, 0.8));
+              const dl = new PR.DirectionalLight(0xffffff, 0.6);
+              dl.position.set(1, 3, 2);
+              planeScene.add(dl);
+
+              // アバターを平面シーンに移植
+              const root = new PR.Group();
+              root.visible = false;
+              planeScene.add(root);
+              planeRootRef.current = root;
+
+              if (avatarSceneRef.current) {
+                // MindARシーンから外してplaneシーンに移す
+                avatarSceneRef.current.rotation.x = 0;
+                avatarSceneRef.current.scale.set(2.0, 2.0, 2.0);
+                root.add(avatarSceneRef.current);
+              }
+
+              // オリエンテーション → カメラ回転
+              const q1 = new PR.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+              const zee = new PR.Vector3(0, 0, 1);
+              const euler = new PR.Euler();
+              const q0 = new PR.Quaternion();
+              const applyOri = () => {
+                if (!orientRef.current.hasOri) return;
+                const { alpha, beta, gamma, screenAngle } = orientRef.current;
+                euler.set(beta, alpha, -gamma, "YXZ");
+                planeCamera.quaternion.setFromEuler(euler);
+                planeCamera.quaternion.multiply(q1);
+                planeCamera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle));
+              };
+
+              // レンダーループ
+              const clock = new PR.Clock();
+              const loop = () => {
+                planeAnimLoopRef.current = requestAnimationFrame(loop);
+                const delta = clock.getDelta();
+                if (mixerRef.current) mixerRef.current.update(delta);
+                applyOri();
+                planeRenderer.render(planeScene, planeCamera);
+              };
+              loop();
+
+              // フェーズを placing に
+              arPhaseRef.current = "placing";
+              setArPhase("placing");
+              setSubtitle("画面をタップしてルキルキを地面に置いてください");
+              setIsTargetFound(true);
+            })
+            .catch((e) => console.error("[平面モード] カメラ取得失敗:", e));
         };
 
         anchor.onTargetLost = () => {
+          // 平面配置モードに移行済みなら、MindARのロストは無視
+          if (arPhaseRef.current !== "mindar") return;
+
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
           console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
 
@@ -551,9 +642,57 @@ export default function MindARViewer() {
     
     return () => { 
       if (localRenderer) { try { localRenderer.setAnimationLoop(null); } catch(e){} }
-      if (mindarThreeInstance) { try { mindarThreeInstance.stop(); } catch(e){} } 
+      if (mindarThreeInstance) { try { mindarThreeInstance.stop(); } catch(e){} }
+      // 平面モードのリソース解放
+      if (planeAnimLoopRef.current) cancelAnimationFrame(planeAnimLoopRef.current);
+      if (planeRendererRef.current) { try { planeRendererRef.current.dispose(); } catch(e){} }
+      if (planeVideoRef.current) {
+        const stream = planeVideoRef.current.srcObject as MediaStream;
+        stream?.getTracks().forEach(t => t.stop());
+        planeVideoRef.current.remove();
+      }
     };
   }, []);
+
+  // ── 平面モード：タップで地面にルキルキを配置 ──
+  const placeOnGround = () => {
+    const camera = planeCameraRef.current;
+    const root = planeRootRef.current;
+    if (!camera || !root) return;
+
+    // カメラ正面方向を水平に投影してDIST先の座標を地面レベルに配置
+    // THREE.Vector3互換のプレーンなオブジェクトで計算
+    const q = camera.quaternion;
+    // forward = (0,0,-1) rotated by quaternion
+    const fx = 2*(q.x*q.z + q.w*q.y);
+    const fy = 2*(q.y*q.z - q.w*q.x);
+    const fz = 1 - 2*(q.x*q.x + q.y*q.y);
+    let dx = -fx, dz = -fz; // y成分は無視（地面投影）
+    const len = Math.sqrt(dx*dx + dz*dz);
+    if (len > 0.001) { dx /= len; dz /= len; } else { dx = 0; dz = -1; }
+
+    const DIST = 2.0;
+    root.position.set(
+      camera.position.x + dx * DIST,
+      0,
+      camera.position.z + dz * DIST
+    );
+    root.rotation.y = Math.atan2(
+      camera.position.x - root.position.x,
+      camera.position.z - root.position.z
+    );
+    root.visible = true;
+
+    // フェーズ: placed → 会話開始
+    arPhaseRef.current = "placed";
+    setArPhase("placed");
+    setSubtitle("ルキルキを地面に固定しました！");
+
+    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+
+    // 初期挨拶トリガー
+    triggerInitialGreeting(null);
+  };
 
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
@@ -958,7 +1097,7 @@ setSubtitle(data.reply);
     }
   };
 
-  const isControlDisabled = !isTargetFound || aiStatus === "thinking";
+  const isControlDisabled = arPhase !== "placed" || aiStatus === "thinking";
 
   return (
     <>
@@ -1020,6 +1159,31 @@ setSubtitle(data.reply);
       `}} />
 
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1 }} />
+
+      {/* 🟢 平面配置モード：タップで地面にルキルキを置く */}
+      {arPhase === "placing" && (
+        <div
+          className="fixed inset-0 z-[40] flex flex-col items-center justify-center"
+          onClick={placeOnGround}
+          style={{ touchAction: "none" }}
+        >
+          {/* 十字照準 */}
+          <div className="relative w-20 h-20 mb-6 pointer-events-none">
+            <div className="absolute inset-0 border-2 border-cyan-400 rounded-full animate-ping opacity-40" />
+            <div className="absolute inset-2 border-2 border-cyan-300 rounded-full" />
+            <div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-400 -translate-y-1/2" />
+            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-400 -translate-x-1/2" />
+          </div>
+          <div className="bg-black/70 backdrop-blur-md border border-cyan-400/40 px-6 py-3 rounded-2xl pointer-events-none">
+            <p className="text-cyan-300 text-sm font-bold tracking-widest text-center">
+              タップしてルキルキを地面に配置
+            </p>
+            <p className="text-gray-400 text-xs text-center mt-1">
+              カメラを地面に向けてタップ
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
@@ -1088,7 +1252,7 @@ setSubtitle(data.reply);
                 } 
                 className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
               />
-              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${!isTargetFound ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
+              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${arPhase !== "placed" ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
             </div>
 
             <button 
