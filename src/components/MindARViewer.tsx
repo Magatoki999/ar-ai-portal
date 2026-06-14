@@ -406,107 +406,126 @@ export default function MindARViewer() {
 
           console.log("[ARフェーズ] カード認識成功 → 平面配置モードへ移行");
 
-          // MindARを停止してカメラストリームを引き継ぐ
-          mindarThree.stop().catch(() => {});
+          // ── MindARのアニメーションループを停止 ──
           renderer.setAnimationLoop(null);
 
-          // カメラストリームを取得してplaneVideoに接続
-          navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
-            .then((stream) => {
-              const vid = document.createElement("video");
-              vid.srcObject = stream;
-              vid.autoplay = true;
-              vid.playsInline = true;
-              vid.muted = true;
-              vid.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:cover;z-index:1;";
-              document.body.appendChild(vid);
-              planeVideoRef.current = vid;
+          // ── MindARのcontainer内DOM（video/canvas）を非表示にする ──
+          // mindarThree.stop()はDOMを壊すのでここでは呼ばない
+          if (containerRef.current) {
+            Array.from(containerRef.current.querySelectorAll("video, canvas")).forEach((el) => {
+              (el as HTMLElement).style.visibility = "hidden";
+            });
+          }
 
-              // デバイスオリエンテーション登録
-              const onOri = (e: DeviceOrientationEvent) => {
-                if (e.alpha == null) return;
-                orientRef.current.alpha = (e.alpha * Math.PI) / 180;
-                orientRef.current.beta  = (e.beta  * Math.PI) / 180;
-                orientRef.current.gamma = (e.gamma * Math.PI) / 180;
-                orientRef.current.hasOri = true;
-              };
-              const onScreenOri = () => {
-                const angle = (window.screen.orientation?.angle ?? (window as any).orientation ?? 0);
-                orientRef.current.screenAngle = (angle * Math.PI) / 180;
-              };
-              window.addEventListener("deviceorientation", onOri);
-              window.addEventListener("orientationchange", onScreenOri);
-              onScreenOri();
+          // ── MindARのvideoストリームをそのまま取得して背景videoを作成 ──
+          // MindARが内部で使っているvideoをContainerから探す
+          const mindVideo = containerRef.current?.querySelector("video") as HTMLVideoElement | null;
+          const existingStream = mindVideo?.srcObject as MediaStream | null;
 
-              // 独立Three.jsレンダラー構築
-              const planeCanvas = document.createElement("canvas");
-              planeCanvas.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2;pointer-events:none;";
-              document.body.appendChild(planeCanvas);
+          const setupPlaneMode = (stream: MediaStream) => {
+            // 背景video（カメラ映像）
+            const vid = document.createElement("video");
+            vid.srcObject = stream;
+            vid.autoplay = true;
+            vid.playsInline = true;
+            vid.muted = true;
+            vid.setAttribute("playsinline", "");
+            vid.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:cover;z-index:1;";
+            document.body.appendChild(vid);
+            vid.play().catch(() => {});
+            planeVideoRef.current = vid;
 
-              const PR = THREE;
-              const planeRenderer = new PR.WebGLRenderer({ canvas: planeCanvas, alpha: true, antialias: true });
-              planeRenderer.setPixelRatio(window.devicePixelRatio);
-              planeRenderer.setSize(window.innerWidth, window.innerHeight);
-              planeRenderer.setClearColor(0x000000, 0);
-              planeRendererRef.current = planeRenderer;
+            // ── デバイスオリエンテーション登録 ──
+            const onOri = (e: DeviceOrientationEvent) => {
+              if (e.alpha == null) return;
+              orientRef.current.alpha = (e.alpha * Math.PI) / 180;
+              orientRef.current.beta  = (e.beta  * Math.PI) / 180;
+              orientRef.current.gamma = (e.gamma * Math.PI) / 180;
+              orientRef.current.hasOri = true;
+            };
+            const onScreenOri = () => {
+              const angle = (window.screen.orientation?.angle ?? (window as any).orientation ?? 0);
+              orientRef.current.screenAngle = (angle * Math.PI) / 180;
+            };
+            window.addEventListener("deviceorientation", onOri);
+            window.addEventListener("orientationchange", onScreenOri);
+            onScreenOri();
 
-              const planeScene = new PR.Scene();
-              planeSceneRef.current = planeScene;
+            // ── 既存のrenderer(MindAR)のcanvasを平面モード用に再利用 ──
+            // 新規canvasを作らずMindARのcanvasをそのまま使う
+            renderer.setClearColor(0x000000, 0);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            const rendererCanvas = renderer.domElement;
+            rendererCanvas.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2;pointer-events:none;";
+            // containerRef配下から外してbodyに移動（MindARのcss干渉を防ぐ）
+            document.body.appendChild(rendererCanvas);
+            planeRendererRef.current = renderer;
 
-              const planeCamera = new PR.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
-              planeCamera.position.set(0, 1.6, 0);
-              planeCameraRef.current = planeCamera;
+            // ── 平面用シーン・カメラ ──
+            const planeScene = new THREE.Scene();
+            planeSceneRef.current = planeScene;
 
-              planeScene.add(new PR.AmbientLight(0xffffff, 0.8));
-              const dl = new PR.DirectionalLight(0xffffff, 0.6);
-              dl.position.set(1, 3, 2);
-              planeScene.add(dl);
+            const planeCamera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+            planeCamera.position.set(0, 1.6, 0);
+            planeCameraRef.current = planeCamera;
 
-              // アバターを平面シーンに移植
-              const root = new PR.Group();
-              root.visible = false;
-              planeScene.add(root);
-              planeRootRef.current = root;
+            planeScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const dl = new THREE.DirectionalLight(0xffffff, 0.6);
+            dl.position.set(1, 3, 2);
+            planeScene.add(dl);
 
-              if (avatarSceneRef.current) {
-                // MindARシーンから外してplaneシーンに移す
-                avatarSceneRef.current.rotation.x = 0;
-                avatarSceneRef.current.scale.set(2.0, 2.0, 2.0);
-                root.add(avatarSceneRef.current);
-              }
+            // ── アバターを平面シーンに移植 ──
+            const root = new THREE.Group();
+            root.visible = false;
+            planeScene.add(root);
+            planeRootRef.current = root;
 
-              // オリエンテーション → カメラ回転
-              const q1 = new PR.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-              const zee = new PR.Vector3(0, 0, 1);
-              const euler = new PR.Euler();
-              const q0 = new PR.Quaternion();
-              const applyOri = () => {
-                if (!orientRef.current.hasOri) return;
-                const { alpha, beta, gamma, screenAngle } = orientRef.current;
-                euler.set(beta, alpha, -gamma, "YXZ");
-                planeCamera.quaternion.setFromEuler(euler);
-                planeCamera.quaternion.multiply(q1);
-                planeCamera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle));
-              };
+            if (avatarSceneRef.current) {
+              avatarSceneRef.current.rotation.x = 0;
+              avatarSceneRef.current.scale.set(2.0, 2.0, 2.0);
+              root.add(avatarSceneRef.current);
+            }
 
-              // レンダーループ
-              const clock = new PR.Clock();
-              const loop = () => {
-                planeAnimLoopRef.current = requestAnimationFrame(loop);
-                const delta = clock.getDelta();
-                if (mixerRef.current) mixerRef.current.update(delta);
-                applyOri();
-                planeRenderer.render(planeScene, planeCamera);
-              };
-              loop();
+            // ── オリエンテーション → カメラ回転 ──
+            const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+            const zee = new THREE.Vector3(0, 0, 1);
+            const euler = new THREE.Euler();
+            const q0 = new THREE.Quaternion();
+            const applyOri = () => {
+              if (!orientRef.current.hasOri) return;
+              const { alpha, beta, gamma, screenAngle } = orientRef.current;
+              euler.set(beta, alpha, -gamma, "YXZ");
+              planeCamera.quaternion.setFromEuler(euler);
+              planeCamera.quaternion.multiply(q1);
+              planeCamera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle));
+            };
 
-              // フェーズを placing に
-              arPhaseRef.current = "placing";
-              setArPhase("placing");
-              setSubtitle("画面をタップしてルキルキを地面に置いてください");
-              setIsTargetFound(true);
-            })
-            .catch((e) => console.error("[平面モード] カメラ取得失敗:", e));
+            // ── レンダーループ ──
+            const planeClock = new Clock();
+            const loop = () => {
+              planeAnimLoopRef.current = requestAnimationFrame(loop);
+              const delta = planeClock.getDelta();
+              if (mixerRef.current) mixerRef.current.update(delta);
+              applyOri();
+              renderer.render(planeScene, planeCamera);
+            };
+            loop();
+
+            // フェーズを placing に
+            arPhaseRef.current = "placing";
+            setArPhase("placing");
+            setSubtitle("画面をタップしてルキルキを地面に置いてください");
+            setIsTargetFound(true);
+          };
+
+          // MindARのストリームが再利用できればそのまま、なければ新規取得
+          if (existingStream && existingStream.active) {
+            setupPlaneMode(existingStream);
+          } else {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
+              .then(setupPlaneMode)
+              .catch((e) => console.error("[平面モード] カメラ取得失敗:", e));
+          }
         };
 
         anchor.onTargetLost = () => {
