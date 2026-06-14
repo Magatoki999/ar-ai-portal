@@ -435,9 +435,9 @@ export default function MindARViewer() {
             vid.play().catch(() => {});
             planeVideoRef.current = vid;
 
-            // ── デバイスオリエンテーション登録 ──
+            // ── デバイスオリエンテーション登録（iOS 13+ パーミッション対応）──
             const onOri = (e: DeviceOrientationEvent) => {
-              if (e.alpha == null) return;
+              if (e.alpha == null || e.beta == null || e.gamma == null) return;
               orientRef.current.alpha = (e.alpha * Math.PI) / 180;
               orientRef.current.beta  = (e.beta  * Math.PI) / 180;
               orientRef.current.gamma = (e.gamma * Math.PI) / 180;
@@ -447,9 +447,19 @@ export default function MindARViewer() {
               const angle = (window.screen.orientation?.angle ?? (window as any).orientation ?? 0);
               orientRef.current.screenAngle = (angle * Math.PI) / 180;
             };
-            window.addEventListener("deviceorientation", onOri);
             window.addEventListener("orientationchange", onScreenOri);
             onScreenOri();
+
+            const DOE = DeviceOrientationEvent as any;
+            if (typeof DOE.requestPermission === "function") {
+              DOE.requestPermission()
+                .then((state: string) => {
+                  if (state === "granted") window.addEventListener("deviceorientation", onOri);
+                })
+                .catch(() => window.addEventListener("deviceorientation", onOri));
+            } else {
+              window.addEventListener("deviceorientation", onOri);
+            }
 
             // ── 既存のrenderer(MindAR)のcanvasを平面モード用に再利用 ──
             // 新規canvasを作らずMindARのcanvasをそのまま使う
@@ -674,32 +684,28 @@ export default function MindARViewer() {
   }, []);
 
   // ── 平面モード：タップで地面にルキルキを配置 ──
+  // viewer_plane.html の placeAt() と同じロジック
   const placeOnGround = () => {
-    const camera = planeCameraRef.current;
+    const cam = planeCameraRef.current;
     const root = planeRootRef.current;
-    if (!camera || !root) return;
+    if (!cam || !root) return;
 
-    // カメラ正面方向を水平に投影してDIST先の座標を地面レベルに配置
-    // THREE.Vector3互換のプレーンなオブジェクトで計算
-    const q = camera.quaternion;
-    // forward = (0,0,-1) rotated by quaternion
-    const fx = 2*(q.x*q.z + q.w*q.y);
-    const fy = 2*(q.y*q.z - q.w*q.x);
-    const fz = 1 - 2*(q.x*q.x + q.y*q.y);
-    let dx = -fx, dz = -fz; // y成分は無視（地面投影）
-    const len = Math.sqrt(dx*dx + dz*dz);
-    if (len > 0.001) { dx /= len; dz /= len; } else { dx = 0; dz = -1; }
+    // Three.jsのVector3.applyQuaternion でカメラ正面を取得（viewer_plane.htmlと同一）
+    // cam は THREE.PerspectiveCamera インスタンスなので
+    // cam.getWorldDirection() が最も確実
+    const dir = new (cam.position.constructor as any)(0, 0, -1);
+    dir.applyQuaternion(cam.quaternion);
+    dir.y = 0;
+    if (dir.lengthSq() < 0.001) { dir.x = 0; dir.y = 0; dir.z = -1; }
+    dir.normalize();
 
     const DIST = 2.0;
     root.position.set(
-      camera.position.x + dx * DIST,
+      cam.position.x + dir.x * DIST,
       0,
-      camera.position.z + dz * DIST
+      cam.position.z + dir.z * DIST
     );
-    root.rotation.y = Math.atan2(
-      camera.position.x - root.position.x,
-      camera.position.z - root.position.z
-    );
+    root.scale.setScalar(2.0);
     root.visible = true;
 
     // フェーズ: placed → 会話開始
