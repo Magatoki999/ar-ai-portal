@@ -44,6 +44,9 @@ export default function MindARViewer() {
   const [arPhase, setArPhase] = useState<"mindar" | "placing" | "placed">("mindar");
   const arPhaseRef = useRef<"mindar" | "placing" | "placed">("mindar");
 
+  // Three.jsモジュール参照（useEffect外から使うため）
+  const threeRef = useRef<any>(null);
+
   // 平面モード Three.js 独立レンダラー用
   const planeRendererRef = useRef<any>(null);
   const planeSceneRef = useRef<any>(null);
@@ -286,6 +289,7 @@ export default function MindARViewer() {
     const start = async () => {
       try {
         const THREE = await import("three");
+        threeRef.current = THREE;
         const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
         const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
         const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
@@ -423,7 +427,7 @@ export default function MindARViewer() {
           const existingStream = mindVideo?.srcObject as MediaStream | null;
 
           const setupPlaneMode = (stream: MediaStream) => {
-            // 背景video（カメラ映像）
+            // ── 背景video（カメラ映像）──
             const vid = document.createElement("video");
             vid.srcObject = stream;
             vid.autoplay = true;
@@ -435,46 +439,56 @@ export default function MindARViewer() {
             vid.play().catch(() => {});
             planeVideoRef.current = vid;
 
-            // ── デバイスオリエンテーション登録（iOS 13+ パーミッション対応）──
+            // ── viewer_plane.html と同一のオリエンテーション変数 ──
+            // orientRef は既存のものを流用するが、viewer_plane.html準拠の変数名でローカル管理
+            let _alpha = 0, _beta = 0, _gamma = 0, _orient = 0, _hasOri = false;
+            const _zee   = new THREE.Vector3(0, 0, 1);
+            const _euler = new THREE.Euler();
+            const _q0    = new THREE.Quaternion();
+            const _q1    = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+
             const onOri = (e: DeviceOrientationEvent) => {
               if (e.alpha == null || e.beta == null || e.gamma == null) return;
-              orientRef.current.alpha = (e.alpha * Math.PI) / 180;
-              orientRef.current.beta  = (e.beta  * Math.PI) / 180;
-              orientRef.current.gamma = (e.gamma * Math.PI) / 180;
-              orientRef.current.hasOri = true;
+              _hasOri = true;
+              _alpha = THREE.MathUtils.degToRad(e.alpha);
+              _beta  = THREE.MathUtils.degToRad(e.beta);
+              _gamma = THREE.MathUtils.degToRad(e.gamma);
+              // orientRef にも同期（placeOnGround が使う）
+              orientRef.current = { alpha: _alpha, beta: _beta, gamma: _gamma, hasOri: true, screenAngle: _orient };
             };
             const onScreenOri = () => {
-              const angle = (window.screen.orientation?.angle ?? (window as any).orientation ?? 0);
-              orientRef.current.screenAngle = (angle * Math.PI) / 180;
+              _orient = THREE.MathUtils.degToRad(
+                window.screen.orientation?.angle ?? (window as any).orientation ?? 0
+              );
             };
             window.addEventListener("orientationchange", onScreenOri);
             onScreenOri();
 
+            // viewer_plane.html の requestOrientationPermission と同一
             const DOE = DeviceOrientationEvent as any;
             if (typeof DOE.requestPermission === "function") {
               DOE.requestPermission()
-                .then((state: string) => {
-                  if (state === "granted") window.addEventListener("deviceorientation", onOri);
+                .then((s: string) => {
+                  if (s === "granted") window.addEventListener("deviceorientation", onOri);
                 })
                 .catch(() => window.addEventListener("deviceorientation", onOri));
             } else {
               window.addEventListener("deviceorientation", onOri);
             }
 
-            // ── 既存のrenderer(MindAR)のcanvasを平面モード用に再利用 ──
-            // 新規canvasを作らずMindARのcanvasをそのまま使う
+            // ── MindARのcanvasをbodyに移動して再利用 ──
             renderer.setClearColor(0x000000, 0);
             renderer.setSize(window.innerWidth, window.innerHeight);
             const rendererCanvas = renderer.domElement;
             rendererCanvas.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2;pointer-events:none;";
-            // containerRef配下から外してbodyに移動（MindARのcss干渉を防ぐ）
             document.body.appendChild(rendererCanvas);
             planeRendererRef.current = renderer;
 
-            // ── 平面用シーン・カメラ ──
+            // ── viewer_plane.html と同一のシーン・カメラ構築 ──
             const planeScene = new THREE.Scene();
             planeSceneRef.current = planeScene;
 
+            // camera.position.set(0, 1.6, 0) で固定（viewer_plane.html 150行目と同一）
             const planeCamera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
             planeCamera.position.set(0, 1.6, 0);
             planeCameraRef.current = planeCamera;
@@ -484,39 +498,33 @@ export default function MindARViewer() {
             dl.position.set(1, 3, 2);
             planeScene.add(dl);
 
-            // ── アバターを平面シーンに移植 ──
-            const root = new THREE.Group();
-            root.visible = false;
-            planeScene.add(root);
-            planeRootRef.current = root;
+            // ── rootグループ：アバターを平面シーンに移植 ──
+            const planeRoot = new THREE.Group();
+            planeRoot.visible = false;
+            planeScene.add(planeRoot);
+            planeRootRef.current = planeRoot;
 
             if (avatarSceneRef.current) {
               avatarSceneRef.current.rotation.x = 0;
-              avatarSceneRef.current.scale.set(2.0, 2.0, 2.0);
-              root.add(avatarSceneRef.current);
+              planeRoot.add(avatarSceneRef.current);
             }
 
-            // ── オリエンテーション → カメラ回転 ──
-            const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-            const zee = new THREE.Vector3(0, 0, 1);
-            const euler = new THREE.Euler();
-            const q0 = new THREE.Quaternion();
-            const applyOri = () => {
-              if (!orientRef.current.hasOri) return;
-              const { alpha, beta, gamma, screenAngle } = orientRef.current;
-              euler.set(beta, alpha, -gamma, "YXZ");
-              planeCamera.quaternion.setFromEuler(euler);
-              planeCamera.quaternion.multiply(q1);
-              planeCamera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle));
+            // ── applyDeviceOrientation（viewer_plane.html 176行目と完全同一） ──
+            const applyDeviceOrientation = () => {
+              if (!_hasOri) return;
+              _euler.set(_beta, _alpha, -_gamma, "YXZ");
+              planeCamera.quaternion.setFromEuler(_euler);
+              planeCamera.quaternion.multiply(_q1);
+              planeCamera.quaternion.multiply(_q0.setFromAxisAngle(_zee, -_orient));
             };
 
-            // ── レンダーループ ──
+            // ── レンダーループ（viewer_plane.html 367行目と同一構造） ──
             const planeClock = new Clock();
             const loop = () => {
               planeAnimLoopRef.current = requestAnimationFrame(loop);
+              applyDeviceOrientation();
               const delta = planeClock.getDelta();
               if (mixerRef.current) mixerRef.current.update(delta);
-              applyOri();
               renderer.render(planeScene, planeCamera);
             };
             loop();
@@ -684,27 +692,29 @@ export default function MindARViewer() {
   }, []);
 
   // ── 平面モード：タップで地面にルキルキを配置 ──
-  // viewer_plane.html の placeAt() と同じロジック
+  // viewer_plane.html の placeAt()（322行目）と完全同一ロジック
   const placeOnGround = () => {
-    const cam = planeCameraRef.current;
+    const cam  = planeCameraRef.current;
     const root = planeRootRef.current;
     if (!cam || !root) return;
 
-    // Three.jsのVector3.applyQuaternion でカメラ正面を取得（viewer_plane.htmlと同一）
-    // cam は THREE.PerspectiveCamera インスタンスなので
-    // cam.getWorldDirection() が最も確実
-    const dir = new (cam.position.constructor as any)(0, 0, -1);
+    // viewer_plane.html 323-327行目と完全同一
+    const T = threeRef.current;
+    if (!T) return;
+    const dir = new T.Vector3(0, 0, -1);
     dir.applyQuaternion(cam.quaternion);
     dir.y = 0;
-    if (dir.lengthSq() < 0.001) { dir.x = 0; dir.y = 0; dir.z = -1; }
+    if (dir.lengthSq() < 0.001) dir.set(0, 0, -1);
     dir.normalize();
 
     const DIST = 2.0;
-    root.position.set(
+    // viewer_plane.html 330-336行目と完全同一
+    const hit = new T.Vector3(
       cam.position.x + dir.x * DIST,
       0,
       cam.position.z + dir.z * DIST
     );
+    root.position.set(hit.x, hit.y, hit.z);
     root.scale.setScalar(2.0);
     root.visible = true;
 
