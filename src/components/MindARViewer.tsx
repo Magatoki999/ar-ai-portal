@@ -23,7 +23,7 @@ export default function MindARViewer() {
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); 
-  const [spatialEffect, setSpatialEffect] = useState<string>("cyber"); 
+  const [spatialEffect, setSpatialEffect] = useState<string>("cyber"); // 桜, 雪, 雨, サイバーの同期
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
@@ -32,24 +32,12 @@ export default function MindARViewer() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
   const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [engraveToast, setEngraveToast] = useState<string>(""); 
-  const [spotProposal, setSpotProposal] = useState<string>(""); 
-  const [showImageUrl, setShowImageUrl] = useState<string>(""); 
-  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false);
-
-  const [arPhase, setArPhase] = useState<"mindar" | "placing" | "placed">("mindar");
-  const arPhaseRef = useRef<"mindar" | "placing" | "placed">("mindar");
-
-  const threeRef = useRef<any>(null);
-
-  const planeRendererRef = useRef<any>(null);
-  const planeSceneRef = useRef<any>(null);
-  const planeCameraRef = useRef<any>(null);
-  const planeRootRef = useRef<any>(null);
-  const planeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const planeAnimLoopRef = useRef<number | null>(null);
-
-  const orientRef = useRef({ alpha: 0, beta: 0, gamma: 0, hasOri: false, screenAngle: 0 });
+  const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
+  const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名
+  const [showImageUrl, setShowImageUrl] = useState<string>(""); // SHOW_IMAGEタグで表示する画像URL
+  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中 
+  
+  // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
   const lastGreetingTimeRef = useRef<number>(0);
 
   const recognitionRef = useRef<any>(null);
@@ -58,12 +46,15 @@ export default function MindARViewer() {
   const timersRef = useRef<NodeJS.Timeout[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // リアルタイムエフェクト同期用Ref
   const currentEffectRef = useRef<string>("cyber");
 
+  // Three.js アニメーション関連
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
+  // オーディオ & リップシンク関連
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -73,14 +64,17 @@ export default function MindARViewer() {
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
+  // パーティクル演出関連
   const particlesRef = useRef<any>(null);
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
+  // ウォレットアドレス用のRef（クロージャバグ対策）
   const addressRef = useRef(address);
   useEffect(() => { addressRef.current = address; }, [address]);
 
+  // 0. リアルタイム日時更新ロジック
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -97,6 +91,7 @@ export default function MindARViewer() {
     return () => clearInterval(timer);
   }, []);
 
+  // 1. オーディオインスタンスの初期化
   useEffect(() => {
     audioInstanceRef.current = new Audio();
     return () => {
@@ -109,6 +104,7 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 2. アニメーションクロスフェード制御
   useEffect(() => {
     const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
       const nextAction = actionsRef.current[status];
@@ -123,6 +119,7 @@ export default function MindARViewer() {
     fadeToAction(aiStatus);
   }, [aiStatus]);
 
+  // 3. Web Speech API (音声認識) の初期化
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -168,6 +165,7 @@ export default function MindARViewer() {
     }
   };
 
+  // 📡【ルキルキ常時脳内同期用 WebSocket パイプライン】
   useEffect(() => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!baseUrl) return;
@@ -177,6 +175,7 @@ export default function MindARViewer() {
     let reconnectTimeout: NodeJS.Timeout;
 
     const connectWebSocket = () => {
+      // ⭕ 印刷バグ修正：単体 print() から console.log() へ完全移行
       console.log(`📡 [空間同期リンク] 接続開始: ${wsUrl}`);
       socket = new WebSocket(wsUrl);
       wsRef.current = socket;
@@ -203,6 +202,7 @@ export default function MindARViewer() {
             timersRef.current.forEach(clearTimeout);
             timersRef.current = [];
 
+            // ⭕ 履歴汚染修正：字幕への表示と音声再生のみを行い、履歴(chatHistory)への混入を完全にシャットアウト。
             setSubtitle(data.reply);
 
             if (data.audio_data && audioInstanceRef.current) {
@@ -237,7 +237,9 @@ export default function MindARViewer() {
 
       socket.onclose = () => {
         console.log("🍂 [空間同期リンク] 切断。5秒後に再接続を試みます。");
+
         wsRef.current = null;
+
         reconnectTimeout = setTimeout(() => {
           if (!wsRef.current) {
             connectWebSocket();
@@ -258,6 +260,7 @@ export default function MindARViewer() {
     };
   }, []);
 
+  // 4. MindAR & Three.js メイン初期化
   useEffect(() => {
     let mindarThreeInstance: any = null;
     let localRenderer: any = null; 
@@ -265,7 +268,6 @@ export default function MindARViewer() {
     const start = async () => {
       try {
         const THREE = await import("three");
-        threeRef.current = THREE;
         const { MindARThree } = await import("mind-ar/dist/mindar-image-three.prod.js");
         const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
         const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js");
@@ -285,6 +287,7 @@ export default function MindARViewer() {
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0; 
+
         renderer.setClearColor(0x000000, 0);
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
@@ -331,7 +334,6 @@ export default function MindARViewer() {
 
         loader.load("/avatar.glb?v=9", (gltf) => {
           gltf.scene.scale.set(0, 0, 0); 
-          // MindAR（画像マーカー固定時）は画像に対して垂直にするため、初期は正面を向くように設定
           gltf.scene.rotation.x = Math.PI / 2;
           avatarSceneRef.current = gltf.scene;
 
@@ -381,150 +383,45 @@ export default function MindARViewer() {
         });
 
         anchor.onTargetFound = () => {
-          if (arPhaseRef.current !== "mindar") return;
-
-          console.log("[ARフェーズ] カード認識成功 → 平面配置モードへ移行");
-
-          renderer.setAnimationLoop(null);
-
-          if (containerRef.current) {
-            Array.from(containerRef.current.querySelectorAll("video, canvas")).forEach((el) => {
-              (el as HTMLElement).style.visibility = "hidden";
-            });
+          let isSeamlessReturn = false;
+          if (lostTimeoutRef.current) {
+            clearTimeout(lostTimeoutRef.current);
+            lostTimeoutRef.current = null;
+            console.log("[XRシステム] 手ブレ境界線を検知。セッションをシームレスに復帰します。");
+            isSeamlessReturn = true;
           }
 
-          const mindVideo = containerRef.current?.querySelector("video") as HTMLVideoElement | null;
-          const existingStream = mindVideo?.srcObject as MediaStream | null;
+          setIsTargetFound(true); 
 
-          const setupPlaneMode = (stream: MediaStream) => {
-            const vid = document.createElement("video");
-            vid.srcObject = stream;
-            vid.autoplay = true;
-            vid.playsInline = true;
-            vid.muted = true;
-            vid.setAttribute("playsinline", "");
-            vid.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:cover;z-index:1;";
-            document.body.appendChild(vid);
-            vid.play().catch(() => {});
-            planeVideoRef.current = vid;
+          spawnProgressRef.current = 0;
+          isSpawningRef.current = true;
 
-            let _alpha = 0, _beta = 0, _gamma = 0, _orient = 0, _hasOri = false;
-            const _zee   = new THREE.Vector3(0, 0, 1);
-            const _euler = new THREE.Euler();
-            const _q0    = new THREE.Quaternion();
-            const _q1    = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-
-            const onOri = (e: DeviceOrientationEvent) => {
-              if (e.alpha == null || e.beta == null || e.gamma == null) return;
-              _hasOri = true;
-              _alpha = THREE.MathUtils.degToRad(e.alpha);
-              _beta  = THREE.MathUtils.degToRad(e.beta);
-              _gamma = THREE.MathUtils.degToRad(e.gamma);
-              orientRef.current = { alpha: _alpha, beta: _beta, gamma: _gamma, hasOri: true, screenAngle: _orient };
-            };
-            const onScreenOri = () => {
-              _orient = THREE.MathUtils.degToRad(
-                window.screen.orientation?.angle ?? (window as any).orientation ?? 0
-              );
-            };
-            window.addEventListener("orientationchange", onScreenOri);
-            onScreenOri();
-
-            const DOE = DeviceOrientationEvent as any;
-            if (typeof DOE.requestPermission === "function") {
-              DOE.requestPermission()
-                .then((s: string) => {
-                  if (s === "granted") window.addEventListener("deviceorientation", onOri);
-                })
-                .catch(() => window.addEventListener("deviceorientation", onOri));
-            } else {
-              window.addEventListener("deviceorientation", onOri);
+          if (particlesRef.current) {
+            (particlesRef.current.material as any).opacity = 1.0;
+            const posArr = particlesRef.current.geometry.attributes.position.array as Float32Array;
+            for (let i = 0; i < particleCount; i++) {
+              posArr[i * 3] = (Math.random() - 0.5) * 0.2; 
+              posArr[i * 3 + 1] = -0.2; 
+              posArr[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
             }
+            particlesRef.current.geometry.attributes.position.needsUpdate = true;
+          }
 
-            renderer.setClearColor(0x000000, 0);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            const rendererCanvas = renderer.domElement;
-            rendererCanvas.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2;pointer-events:none;";
-            document.body.appendChild(rendererCanvas);
-            planeRendererRef.current = renderer;
+          // 💡 ロスト復帰制御：前回の初期思考から1分（60,000ミリ秒）以内かどうかを判定
+          const isWithinOneMinute = (Date.now() - lastGreetingTimeRef.current) < 60000;
 
-            const planeScene = new THREE.Scene();
-            planeSceneRef.current = planeScene;
-
-            const planeCamera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
-            planeCamera.position.set(0, 1.6, 0);
-            planeCameraRef.current = planeCamera;
-
-            planeScene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            const dl = new THREE.DirectionalLight(0xffffff, 0.6);
-            dl.position.set(1, 3, 2);
-            planeScene.add(dl);
-
-            // ── rootグループ（配置用基準ノード） ──
-            const planeRoot = new THREE.Group();
-            planeRoot.visible = false;
-            planeScene.add(planeRoot);
-            planeRootRef.current = planeRoot;
-
-            if (avatarSceneRef.current) {
-              const av = avatarSceneRef.current;
-              if (av.parent) av.parent.remove(av);
-              
-              // ── 【超重要修正：二重グループ構造による姿勢の完全固定】 ──
-              // モデルが本来持つ初期ピボットのズレ（仰向けになる問題）を完全に吸収するため、
-              // 「姿勢補正専用のグループ（調整レイヤー）」を1枚挟みます。
-              const pivotAdjustmentGroup = new THREE.Group();
-              pivotAdjustmentGroup.name = "pivotAdjustmentGroup";
-              
-              // 1. アバター自体の位置・回転・スケールを一度まっさらにリセット
-              av.position.set(0, 0, 0);
-              av.scale.set(1, 1, 1);
-              
-              // 2. viewer_plane.html (220-224行目) に完全準拠：
-              // 元々仰向けに作成されているアバターを、地面に対して垂直に「立たせる」ために X軸を -90度回転。
-              av.rotation.set(-Math.PI / 2, 0, 0); 
-              
-              // 3. 補正グループにアバターを格納し、その補正グループを配置用ルートへ追加
-              pivotAdjustmentGroup.add(av);
-              planeRoot.add(pivotAdjustmentGroup);
-            }
-
-            const applyDeviceOrientation = () => {
-              if (!_hasOri) return;
-              _euler.set(_beta, _alpha, -_gamma, "YXZ");
-              planeCamera.quaternion.setFromEuler(_euler);
-              planeCamera.quaternion.multiply(_q1);
-              planeCamera.quaternion.multiply(_q0.setFromAxisAngle(_zee, -_orient));
-            };
-
-            const planeClock = new Clock();
-            const loop = () => {
-              planeAnimLoopRef.current = requestAnimationFrame(loop);
-              applyDeviceOrientation();
-              const delta = planeClock.getDelta();
-              if (mixerRef.current) mixerRef.current.update(delta);
-              renderer.render(planeScene, planeCamera);
-            };
-            loop();
-
-            arPhaseRef.current = "placing";
-            setArPhase("placing");
-            setSubtitle("画面をタップしてルキルキを地面に置いてください");
-            setIsTargetFound(true);
-          };
-
-          if (existingStream && existingStream.active) {
-            setupPlaneMode(existingStream);
+          if (!isSeamlessReturn && !isWithinOneMinute) {
+            // 完全ロスト、かつ前回の思考から1分以上経っている場合のみ再リクエスト
+            playFixedGreeting();
           } else {
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
-              .then(setupPlaneMode)
-              .catch((e) => console.error("[平面モード] カメラ取得失敗:", e));
+            // 手ブレ、または1分以内の連続再認識時は強制思考を禁止し、即座にアイドルスタンバイへ
+            setAiStatus("idle");
+            setSearchPhase("STABLE");
+            setSubtitle("ルキルキを現実世界に固定しました。話しかけてください。");
           }
         };
 
         anchor.onTargetLost = () => {
-          if (arPhaseRef.current !== "mindar") return;
-
           if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
           console.log("[XRシステム] ターゲットロスト。残像ホールドシーケンスを開始（4000ms）");
 
@@ -654,65 +551,9 @@ export default function MindARViewer() {
     
     return () => { 
       if (localRenderer) { try { localRenderer.setAnimationLoop(null); } catch(e){} }
-      if (mindarThreeInstance) { try { mindarThreeInstance.stop(); } catch(e){} }
-      if (planeAnimLoopRef.current) cancelAnimationFrame(planeAnimLoopRef.current);
-      if (planeRendererRef.current) { try { planeRendererRef.current.dispose(); } catch(e){} }
-      if (planeVideoRef.current) {
-        const stream = planeVideoRef.current.srcObject as MediaStream;
-        stream?.getTracks().forEach(t => t.stop());
-        planeVideoRef.current.remove();
-      }
+      if (mindarThreeInstance) { try { mindarThreeInstance.stop(); } catch(e){} } 
     };
   }, []);
-
-  // ── 平面モード：タップで地面にルキルキを配置 ──
-  const placeOnGround = () => {
-    const cam  = planeCameraRef.current;
-    const root = planeRootRef.current;
-    if (!cam || !root) return;
-
-    const T = threeRef.current;
-    if (!T) return;
-    
-    // 1. カメラが向いている正面方向のベクトルを算出
-    const dir = new T.Vector3(0, 0, -1);
-    dir.applyQuaternion(cam.quaternion);
-    
-    // 2. スマートフォンのピッチ・ロール（傾き）の影響を完全に排除するため、Y軸（上下）の成分を0に固定。
-    // これにより、アバターの配置基準平面が「地球の地面（水平面）」と完全に一致します。
-    dir.y = 0; 
-    if (dir.lengthSq() < 0.001) dir.set(0, 0, -1);
-    dir.normalize();
-
-    // 3. カメラから2.0m前方の地面（高さY=0）に座標を設定
-    const DIST = 2.0;
-    const hit = new T.Vector3(
-      cam.position.x + dir.x * DIST,
-      0, // 高さ0（完全接地）
-      cam.position.z + dir.z * DIST
-    );
-    root.position.set(hit.x, hit.y, hit.z);
-    root.scale.setScalar(2.0);
-
-    // 4. 親グループの回転を X=0, Z=0 に完全ロックし、スマートフォンの傾き連動を遮断。
-    // アバターがカメラに引っ張られる（スクリーン定着する）バグを根本解決します。
-    root.rotation.set(0, 0, 0); 
-    
-    // 5. アバターが常にプレイヤー（カメラ）の方向を正面として向くように旋回(Y軸のみ)を調整
-    // カメラ位置から配置ポイントへのベクトルから、Y軸回転角を算出
-    const angleToCamera = Math.atan2(cam.position.x - hit.x, cam.position.z - hit.z);
-    root.rotation.y = angleToCamera;
-
-    root.visible = true;
-
-    arPhaseRef.current = "placed";
-    setArPhase("placed");
-    setSubtitle("ルキルキを地面に固定しました！");
-
-    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
-
-    triggerInitialGreeting(null);
-  };
 
   const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> => {
     return new Promise((resolve) => {
@@ -729,7 +570,104 @@ export default function MindARViewer() {
     });
   };
 
+
+  const playFixedGreeting = async () => {
+    lastGreetingTimeRef.current = Date.now();
+
+    if (audioInstanceRef.current) {
+      audioInstanceRef.current.pause();
+      audioInstanceRef.current.src = "";
+    }
+
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    const fixedGreeting =
+      "こんにちは、まがときさん。ルキルキ、現実空間への同期完了です。";
+
+    setSubtitle(fixedGreeting);
+    setAiStatus("talking");
+    setSearchPhase("STABLE");
+
+    setSpatialEffect("cyber");
+    currentEffectRef.current = "cyber";
+
+    const timeStampStr = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    setChatHistory((prev) => [
+      ...prev,
+      {
+        role: "ruki",
+        text: fixedGreeting,
+        timestamp: timeStampStr,
+      },
+    ]);
+
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+
+      if (!baseUrl) {
+        setAiStatus("idle");
+        return;
+      }
+
+      const response = await fetch(`${baseUrl}/api/tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: fixedGreeting,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("TTS生成失敗");
+      }
+
+      const data = await response.json();
+
+      if (data.audio_data && audioInstanceRef.current) {
+        const binaryString = window.atob(data.audio_data);
+
+        const bytes = new Uint8Array(binaryString.length);
+
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const audioUrl = URL.createObjectURL(
+          new Blob([bytes], { type: "audio/mpeg" })
+        );
+
+        audioInstanceRef.current.onended = () => {
+          setAiStatus("idle");
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        initAudioPipeline(audioInstanceRef.current);
+
+        audioInstanceRef.current.src = audioUrl;
+
+        await audioInstanceRef.current.play();
+      } else {
+        setAiStatus("idle");
+      }
+    } catch (err) {
+      console.log("固定挨拶TTS失敗:", err);
+
+      setTimeout(() => {
+        setAiStatus("idle");
+      }, 3000);
+    }
+  };
+
+
   const triggerInitialGreeting = async (forcedLocation?: { lat: number; lng: number } | null) => {
+    // 💡 挨拶（思考初期化）が走ったら現在のタイムスタンプをセット
     lastGreetingTimeRef.current = Date.now();
 
     if (audioInstanceRef.current) { audioInstanceRef.current.pause(); audioInstanceRef.current.src = ""; }
@@ -769,13 +707,15 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
+        // メモリースポット提案
         if (data.spot_proposal) {
           setSpotProposal(data.spot_proposal);
         }
 
+        // Arweave刻印完了トースト
         if (data.arweave_tx_id) {
           setEngraveToast(data.arweave_tx_id);
-          setSpatialEffect("sakura"); 
+          setSpatialEffect("sakura"); // 刻印時は桜エフェクト
           currentEffectRef.current = "sakura";
           setTimeout(() => setEngraveToast(""), 8000);
         }
@@ -822,16 +762,21 @@ export default function MindARViewer() {
     return canvas.toDataURL("image/jpeg", 0.7);
   };
 
+  // ARフレームをSupabase Storageにアップロードしてimage_urlを返す
   const uploadMemoryPhoto = async (base64DataUrl: string): Promise<string | null> => {
+    console.log("[写真保存] uploadMemoryPhoto開始 dataLen=", base64DataUrl?.length);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    console.log("[写真保存] supabaseUrl=", supabaseUrl ? "OK" : "MISSING", "supabaseKey=", supabaseKey ? "OK" : "MISSING");
     if (!supabaseUrl || !supabaseKey) return null;
 
     try {
+      // base64 → Blob変換
       const res = await fetch(base64DataUrl);
       const blob = await res.blob();
       const fileName = `memory_${Date.now()}.jpg`;
 
+      // Supabase Storageにアップロード
       const uploadRes = await fetch(
         `${supabaseUrl}/storage/v1/object/memories/${fileName}`,
         {
@@ -845,8 +790,15 @@ export default function MindARViewer() {
         }
       );
 
-      if (!uploadRes.ok) return null;
-      return `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
+      if (!uploadRes.ok) {
+        console.error("[写真保存] アップロード失敗:", await uploadRes.text());
+        return null;
+      }
+
+      // Public URLを組み立て
+      const imageUrl = `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
+      console.log("[写真保存] アップロード成功:", imageUrl);
+      return imageUrl;
     } catch (err) {
       console.error("[写真保存] エラー:", err);
       return null;
@@ -884,7 +836,11 @@ export default function MindARViewer() {
     const timeStampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const updatedHistory = [
       ...chatHistory,
-      { role: "user", text, timestamp: timeStampStr },
+      {
+        role: "user",
+        text,
+        timestamp: timeStampStr,
+      },
     ];
 
     setChatHistory(updatedHistory);
@@ -925,10 +881,12 @@ export default function MindARViewer() {
           currentEffectRef.current = data.spatial_effect;
         }
 
+                // メモリースポット提案
         if (data.spot_proposal) {
           setSpotProposal(data.spot_proposal);
         }
 
+        // Arweave刻印完了トースト
         if (data.arweave_tx_id) {
           setEngraveToast(data.arweave_tx_id);
           setSpatialEffect("sakura");
@@ -936,32 +894,40 @@ export default function MindARViewer() {
           setTimeout(() => setEngraveToast(""), 8000);
         }
 
+        // SHOW_IMAGEタグ：記憶写真をAR空間に表示
         if (data.show_image_url) {
           setShowImageUrl(data.show_image_url);
           setTimeout(() => setShowImageUrl(""), 15000);
         }
 
+        // ENGRAVE時：ARフレームをキャプチャしてSupabase Storageに保存
+        console.log("[DEBUG ENGRAVE] data.engrave_triggered=", data.engrave_triggered, "typeof=", typeof data.engrave_triggered);
         if (data.engrave_triggered) {
           const frame = captureARCameraFrame();
+          console.log("[DEBUG ENGRAVE] frame取得:", frame ? `${frame.length}文字` : "null");
           if (frame) {
             setIsUploadingMemory(true);
             uploadMemoryPhoto(frame).then(imageUrl => {
               setIsUploadingMemory(false);
-              if (imageUrl && baseUrl) {
-                fetch(`${baseUrl}/api/memory/photo`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    arweave_tx_id: data.arweave_tx_id || "",
-                    image_url: imageUrl
-                  })
-                }).catch(console.error);
+              if (imageUrl) {
+                const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+                console.log("[写真保存] imageUrl=", imageUrl?.substring(0,60), "baseUrl=", baseUrl ? "OK" : "MISSING");
+                if (baseUrl) {
+                  fetch(`${baseUrl}/api/memory/photo`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      arweave_tx_id: data.arweave_tx_id || "",
+                      image_url: imageUrl
+                    })
+                  }).catch(console.error);
+                }
               }
             });
           }
         }
 
-        setSubtitle(data.reply);
+setSubtitle(data.reply);
         setChatHistory(prev => [...prev, { role: "ruki", text: data.reply, timestamp: timeStampStr }]);
 
         if (data.audio_data && audioInstanceRef.current) {
@@ -982,18 +948,21 @@ export default function MindARViewer() {
         } else {
           setAiStatus("talking"); setTimeout(() => setAiStatus("idle"), 5000);
         }
+        return;
       } catch {
         timersRef.current.forEach(clearTimeout); setSearchPhase("OFFLINE");
         setSubtitle("バックエンドとの通信に失敗しました。");
         setAiStatus("idle");
+        return;
       }
     }
   };
 
-  const isControlDisabled = arPhase !== "placed" || aiStatus === "thinking";
+  const isControlDisabled = !isTargetFound || aiStatus === "thinking";
 
   return (
     <>
+      {/* 📷 記憶写真表示（SHOW_IMAGEタグ受信時） */}
       {showImageUrl && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-sm"
              onClick={() => setShowImageUrl("")}>
@@ -1007,12 +976,14 @@ export default function MindARViewer() {
         </div>
       )}
 
+      {/* 📤 写真アップロード中インジケーター */}
       {isUploadingMemory && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] bg-black/80 border border-purple-400/50 px-4 py-2 rounded-xl text-purple-300 text-xs">
           📷 記憶の写真を刻んでいます...
         </div>
       )}
 
+      {/* ✨ Arweave刻印完了トースト */}
       {engraveToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-2 pointer-events-none">
           <div className="bg-gradient-to-r from-purple-900/90 to-indigo-900/90 border border-purple-400/60 backdrop-blur-lg px-5 py-3 rounded-2xl shadow-[0_0_30px_rgba(168,85,247,0.5)] text-white text-center">
@@ -1022,6 +993,7 @@ export default function MindARViewer() {
         </div>
       )}
 
+      {/* 📍 メモリースポット提案バナー */}
       {spotProposal && (
         <div className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
           <div className="bg-black/80 border border-emerald-400/50 backdrop-blur-lg px-4 py-2 rounded-xl text-white text-center text-xs shadow-[0_0_15px_rgba(52,211,153,0.3)]">
@@ -1048,29 +1020,6 @@ export default function MindARViewer() {
       `}} />
 
       <div ref={containerRef} className="mindar-full-container" style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden", zIndex: 1 }} />
-
-      {arPhase === "placing" && (
-        <div
-          className="fixed inset-0 z-[40] flex flex-col items-center justify-center"
-          onClick={placeOnGround}
-          style={{ touchAction: "none" }}
-        >
-          <div className="relative w-20 h-20 mb-6 pointer-events-none">
-            <div className="absolute inset-0 border-2 border-cyan-400 rounded-full animate-ping opacity-40" />
-            <div className="absolute inset-2 border-2 border-cyan-300 rounded-full" />
-            <div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-400 -translate-y-1/2" />
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-400 -translate-x-1/2" />
-          </div>
-          <div className="bg-black/70 backdrop-blur-md border border-cyan-400/40 px-6 py-3 rounded-2xl pointer-events-none">
-            <p className="text-cyan-300 text-sm font-bold tracking-widest text-center">
-              タップしてルキルキを地面に配置
-            </p>
-            <p className="text-gray-400 text-xs text-center mt-1">
-              カメラを地面に向けてタップ
-            </p>
-          </div>
-        </div>
-      )}
 
       <div className="fixed inset-0 z-50 flex flex-col justify-between pointer-events-none p-4 font-mono select-none">
         <div className="w-full flex justify-between items-center pointer-events-auto bg-black/60 backdrop-blur-md p-3 rounded-xl text-white border border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]">
@@ -1139,7 +1088,7 @@ export default function MindARViewer() {
                 } 
                 className="w-full bg-black/80 text-white border border-purple-500/20 rounded-xl px-4 py-3.5 focus:outline-none focus:border-cyan-500/60 text-sm placeholder-gray-600 backdrop-blur-md disabled:opacity-30 disabled:cursor-not-allowed shadow-[inset_0_1px_4px_rgba(0,0,0,0.8)]"
               />
-              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${arPhase !== "placed" ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
+              <div className={`absolute right-3 w-1.5 h-1.5 rounded-full ${!isTargetFound ? "bg-gray-700" : aiStatus === "thinking" ? "bg-yellow-400 animate-ping" : "bg-purple-500"}`} />
             </div>
 
             <button 
@@ -1153,6 +1102,7 @@ export default function MindARViewer() {
         </div>
       </div>
 
+      {/* バックログ履歴モーダル */}
       {isHistoryOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-6 font-mono text-white pointer-events-auto">
           <div className="flex justify-between items-center border-b border-purple-500/30 pb-3 mb-4">
