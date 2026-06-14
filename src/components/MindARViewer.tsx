@@ -505,8 +505,14 @@ export default function MindARViewer() {
             planeRootRef.current = planeRoot;
 
             if (avatarSceneRef.current) {
-              avatarSceneRef.current.rotation.x = 0;
-              planeRoot.add(avatarSceneRef.current);
+              const av = avatarSceneRef.current;
+              // MindAR anchor.groupから切り離す
+              if (av.parent) av.parent.remove(av);
+              // MindAR用transformをリセット
+              av.rotation.set(0, 0, 0);   // rotation.x=Math.PI/2 を解除
+              av.position.set(0, 0, 0);
+              av.scale.set(1, 1, 1);       // scale(0,0,0) を解除
+              planeRoot.add(av);
             }
 
             // ── applyDeviceOrientation（viewer_plane.html 176行目と完全同一） ──
