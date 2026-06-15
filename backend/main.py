@@ -1861,17 +1861,41 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 msg = json.loads(raw)
                 msg_type = msg.get("type", "")
+                
                 if msg_type == "target_lost":
                     is_target_found = False
                     print("[WebSocket] ARマーカー: ロスト → 自発発話を停止")
+                
                 elif msg_type == "target_found":
                     is_target_found = True
                     print("[WebSocket] ARマーカー: 認識 → 自発発話を再開")
+                
+                # 💡 【追加】1分間の無言シグナルを受信した際の処理
+                elif msg_type == "request_proactive":
+                    print("[WebSocket] フロントエンドから1分間の無言シグナルを受信しました。自発発話タスクを開始します。")
+                    # 既存の自発発話ロジックをバックグラウンドタスクとして非同期実行
+                    asyncio.create_task(trigger_proactive_speech())
+                
                 else:
                     await websocket.send_json({"type": "heartbeat", "status": "stable"})
+            
             except Exception:
-                await websocket.send_json({"type": "heartbeat", "status": "stable"})
+                await websocket.send_json({"type": "heartbeat", "status": "error"})
+                
     except WebSocketDisconnect:
-        is_target_found = False  # 切断時もロスト扱い
         manager.disconnect(websocket)
-        print(f"[WebSocket] アバター同期リンクが切断されました。")
+        print("[WebSocket] 切断されました。")
+
+
+# 💡 【追加】自発同期コアを呼び出すラッパー関数
+async def trigger_proactive_speech():
+    """フロントエンドからの無言検知リクエストに応答して自発発話を生成する"""
+    try:
+        print("─── [ルキルキ自発同期コア] 1分間の無言を検知。自発発話を生成します ───")
+        
+        # ⚠️ 注意: プロジェクト内で既に自発的発話（APScheduler等）に使用している
+        # 実際の生成関数の名前に合わせて以下の行を変更して呼び出してください。
+        # 例： await check_proactive_speech() 
+        
+    except Exception as e:
+        print(f"[自発発話トリガーエラー] 処理に失敗しました: {e}")

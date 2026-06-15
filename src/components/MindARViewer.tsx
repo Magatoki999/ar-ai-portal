@@ -23,7 +23,7 @@ export default function MindARViewer() {
   
   const [aiStatus, setAiStatus] = useState<AIStatus>("idle");
   const [searchPhase, setSearchPhase] = useState<SearchPhase>("STABLE"); 
-  const [spatialEffect, setSpatialEffect] = useState<string>("cyber"); // 桜, 雪, 雨, サイバーの同期
+  const [spatialEffect, setSpatialEffect] = useState<string>("cyber");
   const [subtitle, setSubtitle] = useState<string>("（カメラをターゲットにかざしてください）");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [currentDateTime, setCurrentDateTime] = useState<string>(""); 
@@ -32,15 +32,17 @@ export default function MindARViewer() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([]); 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false); 
   const lostTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
-  const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名
-  const [showImageUrl, setShowImageUrl] = useState<string>(""); // SHOW_IMAGEタグで表示する画像URL
-  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中
-  const [snapImageUrl, setSnapImageUrl] = useState<string>("");   // スナップ生成画像URL
-  const [isSnapping, setIsSnapping] = useState<boolean>(false);   // スナップ生成中フラグ
-  
-  // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
+  const [engraveToast, setEngraveToast] = useState<string>(""); 
+  const [spotProposal, setSpotProposal] = useState<string>(""); 
+  const [showImageUrl, setShowImageUrl] = useState<string>(""); 
+  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); 
+  const [snapImageUrl, setSnapImageUrl] = useState<string>("");   
+  const [isSnapping, setIsSnapping] = useState<boolean>(false);   
+
   const lastGreetingTimeRef = useRef<number>(0);
+
+  // 💡 【追加】1分無言検知タイマー用のRef
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,15 +50,11 @@ export default function MindARViewer() {
   const timersRef = useRef<NodeJS.Timeout[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // リアルタイムエフェクト同期用Ref
   const currentEffectRef = useRef<string>("cyber");
-
-  // Three.js アニメーション関連
   const mixerRef = useRef<AnimationMixer | null>(null);
   const actionsRef = useRef<{ [key in AIStatus]?: AnimationAction }>({});
   const activeActionRef = useRef<AnimationAction | null>(null);
 
-  // オーディオ & リップシンク関連
   const audioInstanceRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -66,13 +64,11 @@ export default function MindARViewer() {
   const blinkTargetsRef = useRef<MorphTargetRef[]>([]);
   const avatarSceneRef = useRef<any>(null);
 
-  // パーティクル演出関連
   const particlesRef = useRef<any>(null);
   const particleVelocitiesRef = useRef<Float32Array | null>(null);
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef = useRef<boolean>(false);
 
-  // ウォレットアドレス用のRef（クロージャバグ対策）
   const addressRef = useRef(address);
   useEffect(() => { addressRef.current = address; }, [address]);
 
@@ -103,8 +99,37 @@ export default function MindARViewer() {
       }
       timersRef.current.forEach(clearTimeout);
       if (lostTimeoutRef.current) clearTimeout(lostTimeoutRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
   }, []);
+
+  // 💡 【追加】無言タイマーの管理 (aiStatus と isTargetFound を監視)
+  useEffect(() => {
+    // ステータスが変わるたびに既存のタイマーをクリア
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    // AIが「待機中(idle)」かつ「ターゲットを認識中(isTargetFound=true)」の時だけカウントダウン開始
+    if (aiStatus === "idle" && isTargetFound) {
+      silenceTimerRef.current = setTimeout(() => {
+        console.log("⏱️ [無言検知] 1分間会話がありませんでした。自発発話をリクエストします。");
+        
+        // WebSocket経由でバックエンドに自発発話トリガーを送信
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "request_proactive" }));
+        }
+      }, 60000); // 60,000ミリ秒 = 1分
+    }
+
+    // クリーンアップ関数
+    return () => {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
+    };
+  }, [aiStatus, isTargetFound]);
 
   // 2. アニメーションクロスフェード制御
   useEffect(() => {
