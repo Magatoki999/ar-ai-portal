@@ -54,6 +54,7 @@ def build_rukiruki_graph():
 
     return graph.compile()
 
-
-# モジュール読み込み時にグラフをコンパイル
-rukiruki_graph = build_rukiruki_graph()
+# ※注意: 
+# 環境変数読み込み前のLLM初期化エラーを防ぐため、モジュールロード時の
+# rukiruki_graph = build_rukiruki_graph() の直接実行は削除しています。
+# main.py 側で明示的に呼び出して生成してください。

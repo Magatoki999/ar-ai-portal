@@ -11,12 +11,17 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
+# keeper_agent.py の位置からプロジェクトのルートディレクトリを絶対パスで算出 (必要に応じて階層を調整してください)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 def get_latest_git_commit() -> str:
     """ローカルリポジトリの最新のコミットログを取得する"""
     try:
         # 最新のコミットハッシュ、作者、日付、メッセージを取得
+        # cwd を明示的に指定し、どこから実行されてもGitリポジトリを正しく認識させる
         result = subprocess.run(
             ["git", "log", "-1", "--pretty=format:%h - %an, %ar : %s"],
+            cwd=BASE_DIR,
             capture_output=True, text=True, check=True
         )
         return result.stdout.strip()
@@ -82,7 +87,8 @@ async def sync_keeper_context():
 
     try:
         async with httpx.AsyncClient() as client:
-            res = await client.post(url, json=data, headers=headers, timeout=5.0)
+            # タイムアウト値を10.0秒に延長し、Supabaseの応答遅延によるエラーを防止
+            res = await client.post(url, json=data, headers=headers, timeout=10.0)
             if res.status_code in [200, 201]:
                 print("[Keeper] ブラックボード（agent_memos）に進捗を同期しました。")
             else:
