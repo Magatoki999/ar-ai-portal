@@ -30,7 +30,7 @@ from geopy.geocoders import Nominatim
 from agents.router import analyze_and_route
 
 # LangGraph グラフのインポート
-from agents.graph import rukiruki_graph
+from agents.graph import build_rukiruki_graph
 
 # 環境変数の読み込み
 load_dotenv()
@@ -1055,8 +1055,14 @@ async def proactive_talk_job():
 
 
 # ─── FastAPI ライフサイクル管理（lifespan） ───
+rukiruki_graph = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global rukiruki_graph
+    # 変更点3: アプリ起動時にグラフを生成する
+    rukiruki_graph = build_rukiruki_graph()
+
     scheduler.add_job(fetch_weather_job, 'interval', minutes=30)
     scheduler.add_job(auto_research_job, 'interval', minutes=15)
     scheduler.add_job(proactive_talk_job, 'interval', minutes=1)
