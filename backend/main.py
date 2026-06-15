@@ -812,12 +812,12 @@ async def maybe_save_episode(user_text: str, ai_reply: str, arweave_tx_id: str =
     # ── LLMでキーワードを抽出（3〜5個）──
     try:
         kw_prompt = f"""以下の会話から重要なキーワードを3〜5個抽出して、JSONの文字列配列のみで返してください。
-                    説明や前置きは不要です。例: ["京都", "ArtAR", "バグ修正"]
+説明や前置きは不要です。例: ["京都", "ArtAR", "バグ修正"]
 
-    ユーザー: {user_text}
-ルキルキ: {ai_reply}"
-        )
-        kw_res = await llm_fast.ainvoke([HumanMessage(content=kw_prompt)])
+ユーザー: {user_text}
+ルキルキ: {ai_reply}"""
+        
+        kw_res = await llm.ainvoke([HumanMessage(content=kw_prompt)])
         kw_text = kw_res.content.strip()
         # コードブロックを除去してJSONパース
         kw_text = re.sub(r"```json|```", "", kw_text).strip()
@@ -1072,7 +1072,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ar-ai-portal.vercel.app")
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,[https://ar-ai-portal.vercel.app](https://ar-ai-portal.vercel.app)")
 origins = [origin.strip() for origin in cors_origins_env.split(",")]
 
 app.add_middleware(
