@@ -811,13 +811,10 @@ async def maybe_save_episode(user_text: str, ai_reply: str, arweave_tx_id: str =
 
     # ── LLMでキーワードを抽出（3〜5個）──
     try:
-        kw_prompt = (
-            f"以下の会話から重要なキーワードを3〜5個抽出して、JSONの文字列配列のみで返してください。
-"
-            f"説明や前置きは不要です。例: ["京都", "ArtAR", "バグ修正"]
+        kw_prompt = f"""以下の会話から重要なキーワードを3〜5個抽出して、JSONの文字列配列のみで返してください。
+                    説明や前置きは不要です。例: ["京都", "ArtAR", "バグ修正"]
 
-"
-            f"ユーザー: {user_text}
+    ユーザー: {user_text}
 ルキルキ: {ai_reply}"
         )
         kw_res = await llm_fast.ainvoke([HumanMessage(content=kw_prompt)])
