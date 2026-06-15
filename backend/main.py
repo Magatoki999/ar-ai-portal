@@ -1677,6 +1677,172 @@ async def save_memory_photo(payload: MemoryPhotoRequest):
     return {"status": "error"}
 
 
+
+
+# 📸 ─── スナップ生成エンドポイント ───
+class SnapRequest(BaseModel):
+    member_name: str                  # 例: "Izana"
+    camera_image: str                 # base64 JPEG（カメラ映像）
+    wallet_address: str | None = None
+
+
+async def upload_to_supabase_storage(image_bytes: bytes, filename: str) -> str | None:
+    """
+    生成画像をSupabase memoriesバケットにアップロードしてpublic URLを返す。
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/memories/{filename}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "image/jpeg",
+        "x-upsert": "true",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(upload_url, content=image_bytes, headers=headers, timeout=30.0)
+            if res.status_code in (200, 201):
+                public_url = f"{SUPABASE_URL}/storage/v1/object/public/memories/{filename}"
+                print(f"[スナップ] Supabase保存完了: {public_url}")
+                return public_url
+            else:
+                print(f"[スナップ] Supabase保存失敗: {res.status_code} {res.text[:200]}")
+    except Exception as e:
+        print(f"[スナップ] Supabase保存エラー: {e}")
+    return None
+
+
+@app.post("/api/snap")
+async def create_snap(payload: SnapRequest):
+    """
+    「○○とスナップ」コマンドで呼ばれる画像生成エンドポイント。
+    1. context/images/{MEMBER_NAME}.jpg を読み込む
+    2. カメラ映像（背景）とリファレンス画像を gpt-image-1 edit に渡す
+    3. 生成画像を Supabase memories バケットに保存
+    4. episode_memories に記録
+    5. image_url をフロントに返す
+    """
+    import pathlib
+
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        return {"status": "error", "message": "OpenAI APIキー未設定"}
+
+    # ── 1. リファレンス画像を読み込む ──
+    member_upper = payload.member_name.upper()
+    ref_path = pathlib.Path(f"context/images/{member_upper}.jpg")
+    if not ref_path.exists():
+        # 小文字でも探す
+        ref_path_lower = pathlib.Path(f"context/images/{payload.member_name}.jpg")
+        if ref_path_lower.exists():
+            ref_path = ref_path_lower
+        else:
+            print(f"[スナップ] リファレンス画像が見つかりません: {member_upper}.jpg")
+            return {"status": "error", "message": f"{payload.member_name}のリファレンス画像が見つかりません"}
+
+    ref_bytes = ref_path.read_bytes()
+    print(f"[スナップ] リファレンス画像読み込み: {ref_path} ({len(ref_bytes)}bytes)")
+
+    # ── 2. カメラ画像をバイトに変換 ──
+    try:
+        # "data:image/jpeg;base64,..." 形式の場合はヘッダを除去
+        cam_b64 = payload.camera_image
+        if "," in cam_b64:
+            cam_b64 = cam_b64.split(",", 1)[1]
+        cam_bytes = base64.b64decode(cam_b64)
+    except Exception as e:
+        return {"status": "error", "message": f"カメラ画像のデコードに失敗: {e}"}
+
+    # ── 3. gpt-image-1 edit エンドポイントで画像生成 ──
+    prompt = (
+        f"The person shown in the reference image is naturally standing in the scene shown in the background photo. "
+        f"Create a realistic photo where the person blends naturally into the environment. "
+        f"Maintain the person's face, hairstyle, and clothing from the reference image as accurately as possible. "
+        f"The lighting and perspective should match the background scene. "
+        f"Make it look like a candid photograph taken together."
+    )
+
+    try:
+        import io
+        # multipart/form-data で送信
+        # OpenAI images/edits は複数画像を受け付ける（image[] 形式）
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            files = {
+                "image[]": ("background.jpg", cam_bytes, "image/jpeg"),
+                "image[]": ("reference.jpg", ref_bytes, "image/jpeg"),
+            }
+            # multipartはhttpxのfilesパラメータで送る
+            # ただし同名キーの複数ファイルはリスト形式で
+            multipart_files = [
+                ("image[]", ("background.jpg", cam_bytes, "image/jpeg")),
+                ("image[]", ("reference.jpg", ref_bytes, "image/jpeg")),
+            ]
+            data = {
+                "model": "gpt-image-1",
+                "prompt": prompt,
+                "n": "1",
+                "size": "1024x1024",
+                "quality": "medium",
+            }
+            headers = {"Authorization": f"Bearer {openai_api_key}"}
+            res = await client.post(
+                "https://api.openai.com/v1/images/edits",
+                headers=headers,
+                files=multipart_files,
+                data=data,
+            )
+
+        if res.status_code != 200:
+            print(f"[スナップ] OpenAI API エラー: {res.status_code} {res.text[:300]}")
+            return {"status": "error", "message": f"画像生成に失敗しました: {res.status_code}"}
+
+        result = res.json()
+        # gpt-image-1 は b64_json で返す
+        img_b64 = result["data"][0].get("b64_json") or result["data"][0].get("url")
+        if not img_b64:
+            return {"status": "error", "message": "生成画像データが取得できませんでした"}
+
+        # base64 → bytes
+        generated_bytes = base64.b64decode(img_b64)
+        print(f"[スナップ] 画像生成成功: {len(generated_bytes)}bytes")
+
+    except Exception as e:
+        print(f"[スナップ] OpenAI呼び出しエラー: {e}")
+        return {"status": "error", "message": f"画像生成エラー: {e}"}
+
+    # ── 4. Supabase memories バケットに保存 ──
+    JST = timezone(timedelta(hours=+9))
+    ts = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
+    filename = f"snap_{member_upper}_{ts}.jpg"
+    image_url = await upload_to_supabase_storage(generated_bytes, filename)
+
+    if not image_url:
+        return {"status": "error", "message": "Supabaseへの保存に失敗しました"}
+
+    # ── 5. episode_memories に記録 ──
+    JST_now = datetime.now(JST)
+    now_str = JST_now.strftime("%m月%d日 %H時%M分")
+    summary = f"{now_str}、まがときさんが{payload.member_name}とスナップ写真を撮影した。"
+    keywords = ["スナップ", payload.member_name, "写真", "思い出"]
+
+    await save_episode_memory(
+        summary=summary,
+        mood_at_time=emotional_state.get("mood", "neutral"),
+        keywords=keywords,
+        arweave_tx_id="",
+        location_name="",
+        image_url=image_url,
+    )
+    print(f"[スナップ] episode_memories に記録完了")
+
+    return {
+        "status": "ok",
+        "image_url": image_url,
+        "member_name": payload.member_name,
+        "message": f"{payload.member_name}とのスナップ写真ができたよ！",
+    }
+
 # ⚡ ─── WebSocket エンドポイント定義 ───
 @app.websocket("/ws/avatar")
 async def websocket_endpoint(websocket: WebSocket):

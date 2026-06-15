@@ -35,7 +35,9 @@ export default function MindARViewer() {
   const [engraveToast, setEngraveToast] = useState<string>(""); // Arweave刻印完了トースト
   const [spotProposal, setSpotProposal] = useState<string>(""); // 場所登録提案中のスポット名
   const [showImageUrl, setShowImageUrl] = useState<string>(""); // SHOW_IMAGEタグで表示する画像URL
-  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中 
+  const [isUploadingMemory, setIsUploadingMemory] = useState<boolean>(false); // 記憶写真アップロード中
+  const [snapImageUrl, setSnapImageUrl] = useState<string>("");   // スナップ生成画像URL
+  const [isSnapping, setIsSnapping] = useState<boolean>(false);   // スナップ生成中フラグ
   
   // 💡 追加：前回の初期挨拶（思考）のタイムスタンプを保持するRef（クールダウン管理用）
   const lastGreetingTimeRef = useRef<number>(0);
@@ -796,11 +798,72 @@ export default function MindARViewer() {
     }
   };
 
+  // ── スナップ生成処理 ──
+  const handleSnap = async (memberName: string) => {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!baseUrl) return;
+
+    // カメラ映像キャプチャ（videoから直接取得）
+    const cameraImage = captureARCameraFrame();
+    if (!cameraImage) {
+      setSubtitle("カメラ映像が取得できませんでした");
+      return;
+    }
+
+    setIsSnapping(true);
+    setAiStatus("thinking");
+    setSubtitle(`📸 ${memberName}とのスナップ写真を生成中...`);
+
+    try {
+      const response = await fetch(`${baseUrl}/api/snap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          member_name: memberName,
+          camera_image: cameraImage,
+          wallet_address: address || null,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`API error ${response.status}`);
+      const data = await response.json();
+
+      if (data.status === "ok" && data.image_url) {
+        setSnapImageUrl(data.image_url);
+        setSubtitle(`✨ ${memberName}とのスナップ写真ができたよ！`);
+        // 会話履歴にも残す
+        const timeStampStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        setChatHistory(prev => [
+          ...prev,
+          { role: "user",      text: `${memberName}とスナップ`, timestamp: timeStampStr },
+          { role: "assistant", text: data.message || `${memberName}とのスナップ写真ができたよ！`, timestamp: timeStampStr },
+        ]);
+      } else {
+        setSubtitle(`スナップ生成に失敗しました: ${data.message || "不明なエラー"}`);
+      }
+    } catch (err) {
+      console.error("[スナップ] エラー:", err);
+      setSubtitle("スナップ生成中にエラーが発生しました");
+    } finally {
+      setIsSnapping(false);
+      setAiStatus("idle");
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const text = formData.get("message") as string;
     if (!text.trim()) return;
+
+    // ── 「○○とスナップ」コマンド検出 ──
+    const snapMatch = text.trim().match(/^(.+?)とスナップ$/);
+    if (snapMatch) {
+      const memberName = snapMatch[1].trim();
+      if (inputRef.current) inputRef.current.value = "";
+      await handleSnap(memberName);
+      return;
+    }
 
     if (inputRef.current) inputRef.current.blur();
     setTimeout(() => { window.scrollTo({ top: 0, left: 0, behavior: "smooth" }); }, 100);
@@ -940,6 +1003,30 @@ export default function MindARViewer() {
 
   return (
     <>
+      {/* 📸 スナップ生成画像 */}
+      {snapImageUrl && (
+        <div className="fixed inset-0 z-[260] flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="relative max-w-[85vw] max-h-[70vh]">
+            <img
+              src={snapImageUrl}
+              alt="スナップ写真"
+              className="rounded-2xl border-2 border-pink-400/60 shadow-2xl max-w-full max-h-[65vh] object-contain"
+            />
+            <button
+              onClick={() => setSnapImageUrl("")}
+              className="absolute -top-3 -right-3 bg-black/70 text-white rounded-full w-8 h-8 flex items-center justify-center border border-white/30 text-sm"
+            >✕</button>
+          </div>
+          <p className="text-pink-200 text-sm mt-4 font-bold tracking-wider">📸 スナップ写真</p>
+          <a
+            href={snapImageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 text-xs text-pink-300 underline"
+          >保存する</a>
+        </div>
+      )}
+
       {showImageUrl && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-sm"
              onClick={() => setShowImageUrl("")}>
@@ -949,6 +1036,17 @@ export default function MindARViewer() {
             <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-purple-200 bg-black/50 py-1 rounded-b-2xl">
               タップで閉じる
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* スナップ生成中オーバーレイ */}
+      {isSnapping && (
+        <div className="fixed inset-0 z-[55] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none">
+          <div className="bg-black/80 border border-pink-400/40 rounded-2xl px-8 py-6 flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-4 border-pink-400 border-t-transparent rounded-full animate-spin" />
+            <p className="text-pink-200 text-sm font-bold tracking-wider">📸 スナップ写真を生成中...</p>
+            <p className="text-gray-400 text-xs">gpt-image-1 が合成しています</p>
           </div>
         </div>
       )}

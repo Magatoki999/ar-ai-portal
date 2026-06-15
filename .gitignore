@@ -52,5 +52,8 @@ backend/env/
 backend/ENV/
 backend/env.bak/
 backend/venv.bak/
+backend/client_secret.json
+backend/token.json
+token.json
 .pytest_cache/
 .poetry/
