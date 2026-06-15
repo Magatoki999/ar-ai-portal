@@ -283,10 +283,10 @@ system_constraints = (
     "     * rain   : 雨が降る（憂鬱な雰囲気、悲しい話題、天気の雨、しっとりした会話など）\n"
     "     * cyber  : サイバー演出（デフォルト、技術・開発・コード系の話題、通常時など）\n"
     "   - 例: 『まがときさん、エフェクトの同期なら任せてよ！サイバー空間、出力するね！||EFFECT:cyber||』\n"
-    "6. 記憶の刻印タグ（||ENGRAVE||）の使用ルール:\n"
-    "   - まがときさんが『刻んで』『記憶して』『永遠に残して』と言ったとき、"
+    "6. 記憶の保存タグ（||ENGRAVE||）の使用ルール:\n"
+    "   - まがときさんが『覚えて』『記憶して』『永遠に残して』と言ったとき、"
     "必ずセリフ末尾に ||ENGRAVE|| タグを追加してください。\n"
-    "   - 例: 『この瞬間を永遠に刻みます…||EFFECT:sakura||||ENGRAVE||』\n\n"
+    "   - 例: 『わかった、覚えておくね！||EFFECT:sakura||||ENGRAVE||』\n\n"
 )
 
 
@@ -724,40 +724,6 @@ async def get_recent_episodes(limit: int = 8) -> str:
     return ""
 
 
-async def get_episodes_by_location(location_query: str, limit: int = 5) -> list[dict]:
-    """
-    場所名（部分一致）でepisode_memoriesを検索し、
-    image_urlがあるエピソードを優先して返す。
-    戻り値: [{"summary": str, "image_url": str, "location_name": str, "created_at": str}, ...]
-    """
-    if not SUPABASE_URL or not SUPABASE_KEY or not location_query:
-        return []
-
-    # ilike で部分一致検索（Supabase REST APIの構文）
-    encoded = location_query.replace(" ", "%20")
-    url = (
-        f"{SUPABASE_URL}/rest/v1/episode_memories"
-        f"?location_name=ilike.*{encoded}*"
-        f"&order=created_at.desc"
-        f"&limit={limit}"
-        f"&select=summary,image_url,location_name,created_at"
-    )
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url, headers=headers, timeout=5.0)
-            if res.status_code == 200:
-                results = res.json()
-                # image_urlがあるものを先頭に
-                with_img = [r for r in results if r.get("image_url")]
-                without_img = [r for r in results if not r.get("image_url")]
-                sorted_results = with_img + without_img
-                print(f"[場所検索] '{location_query}' → {len(sorted_results)}件 (写真あり:{len(with_img)}件)")
-                return sorted_results
-    except Exception as e:
-        print(f"[場所検索エラー] {e}")
-    return []
-
 
 # ─── 特別な場所（メモリースポット）管理 ───
 MEMORY_SPOTS_TABLE = "memory_spots"
@@ -831,26 +797,52 @@ async def check_nearby_spot(lat: float, lng: float) -> dict | None:
 
 async def maybe_save_episode(user_text: str, ai_reply: str, arweave_tx_id: str = "", location_name: str = "", image_url: str = ""):
     memorable_keywords = ["完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
-                          "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ"]
-    # ENGRAVEトリガー時は無条件で保存
-    force_save = arweave_tx_id != ""
+                          "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ",
+                          "覚えて", "おぼえて", "記憶して"]
+    # ENGRAVEトリガー（「覚えて」コマンド）または記憶キーワードにマッチした場合に保存
+    force_save = arweave_tx_id != "" or any(k in user_text for k in ["覚えて", "おぼえて", "記憶して"])
     if not force_save and not any(k in user_text for k in memorable_keywords):
         return
+
     JST = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
-    # user_callはグローバルスコープにないため、まがときをデフォルトに
     _call = "まがとき"
     summary = f"{now_str}、{_call}さんが「{user_text[:40]}」と言った。ルキルキは「{ai_reply[:40]}」と答えた。"
-    matched = [k for k in memorable_keywords if k in user_text]
-    print(f"[エピソード記録] {summary}")
+
+    # ── LLMでキーワードを抽出（3〜5個）──
+    try:
+        kw_prompt = (
+            f"以下の会話から重要なキーワードを3〜5個抽出して、JSONの文字列配列のみで返してください。
+"
+            f"説明や前置きは不要です。例: ["京都", "ArtAR", "バグ修正"]
+
+"
+            f"ユーザー: {user_text}
+ルキルキ: {ai_reply}"
+        )
+        kw_res = await llm_fast.ainvoke([HumanMessage(content=kw_prompt)])
+        kw_text = kw_res.content.strip()
+        # コードブロックを除去してJSONパース
+        kw_text = re.sub(r"```json|```", "", kw_text).strip()
+        extracted_keywords = json.loads(kw_text)
+        if not isinstance(extracted_keywords, list):
+            raise ValueError("list expected")
+        keywords = [str(k) for k in extracted_keywords[:5]]
+    except Exception as kw_err:
+        # フォールバック：従来のマッチング
+        keywords = [k for k in memorable_keywords if k in user_text]
+        print(f"[キーワード抽出] LLM失敗→フォールバック: {kw_err}")
+
+    print(f"[エピソード記録] keywords={keywords} summary={summary[:60]}")
     if arweave_tx_id:
         print(f"[エピソード記録] Arweave tx: {arweave_tx_id}")
     if location_name:
         print(f"[エピソード記録] 場所: {location_name}")
+
     await save_episode_memory(
         summary=summary,
         mood_at_time=emotional_state["mood"],
-        keywords=matched,
+        keywords=keywords,
         arweave_tx_id=arweave_tx_id,
         location_name=location_name,
         image_url=image_url
@@ -992,7 +984,7 @@ async def proactive_talk_job():
         "3. 文字数は50〜100文字以内で短く、親しみのある丁寧語でまとめてください。URLは絶対に出力禁止です。\n"
         "4. 【重要】会話の雰囲気や時間帯、内容に合わせて、セリフの末尾に必ず空間エフェクト指示タグを 『||EFFECT:エフェクト名||』 の形式で埋め込んでください。\n"
         "   - 指定可能なエフェクト名は [sakura, snow, rain, cyber] の4つのみです。最も適したものを1つ選択してください。\n"
-        "5. まがときさんが『刻んで』と言ったとき必ず ||ENGRAVE|| タグをセリフ末尾に追加してください。\n"
+        "5. まがときさんが『覚えて』と言ったとき必ず ||ENGRAVE|| タグをセリフ末尾に追加してください。\n"
         "6. まがときさんが「写真を見せて」「あの時の写真」「記憶の写真」と言ったとき、"
         "エピソードに[image:URL]が含まれていれば ||SHOW_IMAGE:URL|| をセリフ末尾に追加してください。\n\n"
     )
@@ -1277,7 +1269,7 @@ async def chat_endpoint(payload: ChatMessage):
     lng = payload.longitude
 
     # ─── 場所登録フロー（2ターン完結） ───
-    register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを刻んで"]
+    register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを覚えて", "ここを刻んで"]
     session_key = wallet_address or "anonymous"
 
     # ペンディング中（名前待ち）の場合：このターンの発話を場所名として登録
@@ -1383,7 +1375,7 @@ async def chat_endpoint(payload: ChatMessage):
             spot_context = (
                 f"【メモリースポット検知】\n"
                 f"まがときさんは現在、登録済みの特別な場所『{nearby_spot['name']}』の近くにいます。\n"
-                f"会話の流れが自然であれば、「ここでの記憶を刻みますか？」と提案してください。\n"
+                f"会話の流れが自然であれば、「ここでの記憶を覚えておこうか？」と提案してください。\n"
                 f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{nearby_spot['name']}|| タグを追加してください。\n\n"
             )
 
@@ -1469,12 +1461,6 @@ async def chat_endpoint(payload: ChatMessage):
         f"{user_call}さんが「写真を見せて」「あの時の写真」「記憶の写真」と言ったとき、\n"
         "エピソードメモリに[image:URL]が含まれていれば、セリフ末尾に ||SHOW_IMAGE:URL|| タグを追加してください。\n"
         "例: 'あの日の写真です！||SHOW_IMAGE:https://...||'\n"
-        "\n【場所名指定による記憶写真の検索・表示】\n"
-        f"{user_call}さんが特定の場所名を言って写真を求めたとき（例：「鴨川の写真」「先週の神社の写真」）、\n"
-        "||SEARCH_LOCATION_PHOTO:場所名|| タグをセリフ末尾に追加してください。\n"
-        "システムが自動的にDBを検索して写真URLを取得・表示します。\n"
-        "例: '鴨川の記憶を探してきます！||SEARCH_LOCATION_PHOTO:鴨川||'\n"
-        "場所名は{user_call}さんの発話から抽出した地名・スポット名をそのまま入れてください。\n"
     )
     print(f"[DEBUG constraints] SHOW_IMAGE含む={'SHOW_IMAGE' in dynamic_system_constraints} 長さ={len(dynamic_system_constraints)}")
 
@@ -1556,23 +1542,10 @@ async def chat_endpoint(payload: ChatMessage):
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
         arweave_tx_id = result.get("arweave_tx_id", "")
         _engrave = result.get("engrave_triggered", False)
+        # 「覚えて」発話でもENGRAVEとみなす
+        if not _engrave and any(k in payload.message for k in ["覚えて", "おぼえて", "記憶して"]):
+            _engrave = True
         _show_image = result.get("show_image_url", "")
-
-        # ─── SEARCH_LOCATION_PHOTO タグ処理 ───
-        # LLMが場所名指定で写真を求めた場合、DBを検索してshow_image_urlに差し込む
-        loc_photo_match = re.search(r"\|\|SEARCH_LOCATION_PHOTO:(.*?)\|\|", ai_response)
-        if loc_photo_match and not _show_image:
-            location_query = loc_photo_match.group(1).strip()
-            ai_response = re.sub(r"\|\|SEARCH_LOCATION_PHOTO:.*?\|\|", "", ai_response).strip()
-            episodes = await get_episodes_by_location(location_query)
-            if episodes and episodes[0].get("image_url"):
-                _show_image = episodes[0]["image_url"]
-                loc_name = episodes[0].get("location_name", location_query)
-                print(f"[場所写真] '{location_query}' → {_show_image[:60]}")
-            else:
-                # 写真が見つからなかった場合もタグだけ除去（セリフはそのまま）
-                print(f"[場所写真] '{location_query}' → 写真なし")
-
         print(f"[DEBUG] engrave_triggered={_engrave} arweave_tx_id={bool(arweave_tx_id)} show_image_url={bool(_show_image)}")
         if _show_image:
             print(f"[DEBUG] SHOW_IMAGE URL: {_show_image[:80]}")
