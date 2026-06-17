@@ -13,7 +13,7 @@ from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain_tavily import TavilySearch
+from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from langchain_core.tools import tool
 
 from agents.state import RukirukiState
@@ -36,7 +36,7 @@ llm_fast = ChatOpenAI(
     temperature=0.7,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
-search_tool = TavilySearch(max_results=2)
+search_tool = TavilySearch(max_results=2)  # type: ignore
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
