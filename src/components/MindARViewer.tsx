@@ -72,10 +72,18 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     timersRef,
     onAiStatusChange: setAiStatus,
     onTranscript: (text) => {
-      if (inputRef.current) {
-        inputRef.current.value = text;
-        const form = inputRef.current.closest("form");
-        if (form) form.requestSubmit();
+      if (!inputRef.current) return;
+      // React の onChange を経由せず value を直接書き込み、
+      // nativeInputValueSetter でイベントを発火させてから submit する
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value"
+      )?.set;
+      nativeSetter?.call(inputRef.current, text);
+      inputRef.current.dispatchEvent(new Event("input", { bubbles: true }));
+      // フォームを探して送信
+      const form = inputRef.current.closest("form");
+      if (form) {
+        form.requestSubmit();
       }
     },
   });
@@ -209,9 +217,9 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   // レンダリング
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 w-full h-full overflow-hidden bg-black">
+    <div className="fixed inset-0 w-full overflow-hidden bg-black" style={{ height: "100svh" }}>
       {/* AR コンテナ（MindAR が video / canvas をここに注入する） */}
-      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+      <div ref={containerRef} className="absolute inset-0 w-full" style={{ height: "100svh" }} />
 
       {/* HUD オーバーレイ */}
       <RukiHUD
@@ -226,6 +234,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         onOpenLog={() => setShowHistory(true)}
         onSendMessage={handleSendMessage}
         onCaptureSave={handleCaptureSave}
+        inputRef={inputRef}
       />
 
       {/* ミッションログパネル */}

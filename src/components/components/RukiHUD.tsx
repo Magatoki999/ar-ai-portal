@@ -26,6 +26,7 @@ interface RukiHUDProps {
   onOpenLog:         () => void;
   onSendMessage:     (e: React.FormEvent<HTMLFormElement>) => void;
   onCaptureSave:     () => void;
+  inputRef:          React.RefObject<HTMLInputElement>;
   /** GPS取得中インジケーターを表示するか */
   isGpsLoading?:     boolean;
 }
@@ -43,9 +44,8 @@ export function RukiHUD({
   onSendMessage,
   onCaptureSave,
   isGpsLoading,
+  inputRef,
 }: RukiHUDProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-
   // ── ステータスカラー ──
   const phaseColor =
     searchPhase === "STABLE"

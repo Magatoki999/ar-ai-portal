@@ -87,17 +87,25 @@ async def lifespan(app: FastAPI):
     global rukiruki_graph
     rukiruki_graph = build_rukiruki_graph()
 
-    # ジョブ登録（llm と MAGATOKI_KNOWLEDGE をクロージャで渡す）
-    scheduler.add_job(fetch_weather_job, "interval", minutes=30)
+    # FastAPI が動いているイベントループを保持する。
+    # APScheduler はスレッドプールから起動するため、
+    # asyncio.create_task は使えない。run_coroutine_threadsafe で橋渡しする。
+    loop = asyncio.get_event_loop()
+
+    def _run(coro_fn, *args):
+        asyncio.run_coroutine_threadsafe(coro_fn(*args), loop)
+
     scheduler.add_job(
-        lambda: asyncio.create_task(auto_research_job(llm)),
-        "interval",
-        minutes=15,
+        lambda: _run(fetch_weather_job),
+        "interval", minutes=30,
     )
     scheduler.add_job(
-        lambda: asyncio.create_task(proactive_talk_job(llm, MAGATOKI_KNOWLEDGE)),
-        "interval",
-        minutes=1,
+        lambda: _run(auto_research_job, llm),
+        "interval", minutes=15,
+    )
+    scheduler.add_job(
+        lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
+        "interval", minutes=1,
     )
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
