@@ -146,7 +146,9 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     },
     onTargetLost: () => {
       notifyTargetLost();
-      setSubtitle("（通信継続中... マーカーから目を離してもそのまま話しかけられます）");
+      // ロスト後も会話は継続できる。thinking で固まっていたらidleに戻す
+      setAiStatus((prev) => prev === "thinking" ? "idle" : prev);
+      setSubtitle("（マーカーをかざしてください。話しかけることもできます）");
     },
     onSubtitleChange: setSubtitle,
     onStatusChange:   setAiStatus,

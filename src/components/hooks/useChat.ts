@@ -129,6 +129,7 @@ export function useChat({
   const [chatHistory,        setChatHistory]        = useState<HistoryItem[]>([]);
   const [isUploadingMemory,  setIsUploadingMemory]  = useState(false);
   const lastGreetingTimeRef  = useRef<number>(0);
+  const isGreetingInProgress = useRef<boolean>(false);
 
   const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
@@ -219,6 +220,8 @@ export function useChat({
   const triggerInitialGreeting = async (
     forcedLocation?: { lat: number; lng: number } | null
   ) => {
+    if (isGreetingInProgress.current) return; // 二重起動防止
+    isGreetingInProgress.current = true;
     lastGreetingTimeRef.current = Date.now();
     stopAudio();
 
@@ -255,18 +258,54 @@ export function useChat({
       onSubtitleChange("ルキルキを現実世界に固定しました。話しかけてください。");
       onAiStatusChange("idle");
       onSearchPhaseChange("STABLE");
+    } finally {
+      isGreetingInProgress.current = false;
     }
   };
 
   // ── ターゲット認識コールバック（useAR から呼ばれる） ──
   const onTargetFound = () => {
-    const within1Min = (Date.now() - lastGreetingTimeRef.current) < 60_000;
-    if (!within1Min) {
+    // ① まず即座にローカルMP3を再生してラグを隠す
+    playLocalGreeting();
+
+    // ② 5分以上経過 or 初回 → LLM挨拶を並列で起動
+    const within5Min = (Date.now() - lastGreetingTimeRef.current) < 5 * 60_000;
+    if (!within5Min) {
+      // MP3再生中にLLMが返ってきたら上書きする
       triggerInitialGreeting();
     } else {
-      onAiStatusChange("idle");
-      onSearchPhaseChange("STABLE");
-      onSubtitleChange("ルキルキを現実空間に再同期しました。");
+      // 再認識の場合は字幕だけ更新してidle状態に戻す
+      setTimeout(() => {
+        onAiStatusChange("idle");
+        onSearchPhaseChange("STABLE");
+        onSubtitleChange("話しかけてください。");
+      }, 2500); // MP3再生時間に合わせて遅延
+    }
+  };
+
+  // ── ローカルMP3即時再生（LLMコールドスタートのラグを隠す） ──
+  const playLocalGreeting = () => {
+    try {
+      // /public/sounds/ruki_appear.mp3 を配置すれば再生される
+      // ファイルがなければサイレントに失敗
+      const audio = new Audio("/sounds/ruki_appear.wav");
+      audio.volume = 0.9;
+      onAiStatusChange("talking");
+      onSubtitleChange("ルキルキが現れました...✨");
+      audio.onended = () => {
+        // LLMがまだ返ってきていない場合のみ thinking に切り替え
+        onSubtitleChange("ルキルキが現実空間と同期中...");
+        onAiStatusChange("thinking");
+      };
+      audio.onerror = () => {
+        // MP3がなくても動作は継続
+        onSubtitleChange("ルキルキが現実空間と同期中...");
+      };
+      audio.play().catch(() => {
+        onSubtitleChange("ルキルキが現実空間と同期中...");
+      });
+    } catch {
+      onSubtitleChange("ルキルキが現実空間と同期中...");
     }
   };
 
@@ -317,6 +356,11 @@ export function useChat({
     const formData = new FormData(e.currentTarget);
     const text     = (formData.get("message") as string).trim();
     if (!text) return;
+    // 初期挨拶のLLMレスポンス待ち中はユーザー送信をキューせず無視
+    if (isGreetingInProgress.current) {
+      onSubtitleChange("ルキルキが起動中です。少しお待ちください...");
+      return;
+    }
 
     // スナップコマンド検出
     const snapMatch = text.match(/^(.+?)とスナップ$/);
