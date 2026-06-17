@@ -13,7 +13,7 @@ from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_core.tools import tool
 
 from agents.state import RukirukiState
@@ -36,7 +36,7 @@ llm_fast = ChatOpenAI(
     temperature=0.7,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
-search_tool = TavilySearchResults(max_results=2)
+search_tool = TavilySearch(max_results=2)
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -210,12 +210,28 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     from services.location import fetch_street_address
 
     MAGATOKI_KNOWLEDGE = _MAGATOKI_KNOWLEDGE_CACHE
-    # identity_context からユーザー呼び名を抽出して制約プロンプトを動的生成する
+    # identity_context から呼び名を抽出（正規表現を使わずシンプルな文字列探索で実装）
     identity_ctx = state.get("identity_context", "")
-    import re as _re
-    _call_match = _re.search(r"呼び名[：:]\s*[『「]?([^\s』」
-]+)[』」]?", identity_ctx)
-    user_call   = _call_match.group(1) if _call_match else "まがとき"
+    user_call = "まがとき"
+    marker = "\u547c\u3073\u540d"  # "呼び名"
+    sep1, sep2 = "\uff1a", ":"       # 全角コロン / 半角コロン
+    for sep in (sep1, sep2):
+        idx = identity_ctx.find(marker + sep)
+        if idx != -1:
+            rest = identity_ctx[idx + len(marker) + 1:].lstrip()
+            # 先頭の括弧類を除去
+            for bracket in ("\u300e", "\u300c", "\u300f", "\u300d", "\u300a", "\u300b"):
+                rest = rest.lstrip(bracket)
+            # 空白・改行・閉じ括弧で区切る
+            end = len(rest)
+            for ch in (" ", "\n", "\u300d", "\u300f", "\u300b", "\u3011"):
+                pos = rest.find(ch)
+                if pos != -1 and pos < end:
+                    end = pos
+            candidate = rest[:end].strip()
+            if candidate:
+                user_call = candidate
+                break
     system_constraints = build_dynamic_constraints(user_call, state.get("episode_context", ""))
     main_search_tool   = search_tool
     llm_with_tools     = llm_synth.bind_tools([search_tool])

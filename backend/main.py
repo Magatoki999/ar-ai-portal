@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ─── services インポート ───
@@ -66,7 +66,7 @@ llm = ChatOpenAI(
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY"),
 )
-search_tool = TavilySearchResults(max_results=2)
+search_tool = TavilySearch(max_results=2)
 llm_with_tools = llm.bind_tools([search_tool, locate_current_position])
 
 # 起動時に一度だけ読み込む知識ベース

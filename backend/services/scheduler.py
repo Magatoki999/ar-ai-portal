@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 
 import services.state as state
 from services.tts import generate_tts
@@ -26,7 +26,7 @@ from services.emotion import (
 from services.memory import save_agent_memo
 
 
-search_tool = TavilySearchResults(max_results=2)
+search_tool = TavilySearch(max_results=2)
 
 
 # ─── ルキルキ ペルソナ読み込み ───
