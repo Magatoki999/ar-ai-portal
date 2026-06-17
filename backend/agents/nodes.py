@@ -210,11 +210,17 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     from services.location import fetch_street_address
 
     MAGATOKI_KNOWLEDGE = _MAGATOKI_KNOWLEDGE_CACHE
-    system_constraints = build_dynamic_constraints("まがとき")
+    # identity_context からユーザー呼び名を抽出して制約プロンプトを動的生成する
+    identity_ctx = state.get("identity_context", "")
+    import re as _re
+    _call_match = _re.search(r"呼び名[：:]\s*[『「]?([^\s』」
+]+)[』」]?", identity_ctx)
+    user_call   = _call_match.group(1) if _call_match else "まがとき"
+    system_constraints = build_dynamic_constraints(user_call, state.get("episode_context", ""))
     main_search_tool   = search_tool
     llm_with_tools     = llm_synth.bind_tools([search_tool])
 
-    base_persona = load_rukiruki_persona()
+    base_persona = load_rukiruki_persona(user_call)
 
     # エージェント出力をプロンプトに統合
     agent_insights = ""
@@ -363,13 +369,16 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             if not show_image_url:
                 ai_reply = ai_reply + f" ||SEARCH_LOCATION_PHOTO:{loc_name}||"
 
+        # NOTE: messages に AIMessage を追加しない。
+        # add_messages リデューサーで蓄積すると次回 synthesizer 実行時に
+        # state["messages"] に前回返答が混入して ai_reply が重複するため。
+        # 会話履歴管理は main.py の payload.history で完結させる。
         return {
             "ai_reply": ai_reply,
             "spatial_effect": spatial_effect,
             "spot_proposal": spot_proposal,
             "engrave_triggered": engrave_triggered,
             "show_image_url": show_image_url,
-            "messages": [AIMessage(content=ai_reply)]
         }
 
     except Exception as e:
