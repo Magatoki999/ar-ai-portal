@@ -532,8 +532,16 @@ async def evaluator_node(state: RukirukiState) -> dict:
             mood = "melancholy"
 
         # ENGRAVEタグが立っているとき、またはスコア8以上かつ感情条件を満たすとき保存
+        # arweave-python-client が未インストールの場合は即スキップ
         engrave_triggered = state.get("engrave_triggered", False)
-        if engrave_triggered or (score >= 8 and mood):
+        _arweave_available = bool(os.getenv("ARWEAVE_JWK"))
+        try:
+            import importlib.util as _ilu
+            if _ilu.find_spec("arweave") is None:
+                _arweave_available = False
+        except Exception:
+            _arweave_available = False
+        if _arweave_available and (engrave_triggered or (score >= 8 and mood)):
             reason = "ENGRAVEコマンド" if engrave_triggered else f"高品質({score})×感情({mood})"
             print(f"[Arweave] 永続化条件を満たしました（理由: {reason}）")
             arweave_tx_id = await save_to_arweave(state)

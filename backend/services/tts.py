@@ -75,7 +75,10 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
 
     # エフェクトタグ等の残留を除去
     clean_text = re.sub(r"\|\|.*?\|\|", "", text).strip()
-    clean_text = " ".join(clean_text.split())
+    # Gemini TTS が 400 を返しやすい記号・マークダウンを除去
+    clean_text = re.sub(r"[\u300e\u300f\u300c\u300d\u3010\u3011\u3014\u3015\u3008\u3009\u300a\u300b\[\]<>]", "", clean_text)
+    clean_text = re.sub(r"\*{2,}", "", clean_text)  # markdown bold
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if not clean_text:
         return None
 
