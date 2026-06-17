@@ -63,3 +63,7 @@ class RukirukiState(TypedDict):
 
     # ─── オンチェーン記憶 ───
     arweave_tx_id: str                 # 保存されたArweaveトランザクションID（保存なしは空文字）
+
+    # ─── GPS 生座標（synthesizer_node の Tool Call で使用） ───
+    _lat: Optional[float]              # main.py から注入する緯度（Toolが参照）
+    _lng: Optional[float]              # main.py から注入する経度（Toolが参照）

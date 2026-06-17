@@ -19,6 +19,10 @@ from langchain_core.tools import tool
 from agents.state import RukirukiState
 from agents.router import analyze_and_route
 
+# ─── 起動時に一度だけ読み込む知識ベース（毎リクエスト読み込みを防ぐ） ───
+from services.persona import load_magatoki_context as _load_knowledge
+_MAGATOKI_KNOWLEDGE_CACHE: str = _load_knowledge()
+
 # ─── LLM・ツール初期化 ───
 # Synthesizerは高精度優先（gpt-4o）
 llm_synth = ChatOpenAI(
@@ -33,6 +37,19 @@ llm_fast = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 search_tool = TavilySearchResults(max_results=2)
+
+# ─── クエリ精緻化プロンプト（元 main.py から移動） ───
+from langchain_core.prompts import ChatPromptTemplate as _CPT
+query_refine_prompt = _CPT.from_messages([
+    ("system",
+     "あなたはWeb検索クエリ最適化の専門家です。"
+     "ユーザーの質問と現在地情報をもとに、最も関連性の高い検索結果が得られる"
+     "日本語または英語の検索クエリを1つだけ出力してください。"
+     "クエリ以外の説明文は一切出力しないでください。"),
+    ("human",
+     "現在地: 緯度{lat} 経度{lng} 周辺住所キーワード: {address}\n"
+     "元のクエリ: {base_query}"),
+])
 
 
 # ─── ① Router Node ───
@@ -188,13 +205,14 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     """
     from langchain_core.prompts import ChatPromptTemplate
 
-    # main.py からインポートされる関数・変数（実行時に解決）
-    from main import (
-        load_rukiruki_persona, MAGATOKI_KNOWLEDGE,
-        llm_with_tools, search_tool as main_search_tool,
-        fetch_street_address, query_refine_prompt,
-        system_constraints
-    )
+    # services/* から解決（main.py への逆依存を完全排除）
+    from services.persona  import load_rukiruki_persona, build_dynamic_constraints
+    from services.location import fetch_street_address
+
+    MAGATOKI_KNOWLEDGE = _MAGATOKI_KNOWLEDGE_CACHE
+    system_constraints = build_dynamic_constraints("まがとき")
+    main_search_tool   = search_tool
+    llm_with_tools     = llm_synth.bind_tools([search_tool])
 
     base_persona = load_rukiruki_persona()
 
