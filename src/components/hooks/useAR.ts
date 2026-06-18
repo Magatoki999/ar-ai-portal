@@ -239,25 +239,6 @@ export function useAR({
 
         await mindarThree.start();
 
-        // ── MindAR が生成した video / canvas を画面全体に強制展開 ──
-        // MindAR は内部で position:absolute を付けるが、サイズが
-        // コンテナの clientWidth/clientHeight に依存するためモバイルで黒帯が出る。
-        // start() 後に直接 style を上書きして確実にビューポート全体を埋める。
-        if (containerRef.current) {
-          const fixEl = (el: HTMLElement) => {
-            el.style.position  = "fixed";
-            el.style.top       = "0";
-            el.style.left      = "0";
-            el.style.width     = "100%";
-            el.style.height    = "100svh";
-            el.style.objectFit = "cover";
-            el.style.zIndex    = "0";   // HUD(z:10)より必ず下に置く
-          };
-          containerRef.current
-            .querySelectorAll("video, canvas")
-            .forEach((el) => fixEl(el as HTMLElement));
-        }
-
         renderer.setAnimationLoop(() => {
           const delta       = clock.getDelta();
           const elapsedTime = clock.getElapsedTime();
