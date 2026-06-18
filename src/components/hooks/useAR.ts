@@ -67,6 +67,7 @@ export function useAR({
   useEffect(() => {
     let mindarThreeInstance: any = null;
     let localRenderer: any = null;
+    let onResize: (() => void) | null = null; // cleanup で参照するため外側で宣言
 
     const start = async () => {
       try {
@@ -96,16 +97,20 @@ export function useAR({
         localRenderer = renderer;
 
         // ── レンダラー設定 ──
-        // window.innerWidth/Height で明示的にサイズをセットしてモバイル黒帯を防ぐ
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.outputColorSpace   = THREE.SRGBColorSpace;
-        renderer.toneMapping        = THREE.ACESFilmicToneMapping;
+        // ⚠️ renderer.setSize() は MindAR の内部管理と競合するため呼ばない。
+        // MindARThree が start() 後に canvas サイズを自分で設定する。
+        renderer.outputColorSpace    = THREE.SRGBColorSpace;
+        renderer.toneMapping         = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0;
         renderer.setClearColor(0x000000, 0);
 
-        // リサイズ対応
-        const onResize = () => {
-          renderer.setSize(window.innerWidth, window.innerHeight);
+        // リサイズ対応：MindAR に任せつつカメラの aspect だけ同期する
+        onResize = () => {
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          // MindAR が canvas を管理しているため renderer.setSize() は呼ばない
         };
         window.addEventListener("resize", onResize);
 
@@ -250,16 +255,37 @@ export function useAR({
 
         await mindarThree.start();
 
-        // MindAR start()後にコンテナが確実に全画面を埋めているか確認
-        // コンテナのサイズが0の場合は親のサイズを明示的に再適用する
+        // MindAR start()後、生成された video / canvas を全画面にフィットさせる（黒帯防止）
         if (containerRef.current) {
           const c = containerRef.current;
-          // MindARが生成したvideo要素にスタイルを適用（黒帯防止）
+
+          // コンテナ自体を確実に全画面に
+          c.style.width    = "100vw";
+          c.style.height   = "100vh";
+          c.style.overflow = "hidden";
+          c.style.position = "fixed";
+          c.style.top      = "0";
+          c.style.left     = "0";
+
+          // MindAR が生成した video
           const videos = c.querySelectorAll("video");
           videos.forEach((v) => {
-            (v as HTMLElement).style.width    = "100%";
-            (v as HTMLElement).style.height   = "100%";
+            (v as HTMLElement).style.width     = "100%";
+            (v as HTMLElement).style.height    = "100%";
             (v as HTMLElement).style.objectFit = "cover";
+            (v as HTMLElement).style.position  = "absolute";
+            (v as HTMLElement).style.top       = "0";
+            (v as HTMLElement).style.left      = "0";
+          });
+
+          // MindAR が生成した canvas（Three.js レンダラー）
+          const canvases = c.querySelectorAll("canvas");
+          canvases.forEach((cv) => {
+            (cv as HTMLElement).style.width    = "100%";
+            (cv as HTMLElement).style.height   = "100%";
+            (cv as HTMLElement).style.position = "absolute";
+            (cv as HTMLElement).style.top      = "0";
+            (cv as HTMLElement).style.left     = "0";
           });
         }
 
@@ -382,7 +408,7 @@ export function useAR({
     return () => {
       try { localRenderer?.setAnimationLoop(null); } catch (_) {}
       try { mindarThreeInstance?.stop(); }            catch (_) {}
-      window.removeEventListener("resize", () => {});
+      if (onResize) window.removeEventListener("resize", onResize);
     };
   }, []);
 
