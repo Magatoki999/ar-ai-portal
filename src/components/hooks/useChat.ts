@@ -348,7 +348,6 @@ export function useChat({
   }, [BASE_URL, address, containerRef, onAiStatusChange, onSubtitleChange,
       onSnapResult, updateHistory]);
 
-      
   // ── メッセージ送信 ──
   const handleSendMessage = useCallback(async (
     e: React.FormEvent<HTMLFormElement>
