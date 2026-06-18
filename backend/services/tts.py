@@ -73,20 +73,25 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
 
     voice_name = os.getenv("GEMINI_VOICE_NAME", "Kore")
 
-    # エフェクトタグ等の残留を除去
+    # ── テキストクリーニング ──
+    # 1. タグ除去
     clean_text = re.sub(r"\|\|.*?\|\|", "", text).strip()
-    # Gemini TTS が 400 を返しやすい記号・マークダウンを除去
-    clean_text = re.sub(r"[\u300e\u300f\u300c\u300d\u3010\u3011\u3014\u3015\u3008\u3009\u300a\u300b\[\]<>]", "", clean_text)
-    clean_text = re.sub(r"\*{2,}", "", clean_text)  # markdown bold
+    # 2. Gemini TTS が 400 を返す記号を除去（括弧類・markdown）
+    clean_text = re.sub(
+        r"[\u300e\u300f\u300c\u300d\u3010\u3011\u3014\u3015"
+        r"\u3008\u3009\u300a\u300b\u300b\[\]<>\*]",
+        "", clean_text
+    )
+    # 3. 感嘆符・疑問符の連続を1つに正規化（!! → !、？？ → ？）
+    clean_text = re.sub(r"[！!]{2,}", "！", clean_text)
+    clean_text = re.sub(r"[？?]{2,}", "？", clean_text)
+    # 4. 空白正規化
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if not clean_text:
         return None
 
-    # キャラクター性を声に反映するスタイル指示
-    style_prefix = (
-        "小柄で元気な少年のように、好奇心旺盛で感情豊かに、"
-        "テンポよくいきいきと話してください: "
-    )
+    # ── スタイル指示（シンプルに短く。長いと400になりやすい） ──
+    style_prefix = "元気よく自然に話してください: "
     styled_text = style_prefix + clean_text
     print(f"[Gemini TTS] 送信テキスト({len(clean_text)}文字): {clean_text[:80]}")
 
@@ -135,6 +140,33 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
                         f"[TTSエラー] Gemini TTS レスポンスにaudioデータなし: "
                         f"{res_json}"
                     )
+            elif response.status_code == 400:
+                # 400 の場合はスタイル指示を外して本文のみで再試行
+                print(f"[Gemini TTS] 400エラー → スタイル指示なしで再試行")
+                payload_retry = dict(payload)
+                payload_retry["contents"] = [{"parts": [{"text": clean_text}]}]
+                retry_res = await client.post(
+                    url, json=payload_retry, headers=headers, timeout=20.0
+                )
+                if retry_res.status_code == 200:
+                    retry_json = retry_res.json()
+                    inline_data = (
+                        retry_json.get("candidates", [{}])[0]
+                        .get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("inlineData", {})
+                    )
+                    audio_b64 = inline_data.get("data")
+                    mime_type = inline_data.get(
+                        "mimeType", "audio/L16;codec=pcm;rate=24000"
+                    )
+                    if audio_b64:
+                        print("[Gemini TTS] 再試行成功")
+                        return audio_b64, mime_type
+                print(
+                    f"[TTSエラー] Gemini TTS HTTP 400 再試行も失敗: "
+                    f"{response.text[:200]}"
+                )
             else:
                 print(
                     f"[TTSエラー] Gemini TTS HTTP {response.status_code}: "

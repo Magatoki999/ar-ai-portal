@@ -251,6 +251,7 @@ export function useAR({
             el.style.width     = "100%";
             el.style.height    = "100svh";
             el.style.objectFit = "cover";
+            el.style.zIndex    = "0";   // HUD(z:10)より必ず下に置く
           };
           containerRef.current
             .querySelectorAll("video, canvas")
