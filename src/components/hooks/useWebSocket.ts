@@ -67,21 +67,29 @@ export function useWebSocket({
             onProactiveSpeech(data.reply, effect);
 
             if (data.audio_data && audioInstanceRef.current) {
+              const mime     = resolveAudioMime(data.audio_mime);
+              const audioUrl = base64ToAudioUrl(data.audio_data, mime);
+              const audio    = audioInstanceRef.current;
+              audio.onended = () => {
+                onAiStatusChange("idle");
+                URL.revokeObjectURL(audioUrl);
+              };
+              audio.onerror = () => {
+                onAiStatusChange("idle");
+                URL.revokeObjectURL(audioUrl);
+              };
               try {
-                const mime = resolveAudioMime(data.audio_mime);
-                const audioUrl = base64ToAudioUrl(data.audio_data, mime);
-                audioInstanceRef.current.onended = () => {
+                initAudioPipeline(audio);
+                audio.src = audioUrl;
+                onAiStatusChange("talking");
+                // 非ブロッキング：play() を await しない
+                audio.play().catch(() => {
                   onAiStatusChange("idle");
                   URL.revokeObjectURL(audioUrl);
-                };
-                initAudioPipeline(audioInstanceRef.current);
-                audioInstanceRef.current.src = audioUrl;
-                onAiStatusChange("talking");
-                await audioInstanceRef.current.play();
-              } catch (err) {
-                console.log("[WS] 自発発話音声再生失敗:", err);
-                onAiStatusChange("talking");
-                setTimeout(() => onAiStatusChange("idle"), 5000);
+                });
+              } catch {
+                onAiStatusChange("idle");
+                URL.revokeObjectURL(audioUrl);
               }
             } else {
               onAiStatusChange("talking");

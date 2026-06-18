@@ -1,16 +1,7 @@
 // hooks/useChat.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// チャット送受信・スナップ生成・記憶写真保存を管理するフック。
-// 責務:
-//   - /api/chat  へのメッセージ送信と API レスポンス処理
-//   - /api/snap  へのスナップ生成リクエスト
-//   - /api/memory/photo へのカメラフレーム保存
-//   - /api/tts   を使った固定挨拶・初期挨拶の再生
-//   - GPS 取得・カメラキャプチャの呼び出し
-// ─────────────────────────────────────────────────────────────────────────────
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import type {
   AIStatus,
   HistoryItem,
@@ -20,24 +11,24 @@ import type {
 import { base64ToAudioUrl, resolveAudioMime } from "../lib/audio";
 
 interface UseChatOptions {
-  containerRef:       React.MutableRefObject<HTMLDivElement | null>;
-  inputRef:           React.MutableRefObject<HTMLInputElement | null>;
-  audioInstanceRef:   React.MutableRefObject<HTMLAudioElement | null>;
-  timersRef:          React.MutableRefObject<NodeJS.Timeout[]>;
-  currentEffectRef:   React.MutableRefObject<string>;
-  addressRef:         React.MutableRefObject<string | undefined>;
-  address?:           string;
-  initAudioPipeline:  (audio: HTMLAudioElement) => void;
-  playAudio:          (b64: string, mime?: string, onEnded?: () => void) => Promise<void>;
-  stopAudio:          () => void;
-  onAiStatusChange:   (status: AIStatus) => void;
-  onSearchPhaseChange:(phase: SearchPhase) => void;
-  onSubtitleChange:   (text: string) => void;
-  onSpatialEffect:    (effect: string) => void;
-  onEngraveToast:     (txId: string) => void;
-  onShowImage:        (url: string) => void;
-  onSpotProposal:     (name: string) => void;
-  onSnapResult:       (url: string) => void;
+  containerRef:        React.MutableRefObject<HTMLDivElement | null>;
+  inputRef:            React.MutableRefObject<HTMLInputElement | null>;
+  audioInstanceRef:    React.MutableRefObject<HTMLAudioElement | null>;
+  timersRef:           React.MutableRefObject<NodeJS.Timeout[]>;
+  currentEffectRef:    React.MutableRefObject<string>;
+  addressRef:          React.MutableRefObject<string | undefined>;
+  address?:            string;
+  initAudioPipeline:   (audio: HTMLAudioElement) => void;
+  playAudio:           (b64: string, mime?: string, onEnded?: () => void) => Promise<void>;
+  stopAudio:           () => void;
+  onAiStatusChange:    (status: AIStatus) => void;
+  onSearchPhaseChange: (phase: SearchPhase) => void;
+  onSubtitleChange:    (text: string) => void;
+  onSpatialEffect:     (effect: string) => void;
+  onEngraveToast:      (txId: string) => void;
+  onShowImage:         (url: string) => void;
+  onSpotProposal:      (name: string) => void;
+  onSnapResult:        (url: string) => void;
 }
 
 // ── GPS 取得 ──
@@ -47,14 +38,12 @@ const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> =>
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       ()    => resolve(null),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
     );
   });
 
 // ── カメラフレームキャプチャ ──
-const captureARCameraFrame = (
-  containerEl: HTMLDivElement | null
-): string | null => {
+const captureFrame = (containerEl: HTMLDivElement | null): string | null => {
   const video = containerEl?.querySelector("video");
   if (!video || video.videoWidth === 0) return null;
   const canvas = document.createElement("canvas");
@@ -66,44 +55,30 @@ const captureARCameraFrame = (
   return canvas.toDataURL("image/jpeg", 0.7);
 };
 
-// ── Supabase memories バケットへの直接アップロード ──
-const uploadMemoryPhoto = async (
-  base64DataUrl: string
-): Promise<string | null> => {
+// ── Supabase memories バケットへのアップロード ──
+const uploadMemoryPhoto = async (base64DataUrl: string): Promise<string | null> => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return null;
-
   try {
     const res      = await fetch(base64DataUrl);
     const blob     = await res.blob();
     const fileName = `memory_${Date.now()}.jpg`;
-
     const uploadRes = await fetch(
       `${supabaseUrl}/storage/v1/object/memories/${fileName}`,
       {
-        method: "POST",
+        method:  "POST",
         headers: {
-          Authorization:   `Bearer ${supabaseKey}`,
-          "Content-Type":  "image/jpeg",
-          "x-upsert":      "true",
+          Authorization:  `Bearer ${supabaseKey}`,
+          "Content-Type": "image/jpeg",
+          "x-upsert":     "true",
         },
         body: blob,
       }
     );
-
-    if (!uploadRes.ok) {
-      console.error("[写真保存] アップロード失敗:", await uploadRes.text());
-      return null;
-    }
-
-    const imageUrl = `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
-    console.log("[写真保存] アップロード成功:", imageUrl);
-    return imageUrl;
-  } catch (err) {
-    console.error("[写真保存] エラー:", err);
-    return null;
-  }
+    if (!uploadRes.ok) return null;
+    return `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
+  } catch { return null; }
 };
 
 export function useChat({
@@ -126,50 +101,96 @@ export function useChat({
   onSpotProposal,
   onSnapResult,
 }: UseChatOptions) {
-  const [chatHistory,        setChatHistory]        = useState<HistoryItem[]>([]);
-  const [isUploadingMemory,  setIsUploadingMemory]  = useState(false);
+  const [chatHistory,       setChatHistory]       = useState<HistoryItem[]>([]);
+  const [isUploadingMemory, setIsUploadingMemory] = useState(false);
+
+  // ── 状態管理 ref（レンダリングに依存しない制御フラグ） ──
+  const isBusyRef            = useRef<boolean>(false); // API呼び出し中フラグ
   const lastGreetingTimeRef  = useRef<number>(0);
-  const isGreetingInProgress = useRef<boolean>(false);
+  const chatHistoryRef       = useRef<HistoryItem[]>([]); // chatHistory の最新値を ref でも保持
 
   const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-  // ── API レスポンス共通処理 ──
-  const handleChatResponse = async (data: ChatApiResponse) => {
+  // chatHistory の更新を ref にも反映
+  const updateHistory = useCallback((updater: (prev: HistoryItem[]) => HistoryItem[]) => {
+    setChatHistory((prev) => {
+      const next = updater(prev);
+      chatHistoryRef.current = next;
+      return next;
+    });
+  }, []);
+
+  // ── 音声再生（非ブロッキング） ──
+  // await しない。onEnded コールバックで idle に戻す。
+  const playReply = useCallback((
+    audioB64: string | null,
+    mime?: string,
+    onDone?: () => void
+  ) => {
+    if (!audioB64 || !audioInstanceRef.current) {
+      // 音声なし: 5秒後に idle
+      onAiStatusChange("talking");
+      const t = setTimeout(() => { onAiStatusChange("idle"); onDone?.(); }, 5000);
+      timersRef.current.push(t);
+      return;
+    }
+    const resolvedMime = resolveAudioMime(mime);
+    const url = base64ToAudioUrl(audioB64, resolvedMime);
+    const audio = audioInstanceRef.current;
+
+    // 再生前に前の音声を確実に止める
+    audio.pause();
+    audio.onended = null;
+
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      onAiStatusChange("idle");
+      onDone?.();
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      onAiStatusChange("idle");
+      onDone?.();
+    };
+
+    try {
+      if (initAudioPipeline) initAudioPipeline(audio);
+      audio.src = url;
+      onAiStatusChange("talking");
+      audio.play().catch(() => {
+        URL.revokeObjectURL(url);
+        onAiStatusChange("idle");
+        onDone?.();
+      });
+    } catch {
+      URL.revokeObjectURL(url);
+      onAiStatusChange("idle");
+      onDone?.();
+    }
+  }, [audioInstanceRef, initAudioPipeline, onAiStatusChange, timersRef]);
+
+  // ── API レスポンス共通処理（非ブロッキング版） ──
+  const applyResponse = useCallback((data: ChatApiResponse) => {
     if (data.spatial_effect) {
       onSpatialEffect(data.spatial_effect);
       currentEffectRef.current = data.spatial_effect;
     }
-    if (data.spot_proposal)    onSpotProposal(data.spot_proposal);
-    if (data.arweave_tx_id)  { onEngraveToast(data.arweave_tx_id); }
-    if (data.show_image_url)   onShowImage(data.show_image_url);
+    if (data.spot_proposal)  onSpotProposal(data.spot_proposal);
+    if (data.arweave_tx_id)  onEngraveToast(data.arweave_tx_id);
+    if (data.show_image_url) onShowImage(data.show_image_url);
 
     onSubtitleChange(data.reply);
+    // 非ブロッキングで再生開始。完了後に isBusy を解除
+    playReply(data.audio_data, data.audio_mime, () => {
+      isBusyRef.current = false;
+    });
+  }, [onSpatialEffect, onSpotProposal, onEngraveToast, onShowImage,
+      onSubtitleChange, playReply, currentEffectRef]);
 
-    if (data.audio_data) {
-      try {
-        await playAudio(data.audio_data, data.audio_mime, () =>
-          onAiStatusChange("idle")
-        );
-        onAiStatusChange("talking");
-      } catch {
-        onAiStatusChange("talking");
-        setTimeout(() => onAiStatusChange("idle"), 5000);
-      }
-    } else {
-      onAiStatusChange("talking");
-      setTimeout(() => onAiStatusChange("idle"), 5000);
-    }
-  };
-
-  // ── ENGRAVE 処理（カメラフレームを保存 → バックエンドに通知） ──
-  const handleEngrave = (
-    data: ChatApiResponse,
-    arweaveId: string
-  ) => {
-    console.log("[ENGRAVE] engrave_triggered=true");
-    const frame = captureARCameraFrame(containerRef.current);
+  // ── ENGRAVE 処理 ──
+  const handleEngrave = useCallback((arweaveId: string) => {
+    const frame = captureFrame(containerRef.current);
     if (!frame) return;
-
     setIsUploadingMemory(true);
     uploadMemoryPhoto(frame).then((imageUrl) => {
       setIsUploadingMemory(false);
@@ -180,148 +201,119 @@ export function useChat({
         body:    JSON.stringify({ arweave_tx_id: arweaveId, image_url: imageUrl }),
       }).catch(console.error);
     });
-  };
+  }, [containerRef, BASE_URL]);
 
-  // ── 固定挨拶（TTS のみ、LLM を通さない） ──
-  const playFixedGreeting = async () => {
-    lastGreetingTimeRef.current = Date.now();
-    stopAudio();
-
-    const text = "こんにちは、まがときさん。ルキルキ、現実空間への同期完了です。";
-    const ts   = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-    onSubtitleChange(text);
-    onAiStatusChange("talking");
-    onSearchPhaseChange("STABLE");
-    onSpatialEffect("cyber");
-    currentEffectRef.current = "cyber";
-    setChatHistory((prev) => [...prev, { role: "ruki", text, timestamp: ts }]);
-
-    try {
-      if (!BASE_URL) { onAiStatusChange("idle"); return; }
-      const res  = await fetch(`${BASE_URL}/api/tts`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ text }),
-      });
-      if (!res.ok) throw new Error("TTS生成失敗");
-      const { audio_data } = await res.json();
-      if (audio_data) {
-        await playAudio(audio_data, undefined, () => onAiStatusChange("idle"));
-      } else {
-        onAiStatusChange("idle");
-      }
-    } catch {
-      setTimeout(() => onAiStatusChange("idle"), 3000);
+  // ── /api/chat 呼び出しコア ──
+  const callChat = useCallback(async (
+    message: string,
+    history: HistoryItem[],
+    opts?: { isGreeting?: boolean }
+  ): Promise<void> => {
+    if (isBusyRef.current) {
+      console.log("[useChat] busy中のため送信スキップ:", message.slice(0, 20));
+      return;
     }
-  };
+    isBusyRef.current = true;
 
-  // ── 初期挨拶（LLM 経由） ──
-  const triggerInitialGreeting = async (
-    forcedLocation?: { lat: number; lng: number } | null
-  ) => {
-    if (isGreetingInProgress.current) return; // 二重起動防止
-    isGreetingInProgress.current = true;
-    // 15秒でフラグを強制解除（ネットワークエラーで finally が走らない場合の保険）
-    const greetingTimeout = setTimeout(() => {
-      isGreetingInProgress.current = false;
-    }, 15_000);
-    lastGreetingTimeRef.current = Date.now();
-    stopAudio();
-
-    onSubtitleChange("ルキルキが現実世界と同期中...");
     onAiStatusChange("thinking");
     onSearchPhaseChange("CONNECTING...");
 
-    const location = forcedLocation !== undefined
-      ? forcedLocation
-      : await getGPSLocation();
-    const imageBase64 = captureARCameraFrame(containerRef.current);
+    // Tavily 検索中インジケーター（1.8秒後・5秒後）
+    const t1 = setTimeout(() => {
+      onSearchPhaseChange("TAVILY_SEARCHING...");
+      onSubtitleChange("🌐 外部情報空間を走査中...");
+    }, 1800);
+    const t2 = setTimeout(() => {
+      onSearchPhaseChange("DATA_ANALYZING...");
+      onSubtitleChange("🔮 データを展開中...");
+    }, 5000);
+    timersRef.current.push(t1, t2);
+
+    const location    = await getGPSLocation();
+    const imageBase64 = captureFrame(containerRef.current);
 
     try {
       const res = await fetch(`${BASE_URL}/api/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message:        "[INITIAL_GREETING]",
+          message,
           wallet_address: addressRef.current ?? null,
           image_base64:   imageBase64,
           latitude:       location?.lat ?? null,
           longitude:      location?.lng ?? null,
-          history:        [],
+          history:        opts?.isGreeting ? [] : history,
         }),
       });
+
+      timersRef.current.forEach(clearTimeout);
+      timersRef.current = [];
       onSearchPhaseChange("STABLE");
-      if (!res.ok) throw new Error("API初期挨拶エラー");
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data: ChatApiResponse = await res.json();
+
+      // 履歴にルキルキの返答を追記
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      setChatHistory((prev) => [...prev, { role: "ruki", text: data.reply, timestamp: ts }]);
-      await handleChatResponse(data);
-    } catch {
-      onSubtitleChange("ルキルキを現実世界に固定しました。話しかけてください。");
+      updateHistory((prev) => [...prev, { role: "ruki", text: data.reply, timestamp: ts }]);
+
+      // ENGRAVE
+      if (data.engrave_triggered) handleEngrave(data.arweave_tx_id);
+
+      // レスポンス適用（音声再生は非ブロッキング・isBusy は playReply 完了後に解除）
+      applyResponse(data);
+
+    } catch (err) {
+      console.error("[useChat] API呼び出しエラー:", err);
+      timersRef.current.forEach(clearTimeout);
+      timersRef.current = [];
+      onSearchPhaseChange("OFFLINE");
+      onSubtitleChange("通信に失敗しました。もう一度話しかけてください。");
       onAiStatusChange("idle");
-      onSearchPhaseChange("STABLE");
-    } finally {
-      clearTimeout(greetingTimeout);
-      isGreetingInProgress.current = false;
+      isBusyRef.current = false;
     }
-  };
+  }, [BASE_URL, addressRef, containerRef, timersRef,
+      onAiStatusChange, onSearchPhaseChange, onSubtitleChange,
+      updateHistory, handleEngrave, applyResponse]);
 
-  // ── ターゲット認識コールバック（useAR から呼ばれる） ──
-  const onTargetFound = () => {
-    // ① まず即座にローカルMP3を再生してラグを隠す
-    playLocalGreeting();
+  // ── 初期挨拶（マーカー認識時） ──
+  const triggerInitialGreeting = useCallback(async () => {
+    lastGreetingTimeRef.current = Date.now();
+    stopAudio();
+    onSubtitleChange("ルキルキが現実世界と同期中...");
+    // callChat 内で isBusy 管理するので直接呼ぶ
+    await callChat("[INITIAL_GREETING]", [], { isGreeting: true });
+  }, [callChat, stopAudio, onSubtitleChange]);
 
-    // ② 5分以上経過 or 初回 → LLM挨拶を並列で起動
-    const within5Min = (Date.now() - lastGreetingTimeRef.current) < 5 * 60_000;
-    if (!within5Min) {
-      // MP3再生中にLLMが返ってきたら上書きする
+  // ── ターゲット認識コールバック ──
+  const onTargetFound = useCallback(() => {
+    const elapsed = Date.now() - lastGreetingTimeRef.current;
+    const within5Min = elapsed < 5 * 60_000;
+
+    if (!within5Min || lastGreetingTimeRef.current === 0) {
+      // 初回 or 5分超 → 挨拶を送る（busy中なら自然にスキップ）
       triggerInitialGreeting();
     } else {
-      // 再認識の場合は字幕だけ更新してidle状態に戻す
-      setTimeout(() => {
-        onAiStatusChange("idle");
-        onSearchPhaseChange("STABLE");
-        onSubtitleChange("話しかけてください。");
-      }, 2500); // MP3再生時間に合わせて遅延
+      // 5分以内の再認識 → idle に戻すだけ
+      onAiStatusChange("idle");
+      onSearchPhaseChange("STABLE");
+      onSubtitleChange("話しかけてください。");
     }
-  };
-
-  // ── ローカルMP3即時再生（LLMコールドスタートのラグを隠す） ──
-  const playLocalGreeting = () => {
-    try {
-      // /public/sounds/ruki_appear.mp3 を配置すれば再生される
-      // ファイルがなければサイレントに失敗
-      const audio = new Audio("/sounds/ruki_appear.mp3");
-      audio.volume = 0.9;
-      onAiStatusChange("talking");
-      onSubtitleChange("ルキルキが現れました...✨");
-      audio.onended = () => {
-        // LLMがまだ返ってきていない場合のみ thinking に切り替え
-        onSubtitleChange("ルキルキが現実空間と同期中...");
-        onAiStatusChange("thinking");
-      };
-      audio.onerror = () => {
-        // MP3がなくても動作は継続
-        onSubtitleChange("ルキルキが現実空間と同期中...");
-      };
-      audio.play().catch(() => {
-        onSubtitleChange("ルキルキが現実空間と同期中...");
-      });
-    } catch {
-      onSubtitleChange("ルキルキが現実空間と同期中...");
-    }
-  };
+  }, [triggerInitialGreeting, onAiStatusChange, onSearchPhaseChange, onSubtitleChange]);
 
   // ── スナップ生成 ──
-  const handleSnap = async (memberName: string) => {
-    const cameraImage = captureARCameraFrame(containerRef.current);
-    if (!cameraImage) { onSubtitleChange("カメラ映像が取得できませんでした"); return; }
-
+  const handleSnap = useCallback(async (memberName: string) => {
+    if (isBusyRef.current) return;
+    isBusyRef.current = true;
+    const cameraImage = captureFrame(containerRef.current);
+    if (!cameraImage) {
+      onSubtitleChange("カメラ映像が取得できませんでした");
+      isBusyRef.current = false;
+      return;
+    }
     onAiStatusChange("thinking");
     onSubtitleChange(`📸 ${memberName}とのスナップ写真を生成中...`);
-
     try {
       const res = await fetch(`${BASE_URL}/api/snap`, {
         method:  "POST",
@@ -334,41 +326,38 @@ export function useChat({
       });
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
-
       if (data.status === "ok" && data.image_url) {
         onSnapResult(data.image_url);
         onSubtitleChange(`✨ ${memberName}とのスナップ写真ができたよ！`);
         const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        setChatHistory((prev) => [
+        updateHistory((prev) => [
           ...prev,
           { role: "user", text: `${memberName}とスナップ`, timestamp: ts },
           { role: "ruki", text: data.message ?? `${memberName}とのスナップ写真ができたよ！`, timestamp: ts },
         ]);
       } else {
-        onSubtitleChange(`スナップ生成に失敗しました: ${data.message ?? "不明なエラー"}`);
+        onSubtitleChange(`スナップ生成に失敗: ${data.message ?? "不明なエラー"}`);
       }
     } catch (err) {
-      console.error("[スナップ] エラー:", err);
+      console.error("[スナップ]", err);
       onSubtitleChange("スナップ生成中にエラーが発生しました");
     } finally {
       onAiStatusChange("idle");
+      isBusyRef.current = false;
     }
-  };
+  }, [BASE_URL, address, containerRef, onAiStatusChange, onSubtitleChange,
+      onSnapResult, updateHistory]);
 
   // ── メッセージ送信 ──
-  const handleSendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSendMessage = useCallback(async (
+    e: React.FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const text     = (formData.get("message") as string).trim();
     if (!text) return;
-    // 初期挨拶の起動直後（2秒以内）のみブロック。それ以降は送信を許可
-    const greetingElapsed = Date.now() - lastGreetingTimeRef.current;
-    if (isGreetingInProgress.current && greetingElapsed < 2_000) {
-      onSubtitleChange("ルキルキが起動中です。少しお待ちください...");
-      return;
-    }
 
-    // スナップコマンド検出
+    // スナップコマンド
     const snapMatch = text.match(/^(.+?)とスナップ$/);
     if (snapMatch) {
       if (inputRef.current) inputRef.current.value = "";
@@ -376,69 +365,34 @@ export function useChat({
       return;
     }
 
-    if (inputRef.current) inputRef.current.blur();
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 100);
-
-    stopAudio();
-
-    onSubtitleChange(`思考中... 「${text}」`);
-    onAiStatusChange("thinking");
-    onSearchPhaseChange("CONNECTING...");
-
-    const ts             = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const updatedHistory = [...chatHistory, { role: "user" as const, text, timestamp: ts }];
-    setChatHistory(updatedHistory);
-
-    timersRef.current.push(
-      setTimeout(() => {
-        onSearchPhaseChange("TAVILY_SEARCHING...");
-        onSubtitleChange("🌐 外部情報空間を走査中...\n（Tavilyサーチを同期しています）");
-      }, 1800),
-      setTimeout(() => {
-        onSearchPhaseChange("DATA_ANALYZING...");
-        onSubtitleChange("🔮 取得した時間軸データを展開中...\n（ルキルキが回答を再構成しています）");
-      }, 5000)
-    );
-
-    const location    = await getGPSLocation();
-    const imageBase64 = captureARCameraFrame(containerRef.current);
-
-    try {
-      const res = await fetch(`${BASE_URL}/api/chat`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message:        text,
-          wallet_address: address ?? null,
-          image_base64:   imageBase64,
-          latitude:       location?.lat ?? null,
-          longitude:      location?.lng ?? null,
-          history:        updatedHistory,
-        }),
-      });
-
-      timersRef.current.forEach(clearTimeout);
-      timersRef.current = [];
-      onSearchPhaseChange("STABLE");
-      if (!res.ok) throw new Error("API接続エラー");
-
-      const data: ChatApiResponse = await res.json();
-      if (inputRef.current) inputRef.current.value = "";
-
-      // ENGRAVE 処理
-      console.log("[ENGRAVE] data.engrave_triggered=", data.engrave_triggered);
-      if (data.engrave_triggered) handleEngrave(data, data.arweave_tx_id);
-
-      setChatHistory((prev) => [...prev, { role: "ruki", text: data.reply, timestamp: ts }]);
-      await handleChatResponse(data);
-    } catch {
-      timersRef.current.forEach(clearTimeout);
-      timersRef.current = [];
-      onSearchPhaseChange("OFFLINE");
-      onSubtitleChange("バックエンドとの通信に失敗しました。");
-      onAiStatusChange("idle");
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.blur();
     }
-  };
+
+    // busy中は字幕でフィードバックして早期リターン
+    if (isBusyRef.current) {
+      onSubtitleChange("少し待ってください...");
+      return;
+    }
+
+    const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // 送信前に履歴へユーザー発言を追加
+    const newHistory = [...chatHistoryRef.current, { role: "user" as const, text, timestamp: ts }];
+    chatHistoryRef.current = newHistory;
+    setChatHistory(newHistory);
+
+    onSubtitleChange(`「${text}」`);
+
+    await callChat(text, newHistory);
+  }, [callChat, handleSnap, inputRef, onSubtitleChange]);
+
+  // ── busy 強制解除（ロスト時などに外から呼ぶ） ──
+  const resetBusy = useCallback(() => {
+    isBusyRef.current = false;
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+  }, [timersRef]);
 
   return {
     chatHistory,
@@ -446,7 +400,9 @@ export function useChat({
     handleSendMessage,
     onTargetFound,
     triggerInitialGreeting,
-    playFixedGreeting,
-    captureARCameraFrame: () => captureARCameraFrame(containerRef.current),
+    resetBusy,
+    // 後方互換
+    playFixedGreeting: triggerInitialGreeting,
+    captureARCameraFrame: () => captureFrame(containerRef.current),
   };
 }

@@ -94,6 +94,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     isUploadingMemory,
     handleSendMessage,
     onTargetFound: chatOnTargetFound,
+    resetBusy,
     captureARCameraFrame,
   } = useChat({
     containerRef,
@@ -146,8 +147,9 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     },
     onTargetLost: () => {
       notifyTargetLost();
-      // ロスト後も会話は継続できる。thinking で固まっていたらidleに戻す
-      setAiStatus((prev) => prev === "thinking" ? "idle" : prev);
+      // busy / thinking 状態を強制解除してロスト後も会話できるようにする
+      resetBusy();
+      setAiStatus("idle");
       setSubtitle("（マーカーをかざしてください。話しかけることもできます）");
     },
     onSubtitleChange: setSubtitle,
