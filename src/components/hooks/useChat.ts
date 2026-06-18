@@ -222,6 +222,10 @@ export function useChat({
   ) => {
     if (isGreetingInProgress.current) return; // 二重起動防止
     isGreetingInProgress.current = true;
+    // 15秒でフラグを強制解除（ネットワークエラーで finally が走らない場合の保険）
+    const greetingTimeout = setTimeout(() => {
+      isGreetingInProgress.current = false;
+    }, 15_000);
     lastGreetingTimeRef.current = Date.now();
     stopAudio();
 
@@ -259,6 +263,7 @@ export function useChat({
       onAiStatusChange("idle");
       onSearchPhaseChange("STABLE");
     } finally {
+      clearTimeout(greetingTimeout);
       isGreetingInProgress.current = false;
     }
   };
@@ -288,7 +293,7 @@ export function useChat({
     try {
       // /public/sounds/ruki_appear.mp3 を配置すれば再生される
       // ファイルがなければサイレントに失敗
-      const audio = new Audio("/sounds/ruki_appear.wav");
+      const audio = new Audio("/sounds/ruki_appear.mp3");
       audio.volume = 0.9;
       onAiStatusChange("talking");
       onSubtitleChange("ルキルキが現れました...✨");
@@ -356,8 +361,9 @@ export function useChat({
     const formData = new FormData(e.currentTarget);
     const text     = (formData.get("message") as string).trim();
     if (!text) return;
-    // 初期挨拶のLLMレスポンス待ち中はユーザー送信をキューせず無視
-    if (isGreetingInProgress.current) {
+    // 初期挨拶の起動直後（2秒以内）のみブロック。それ以降は送信を許可
+    const greetingElapsed = Date.now() - lastGreetingTimeRef.current;
+    if (isGreetingInProgress.current && greetingElapsed < 2_000) {
       onSubtitleChange("ルキルキが起動中です。少しお待ちください...");
       return;
     }

@@ -210,12 +210,20 @@ async def chat_endpoint(payload: ChatMessage):
     register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを覚えて", "ここを刻んで"]
     session_key = wallet_address or "anonymous"
 
-    if state.registration_pending.get(session_key, {}).get("waiting"):
-        spot_name = user_text.strip()
-        pending   = state.registration_pending.pop(session_key)
-        success   = await register_memory_spot(spot_name, pending["lat"], pending["lng"])
+    pending_data = state.registration_pending.get(session_key, {})
+
+    # ── ターン3: 読みを受け取って登録完了 ──
+    if pending_data.get("waiting_reading"):
+        name_reading = user_text.strip()
+        pending      = state.registration_pending.pop(session_key)
+        spot_name    = pending["name"]
+        success      = await register_memory_spot(
+            spot_name, pending["lat"], pending["lng"],
+            name_reading=name_reading
+        )
         reply_text = (
-            f"『{spot_name}』として登録しました。次回ここに来たとき、記憶を刻むか聞きますね。||EFFECT:sakura||"
+            f"『{spot_name}』（{name_reading}）として登録しました。"
+            f"次回ここに来たとき、記憶を刻むか聞きますね。||EFFECT:sakura||"
             if success
             else "ごめんなさい、登録に失敗しました。もう一度試してみてください。||EFFECT:cyber||"
         )
@@ -226,6 +234,28 @@ async def chat_endpoint(payload: ChatMessage):
             "reply":          re.sub(r"\|\|EFFECT:.*?\|\|", "", reply_text).strip(),
             "audio_data":     audio,
             "spatial_effect": "sakura" if success else "cyber",
+            "spot_proposal":  "",
+            "arweave_tx_id":  "",
+            "status":         "success",
+        }
+
+    # ── ターン2: 名前を受け取って読みを聞く ──
+    if pending_data.get("waiting"):
+        spot_name = user_text.strip()
+        state.registration_pending[session_key] = {
+            "waiting_reading": True,
+            "name":   spot_name,
+            "lat":    pending_data["lat"],
+            "lng":    pending_data["lng"],
+        }
+        ask_text = f"『{spot_name}』ですね！ひらがなで読み方を教えてもらえますか？||EFFECT:cyber||"
+        await state.manager.broadcast({"type": "status", "status": "talking", "text": ask_text})
+        audio = await generate_tts(ask_text)
+        await state.manager.broadcast({"type": "status", "status": "idle"})
+        return {
+            "reply":          f"『{spot_name}』ですね！ひらがなで読み方を教えてもらえますか？",
+            "audio_data":     audio,
+            "spatial_effect": "cyber",
             "spot_proposal":  "",
             "arweave_tx_id":  "",
             "status":         "success",
@@ -292,11 +322,15 @@ async def chat_endpoint(payload: ChatMessage):
     if lat is not None and lng is not None:
         nearby_spot = await check_nearby_spot(lat, lng)
         if nearby_spot:
+            # name_reading があれば TTS 用読みとして使う（なければ name にフォールバック）
+            _spot_display  = nearby_spot["name"]
+            _spot_reading  = nearby_spot.get("name_reading") or _spot_display
             spot_context = (
                 f"【メモリースポット検知】\n"
-                f"まがときさんは現在、登録済みの特別な場所『{nearby_spot['name']}』の近くにいます。\n"
+                f"まがときさんは現在、登録済みの特別な場所『{_spot_display}』（読み: {_spot_reading}）の近くにいます。\n"
+                f"セリフで場所名を読み上げるときは『{_spot_reading}』と読んでください。\n"
                 "会話の流れが自然であれば、「ここでの記憶を覚えておこうか？」と提案してください。\n"
-                f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{nearby_spot['name']}|| タグを追加してください。\n\n"
+                f"提案するときは必ずセリフの末尾に ||SPOT_PROPOSAL:{_spot_display}|| タグを追加してください。\n\n"
             )
 
     # ── 感情 / エピソード / カレンダー ──

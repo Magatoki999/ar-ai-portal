@@ -280,7 +280,8 @@ async def get_memory_spots() -> list:
 
 
 async def register_memory_spot(
-    name: str, lat: float, lng: float, radius_m: int = 100
+    name: str, lat: float, lng: float,
+    name_reading: str = "", radius_m: int = 100
 ) -> bool:
     url, key = _sb()
     if not url or not key:
@@ -288,11 +289,12 @@ async def register_memory_spot(
     endpoint = f"{url}/rest/v1/{MEMORY_SPOTS_TABLE}"
     headers = {**_sb_headers(), "Content-Type": "application/json"}
     data = {
-        "name": name,
-        "lat": lat,
-        "lng": lng,
-        "radius_m": radius_m,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "name":         name,
+        "name_reading": name_reading or name,  # 読み未指定なら表示名をそのまま使う
+        "lat":          lat,
+        "lng":          lng,
+        "radius_m":     radius_m,
+        "created_at":   datetime.now(timezone.utc).isoformat(),
     }
     try:
         async with httpx.AsyncClient() as client:

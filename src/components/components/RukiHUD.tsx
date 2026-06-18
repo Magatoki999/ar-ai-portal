@@ -166,9 +166,11 @@ export function RukiHUD({
         </div>
 
         {/* テキスト入力フォーム */}
+        {/* pointer-events-auto を明示し、aiStatus に関わらず常に入力可能にする */}
         <form
           onSubmit={onSendMessage}
           className="flex gap-2 items-center"
+          style={{ pointerEvents: "auto", position: "relative", zIndex: 50 }}
         >
           <input
             ref={inputRef}
@@ -176,10 +178,12 @@ export function RukiHUD({
             type="text"
             placeholder="ルキルキに話しかける..."
             autoComplete="off"
+            style={{ pointerEvents: "auto" }}
             className="flex-1 bg-black/60 backdrop-blur-md border border-purple-500/30 rounded-2xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-400/60 transition-colors"
           />
           <button
             type="submit"
+            style={{ pointerEvents: "auto" }}
             className="w-12 h-12 rounded-2xl bg-purple-600/80 border border-purple-400/50 flex items-center justify-center text-white text-lg hover:bg-purple-500/80 transition-colors active:scale-95"
             aria-label="送信"
           >
