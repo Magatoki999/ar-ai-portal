@@ -96,10 +96,18 @@ export function useAR({
         localRenderer = renderer;
 
         // ── レンダラー設定 ──
+        // window.innerWidth/Height で明示的にサイズをセットしてモバイル黒帯を防ぐ
+        renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.outputColorSpace   = THREE.SRGBColorSpace;
         renderer.toneMapping        = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0;
         renderer.setClearColor(0x000000, 0);
+
+        // リサイズ対応
+        const onResize = () => {
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+        window.addEventListener("resize", onResize);
 
         // ── ライト ──
         scene.add(new THREE.AmbientLight(0xffffff, 1.2));
@@ -374,6 +382,7 @@ export function useAR({
     return () => {
       try { localRenderer?.setAnimationLoop(null); } catch (_) {}
       try { mindarThreeInstance?.stop(); }            catch (_) {}
+      window.removeEventListener("resize", () => {});
     };
   }, []);
 

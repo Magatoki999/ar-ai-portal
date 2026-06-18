@@ -221,9 +221,10 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   // レンダリング
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100dvh", overflow: "hidden", background: "#000" }}>
+    <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
       {/* AR コンテナ（MindAR が video / canvas をここに注入する） */}
-      <div ref={containerRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", overflow: "hidden" }} />
+      {/* width/height を 100vw/100vh の px 値で明示することで MindAR の clientWidth 読み取りを確実にする */}
+      <div ref={containerRef} style={{ position: "absolute", top: 0, left: 0, width: "100vw", height: "100vh", overflow: "hidden" }} />
 
       {/* HUD オーバーレイ */}
       <RukiHUD
