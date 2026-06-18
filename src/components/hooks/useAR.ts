@@ -87,6 +87,9 @@ export function useAR({
         const mindarThree = new MindARThree({
           container:        containerRef.current,
           imageTargetSrc:   MIND_PATH,
+          uiLoading:        "no",
+          uiScanning:       "no",
+          uiError:          "no",
         });
         mindarThreeInstance = mindarThree;
         const { renderer, scene, camera } = mindarThree;
@@ -238,6 +241,19 @@ export function useAR({
         const BLINK_DURATION = 0.14;
 
         await mindarThree.start();
+
+        // MindAR start()後にコンテナが確実に全画面を埋めているか確認
+        // コンテナのサイズが0の場合は親のサイズを明示的に再適用する
+        if (containerRef.current) {
+          const c = containerRef.current;
+          // MindARが生成したvideo要素にスタイルを適用（黒帯防止）
+          const videos = c.querySelectorAll("video");
+          videos.forEach((v) => {
+            (v as HTMLElement).style.width    = "100%";
+            (v as HTMLElement).style.height   = "100%";
+            (v as HTMLElement).style.objectFit = "cover";
+          });
+        }
 
         renderer.setAnimationLoop(() => {
           const delta       = clock.getDelta();

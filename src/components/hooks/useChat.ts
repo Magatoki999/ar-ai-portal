@@ -392,7 +392,14 @@ export function useChat({
     isBusyRef.current = false;
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
-  }, [timersRef]);
+    // 音声を止めてonEndedコールバックも無効化（古いコールバックの干渉を防ぐ）
+    if (audioInstanceRef.current) {
+      audioInstanceRef.current.pause();
+      audioInstanceRef.current.onended = null;
+      audioInstanceRef.current.onerror = null;
+      audioInstanceRef.current.src = "";
+    }
+  }, [timersRef, audioInstanceRef]);
 
   return {
     chatHistory,
