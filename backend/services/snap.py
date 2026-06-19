@@ -8,9 +8,44 @@
 import os
 import base64
 import pathlib
+import random
 from datetime import datetime, timedelta, timezone
 
 import httpx
+
+
+# ─── スナップ用ポーズバリエーション ───
+# 毎回ランダムに1つ選んでプロンプトに織り込む。
+SNAP_POSES = [
+    "making a peace sign (V-sign) with one hand near their face, smiling brightly",
+    "waving cheerfully at the camera with one raised hand",
+    "standing with arms casually crossed, giving a confident smile",
+    "giving a thumbs-up gesture with one hand, energetic expression",
+    "leaning slightly toward the camera with both hands forming a heart shape",
+    "striking a playful dynamic pose with one hand on hip, looking directly at camera",
+    "pointing toward the camera with one finger, playful grin",
+    "both hands raised in a small victory pose, joyful expression",
+]
+
+
+def _resolve_reference_path(member_name: str) -> pathlib.Path | None:
+    """
+    context/images/ 内のリファレンス画像を大文字小文字を区別せずに探す。
+    {member_name}.jpg のほか .jpeg / .png も許容する。
+    見つからなければ None を返す。
+    """
+    images_dir = pathlib.Path("context/images")
+    if not images_dir.exists():
+        return None
+
+    target = member_name.strip().lower()
+    for f in images_dir.iterdir():
+        if not f.is_file():
+            continue
+        stem_lower = f.stem.lower()
+        if stem_lower == target and f.suffix.lower() in (".jpg", ".jpeg", ".png"):
+            return f
+    return None
 
 
 # ─── Supabase ストレージ ───
@@ -67,16 +102,11 @@ async def generate_snap(
     if not openai_api_key:
         return None, "OpenAI APIキー未設定"
 
-    # ── 1. リファレンス画像を読み込む ──
-    member_upper = member_name.upper()
-    ref_path = pathlib.Path(f"context/images/{member_upper}.jpg")
-    if not ref_path.exists():
-        ref_path_lower = pathlib.Path(f"context/images/{member_name}.jpg")
-        if ref_path_lower.exists():
-            ref_path = ref_path_lower
-        else:
-            print(f"[スナップ] リファレンス画像が見つかりません: {member_upper}.jpg")
-            return None, f"{member_name}のリファレンス画像が見つかりません"
+    # ── 1. リファレンス画像を読み込む（大文字小文字を区別しない） ──
+    ref_path = _resolve_reference_path(member_name)
+    if ref_path is None:
+        print(f"[スナップ] リファレンス画像が見つかりません: {member_name}")
+        return None, f"{member_name}のリファレンス画像が見つかりません"
 
     ref_bytes = ref_path.read_bytes()
     print(f"[スナップ] リファレンス画像読み込み: {ref_path} ({len(ref_bytes)}bytes)")
@@ -91,15 +121,18 @@ async def generate_snap(
         return None, f"カメラ画像のデコードに失敗: {e}"
 
     # ── 3. gpt-image-1 edit で画像生成 ──
+    pose = random.choice(SNAP_POSES)
     prompt = (
-        "The person shown in the reference image is naturally standing in the scene "
-        "shown in the background photo. "
+        "The person shown in the reference image is naturally posing in the scene "
+        "shown in the background photo, "
+        f"{pose}. "
         "Create a realistic photo where the person blends naturally into the environment. "
         "Maintain the person's face, hairstyle, and clothing from the reference image "
         "as accurately as possible. "
         "The lighting and perspective should match the background scene. "
-        "Make it look like a candid photograph taken together."
+        "Make it look like a candid photograph taken together, full of energy and fun."
     )
+    print(f"[スナップ] 選択ポーズ: {pose}")
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             multipart_files = [
@@ -139,7 +172,8 @@ async def generate_snap(
     # ── 4. Supabase memories バケットに保存 ──
     JST = timezone(timedelta(hours=+9))
     ts  = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
-    filename  = f"snap_{member_upper}_{ts}.jpg"
+    safe_member_name = member_name.strip().upper().replace(" ", "_")
+    filename  = f"snap_{safe_member_name}_{ts}.jpg"
     image_url = await upload_to_supabase_storage(generated_bytes, filename)
 
     if not image_url:

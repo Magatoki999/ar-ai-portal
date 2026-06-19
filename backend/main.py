@@ -38,6 +38,7 @@ from services.memory import (
     get_recent_episodes,
     maybe_save_episode,
     update_episode_image_url,
+    find_episode_image_by_location,
     check_nearby_spot,
     register_memory_spot,
     get_active_agent_memos,
@@ -434,6 +435,8 @@ async def chat_endpoint(payload: ChatMessage):
     spatial_effect = "cyber"
     audio_base64   = None
     result: dict   = {}
+    _show_image    = ""   # except 時の NameError 防止
+    _engrave       = False
 
     try:
         graph_input = {
@@ -494,6 +497,18 @@ async def chat_endpoint(payload: ChatMessage):
             await save_user_profile_field(wallet_address, "preferred_call", extracted_name)
             ai_response = re.sub(r"\|\|NAME:.*?\|\|", "", ai_response).strip()
 
+        # SEARCH_LOCATION_PHOTO タグ処理
+        # nodes.py の synthesizer_node がタグ未解決のまま末尾に残している場合のみ発火。
+        # 場所名で episode_memories を検索し、見つかった image_url を show_image_url にセットする。
+        loc_photo_match = re.search(r"\|\|SEARCH_LOCATION_PHOTO:(.*?)\|\|", ai_response)
+        if loc_photo_match:
+            loc_query = loc_photo_match.group(1).strip()
+            ai_response = re.sub(r"\|\|SEARCH_LOCATION_PHOTO:.*?\|\|", "", ai_response).strip()
+            if not _show_image:
+                found_url = await find_episode_image_by_location(loc_query)
+                if found_url:
+                    _show_image = found_url
+
         # エピソードメモリ保存（fire-and-forget）
         _location = nearby_spot["name"] if nearby_spot else ""
         asyncio.create_task(
@@ -529,7 +544,7 @@ async def chat_endpoint(payload: ChatMessage):
         "spatial_effect":   spatial_effect,
         "spot_proposal":    result.get("spot_proposal", ""),
         "arweave_tx_id":    result.get("arweave_tx_id", ""),
-        "show_image_url":   result.get("show_image_url", ""),
+        "show_image_url":   _show_image,
         "engrave_triggered": result.get("engrave_triggered", False),
         "audio_mime":       audio_mime,
         "status":           "success",

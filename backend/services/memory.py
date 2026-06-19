@@ -257,6 +257,46 @@ async def update_episode_image_url(image_url: str) -> bool:
     return False
 
 
+async def find_episode_image_by_location(location_name: str) -> str | None:
+    """
+    指定した場所名（location_name）に紐づく、image_url が入っている
+    エピソードメモリの中から最も新しいものの image_url を返す。
+    見つからなければ None。
+    部分一致（ilike）で検索し、表記揺れに多少強くする。
+    """
+    url, key = _sb()
+    if not url or not key or not location_name:
+        return None
+
+    # PostgREST の ilike は * をワイルドカードとして使う
+    pattern = f"*{location_name.strip()}*"
+    endpoint = (
+        f"{url}/rest/v1/episode_memories"
+        f"?location_name=ilike.{pattern}"
+        f"&image_url=not.is.null"
+        f"&order=created_at.desc&limit=1&select=image_url,location_name,created_at"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+            if res.status_code == 200:
+                rows = res.json()
+                if rows and rows[0].get("image_url"):
+                    print(
+                        f"[場所検索] 「{location_name}」一致: "
+                        f"{rows[0].get('location_name')} "
+                        f"({rows[0].get('created_at','')[:16]})"
+                    )
+                    return rows[0]["image_url"]
+            else:
+                print(f"[場所検索エラー] status={res.status_code} body={res.text[:200]}")
+    except Exception as e:
+        print(f"[場所検索エラー] {e}")
+
+    print(f"[場所検索] 「{location_name}」に該当する写真なし")
+    return None
+
+
 # ═══════════════════════════════════════════════════════
 # メモリースポット
 # ═══════════════════════════════════════════════════════
