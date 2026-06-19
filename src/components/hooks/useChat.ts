@@ -277,8 +277,39 @@ export function useChat({
       onAiStatusChange, onSearchPhaseChange, onSubtitleChange,
       updateHistory, handleEngrave, applyResponse]);
 
+  // ── 固定wav再生をPromiseで待つヘルパー ──
+  // onended / onerror / 再生失敗のいずれでも resolve する（API呼び出しを止めないため）
+  const playAppearWav = useCallback((): Promise<void> => {
+    return new Promise((resolve) => {
+      const audio = audioInstanceRef.current;
+      if (!audio) { resolve(); return; }
+
+      try {
+        audio.pause();
+        audio.onended = null;
+        audio.onerror = null;
+        if (initAudioPipeline) initAudioPipeline(audio);
+
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+
+        audio.src = "/ruki_appear.wav";
+        onAiStatusChange("talking");
+
+        audio.play().catch(() => resolve());
+
+        // 念のためのフェイルセーフ：wavが何らかの理由で
+        // onended/onerror を発火させない場合に備え、最大8秒で強制解決
+        const failsafe = setTimeout(() => resolve(), 8000);
+        timersRef.current.push(failsafe);
+      } catch {
+        resolve();
+      }
+    });
+  }, [audioInstanceRef, initAudioPipeline, onAiStatusChange, timersRef]);
+
   // ── 初期挨拶（マーカー認識時） ──
-  // ruki_appear.wav を即再生して遅延をカバーしつつ、並行してAPIに挨拶を投げる。
+  // ruki_appear.wav を最後まで再生してから、API に挨拶を投げる。
   // wav 再生は初回マーカー認識時のみ（lastGreetingTimeRef === 0 の場合）。
   const triggerInitialGreeting = useCallback(async () => {
     const isFirstEver = lastGreetingTimeRef.current === 0;
@@ -286,27 +317,13 @@ export function useChat({
     stopAudio();
     onSubtitleChange("ルキルキが現実世界と同期中...");
 
-    if (isFirstEver && audioInstanceRef.current) {
-      // 固定 wav を即再生（API 待ちなし）
-      try {
-        const audio = audioInstanceRef.current;
-        audio.pause();
-        audio.onended = null;
-        audio.onerror = null;
-        if (initAudioPipeline) initAudioPipeline(audio);
-        audio.src = "/ruki_appear.wav";
-        onAiStatusChange("talking");
-        audio.play().catch(() => {});
-        // wav 再生と並行して API を呼ぶ（await しない）
-        // API 音声が来たタイミングで wav は上書きされる（自然に切り替わる）
-      } catch {
-        // 再生失敗しても API 呼び出しは続行
-      }
+    if (isFirstEver) {
+      await playAppearWav();
     }
 
-    // API 挨拶
+    // wav 再生完了後に API 挨拶を呼ぶ
     await callChat("[INITIAL_GREETING]", [], { isGreeting: true });
-  }, [callChat, stopAudio, onSubtitleChange, audioInstanceRef, initAudioPipeline, onAiStatusChange]);
+  }, [callChat, stopAudio, onSubtitleChange, playAppearWav]);
 
   // ── ターゲット認識コールバック ──
   const onTargetFound = useCallback(() => {
