@@ -278,13 +278,35 @@ export function useChat({
       updateHistory, handleEngrave, applyResponse]);
 
   // ── 初期挨拶（マーカー認識時） ──
+  // ruki_appear.wav を即再生して遅延をカバーしつつ、並行してAPIに挨拶を投げる。
+  // wav 再生は初回マーカー認識時のみ（lastGreetingTimeRef === 0 の場合）。
   const triggerInitialGreeting = useCallback(async () => {
+    const isFirstEver = lastGreetingTimeRef.current === 0;
     lastGreetingTimeRef.current = Date.now();
     stopAudio();
     onSubtitleChange("ルキルキが現実世界と同期中...");
-    // callChat 内で isBusy 管理するので直接呼ぶ
+
+    if (isFirstEver && audioInstanceRef.current) {
+      // 固定 wav を即再生（API 待ちなし）
+      try {
+        const audio = audioInstanceRef.current;
+        audio.pause();
+        audio.onended = null;
+        audio.onerror = null;
+        if (initAudioPipeline) initAudioPipeline(audio);
+        audio.src = "/ruki_appear.wav";
+        onAiStatusChange("talking");
+        audio.play().catch(() => {});
+        // wav 再生と並行して API を呼ぶ（await しない）
+        // API 音声が来たタイミングで wav は上書きされる（自然に切り替わる）
+      } catch {
+        // 再生失敗しても API 呼び出しは続行
+      }
+    }
+
+    // API 挨拶
     await callChat("[INITIAL_GREETING]", [], { isGreeting: true });
-  }, [callChat, stopAudio, onSubtitleChange]);
+  }, [callChat, stopAudio, onSubtitleChange, audioInstanceRef, initAudioPipeline, onAiStatusChange]);
 
   // ── ターゲット認識コールバック ──
   const onTargetFound = useCallback(() => {
