@@ -178,8 +178,10 @@ async def maybe_save_episode(
         "神社", "京都", "Blender", "ArtAR", "ありがとう", "ルキルキ",
         "覚えて", "おぼえて", "記憶して",
     ]
-    force_save = arweave_tx_id != "" or any(
-        k in user_text for k in ["覚えて", "おぼえて", "記憶して"]
+    force_save = (
+        arweave_tx_id != ""
+        or image_url != ""  # SAVE_PHOTO で写真が撮れた場合は確実に保存する
+        or any(k in user_text for k in ["覚えて", "おぼえて", "記憶して"])
     )
     if not force_save and not any(k in user_text for k in memorable_keywords):
         return

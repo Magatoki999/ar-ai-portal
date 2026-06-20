@@ -98,6 +98,17 @@ def build_dynamic_constraints(user_call: str, episode_context: str = "") -> str:
         "エピソードメモリに[image:URL]が含まれていれば、セリフ末尾に ||SHOW_IMAGE:URL|| タグを追加してください。\n"
         "例: 'あの日の写真です！||SHOW_IMAGE:https://...||'\n"
     )
+
+    constraints += (
+        "\n【場所の記憶撮影タグ（||SAVE_PHOTO||）の使用ルール】\n"
+        f"{user_call}さんが「ここを記憶して」「この場所を覚えておいて」"
+        "「今いる場所を記憶して」など、今いる場所・今見ている景色を明確に記憶してほしいと"
+        "依頼したときにのみ、セリフ末尾に ||SAVE_PHOTO|| タグを追加してください。\n"
+        "- このタグは今のカメラ映像を写真として保存するためのものです。雑談や、過去の写真を"
+        "見せてほしいという依頼（||SHOW_IMAGE||の対象）では絶対に使わないでください。\n"
+        "- 明確な依頼がない場合は使用しないでください（毎回使うとデータが増えすぎてしまいます）。\n"
+        "例: 'この景色、しっかり覚えておきますね！||SAVE_PHOTO||'\n"
+    )
     print(
         f"[DEBUG constraints] SHOW_IMAGE含む={'SHOW_IMAGE' in constraints} "
         f"長さ={len(constraints)}"

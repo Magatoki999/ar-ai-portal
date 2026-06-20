@@ -8,6 +8,7 @@ import os
 import re
 import json
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -47,7 +48,7 @@ from services.memory import (
     save_username_to_db,
     save_user_profile_field,
 )
-from services.snap import generate_snap
+from services.snap import generate_snap, upload_to_supabase_storage
 from services.scheduler import auto_research_job, proactive_talk_job, trigger_proactive_speech
 from services.persona import (
     load_rukiruki_persona,
@@ -509,6 +510,33 @@ async def chat_endpoint(payload: ChatMessage):
                 if found_url:
                     _show_image = found_url
 
+        # SAVE_PHOTO タグ処理
+        # 「ここを記憶して」等、ユーザーが明示的に依頼したときのみ persona.py の指示で発火する。
+        # 今回のリクエストに乗っている image_base64（カメラ映像）を Supabase に保存し、
+        # その image_url をエピソードメモリ保存に渡す。
+        _photo_url = ""
+        save_photo_match = re.search(r"\|\|SAVE_PHOTO\|\|", ai_response)
+        if save_photo_match:
+            ai_response = re.sub(r"\|\|SAVE_PHOTO\|\|", "", ai_response).strip()
+            if image_base64:
+                try:
+                    cam_b64 = image_base64
+                    if "," in cam_b64:
+                        cam_b64 = cam_b64.split(",", 1)[1]
+                    cam_bytes = base64.b64decode(cam_b64)
+                    JST_now   = timezone(timedelta(hours=+9))
+                    ts        = datetime.now(JST_now).strftime("%Y%m%d_%H%M%S")
+                    filename  = f"location_{ts}.jpg"
+                    _photo_url = await upload_to_supabase_storage(cam_bytes, filename) or ""
+                    if _photo_url:
+                        print(f"[場所記憶撮影] 保存完了: {_photo_url}")
+                    else:
+                        print("[場所記憶撮影] Supabase保存に失敗しました")
+                except Exception as e:
+                    print(f"[場所記憶撮影エラー] {e}")
+            else:
+                print("[場所記憶撮影] image_base64 が無いため撮影をスキップしました")
+
         # エピソードメモリ保存（fire-and-forget）
         _location = nearby_spot["name"] if nearby_spot else ""
         asyncio.create_task(
@@ -517,6 +545,7 @@ async def chat_endpoint(payload: ChatMessage):
                 ai_response,
                 arweave_tx_id=result.get("arweave_tx_id", ""),
                 location_name=_location,
+                image_url=_photo_url,
                 llm=llm,
             )
         )
