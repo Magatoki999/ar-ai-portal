@@ -24,6 +24,7 @@ from services.emotion import (
     get_growth_context,
 )
 from services.memory import save_agent_memo
+from services.calendar import get_upcoming_events, build_prep_suggestion, find_past_episode_for_event
 
 
 search_tool = TavilySearch(max_results=2)  # type: ignore
@@ -237,3 +238,71 @@ async def trigger_proactive_speech(llm, magatoki_knowledge: str) -> None:
         await proactive_talk_job(llm, magatoki_knowledge)
     except Exception as e:
         print(f"[自発発話トリガーエラー] 処理に失敗しました: {e}")
+
+
+# ─── Googleカレンダー予定の先回り提案ジョブ ───
+# 同じ予定に何度も同じ提案をして煩わしくならないよう、
+# プロセス内メモリで「通知済みの予定タイトル」を記録しておく。
+# Render再起動でリセットされるが、運用上は許容範囲（同じ予定は通常1回しか来ない）。
+_notified_event_titles: set[str] = set()
+
+
+async def calendar_prep_job(llm) -> None:
+    """
+    直近48時間以内のGoogleカレンダー予定を確認し、
+    準備した方がよさそうなものがあれば、ルキルキが自発的に一言提案する。
+    APSchedulerから1日数回（例: 3時間おき）呼ばれることを想定。
+    """
+    if not state.manager.active_connections:
+        return
+    if not state.is_target_found:
+        print("[カレンダー先回り] スキップ：ターゲットロスト中")
+        return
+
+    events = await get_upcoming_events(hours_ahead=48)
+    if not events:
+        return
+
+    for event in events:
+        title = event.get("title", "")
+        if not title or title in _notified_event_titles:
+            continue
+
+        suggestion = await build_prep_suggestion(event, llm)
+        if not suggestion or not suggestion.get("should_notify"):
+            _notified_event_titles.add(title)  # 提案不要と判定された予定も再判定しない
+            continue
+
+        message = suggestion.get("message", "").strip()
+        if not message:
+            continue
+
+        # 過去に同じ場所/イベントへ行った記憶があれば一言添える
+        past = await find_past_episode_for_event(event)
+        if past:
+            message += " 前にも来たことありますよね！"
+
+        spatial_effect = "cyber"
+        audio_base64   = await generate_tts(message)
+        audio_mime = (
+            "audio/wav"
+            if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+            else "audio/mpeg"
+        )
+
+        await state.manager.broadcast(
+            {
+                "type":           "proactive_speech",
+                "reply":          message,
+                "audio_data":     audio_base64,
+                "audio_mime":     audio_mime,
+                "spatial_effect": spatial_effect,
+            }
+        )
+        print(f"[カレンダー先回り] 提案を配信しました: {title} → {message}")
+
+        _notified_event_titles.add(title)
+        state.last_user_interaction = datetime.now(timezone.utc)
+
+        # 1回のジョブ実行で複数件まとめて喋らせると不自然なので、1件だけ提案して終了
+        break

@@ -49,7 +49,7 @@ from services.memory import (
     save_user_profile_field,
 )
 from services.snap import generate_snap, upload_to_supabase_storage
-from services.scheduler import auto_research_job, proactive_talk_job, trigger_proactive_speech
+from services.scheduler import auto_research_job, proactive_talk_job, trigger_proactive_speech, calendar_prep_job
 from services.persona import (
     load_rukiruki_persona,
     load_magatoki_context,
@@ -108,6 +108,11 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
         "interval", minutes=1,
+    )
+    scheduler.add_job(
+        lambda: _run(calendar_prep_job, llm),
+        "cron", hour=8, minute=0,
+        timezone=timezone(timedelta(hours=+9)),  # JST 8:00 に確実に実行する
     )
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
