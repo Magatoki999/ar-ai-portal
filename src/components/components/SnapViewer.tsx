@@ -11,7 +11,10 @@ interface SnapViewerProps {
 
 export function SnapViewer({ imageUrl, onClose }: SnapViewerProps) {
   return (
-    <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-6 pointer-events-auto">
+    <div
+      className="fixed inset-0 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 pointer-events-auto"
+      style={{ zIndex: 200 }} // ⚠️ RukiHUD が z-index:100 を使うため、それより確実に高くする
+    >
       {/* タイトル */}
       <div className="text-purple-400 font-mono text-xs tracking-widest mb-4">
         ::: MEMORY_SNAPSHOT :::
@@ -41,6 +44,7 @@ export function SnapViewer({ imageUrl, onClose }: SnapViewerProps) {
         </a>
         <button
           onClick={onClose}
+          style={{ pointerEvents: "auto", cursor: "pointer" }}
           className="text-xs bg-gray-900/60 border border-gray-600/40 text-gray-300 px-5 py-2 rounded-xl hover:bg-gray-800/60 transition-colors font-mono"
         >
           CLOSE [X]
