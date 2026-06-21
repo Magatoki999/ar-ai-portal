@@ -262,11 +262,12 @@ async def calendar_prep_job(llm) -> None:
     「アプリが開かれた（[INITIAL_GREETING]が呼ばれた）タイミング」で呼び出される。
     app_state テーブルの最終チェック日時を見て、6時間以上経過していなければ
     何もしない（should_run_calendar_check が判定する）。
+
+    ⚠️ ARマーカーの認識状態（state.is_target_found）は問わない。
+    WebSocket接続があれば（アプリを開いていれば）届ける設計。
+    マーカーを外していても声は聞こえる、という体験を優先している。
     """
     if not state.manager.active_connections:
-        return
-    if not state.is_target_found:
-        print("[カレンダー先回り] スキップ：ターゲットロスト中")
         return
 
     if not await should_run_calendar_check(min_interval_hours=6):
