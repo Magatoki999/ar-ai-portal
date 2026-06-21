@@ -38,6 +38,9 @@ llm_fast = ChatOpenAI(
 )
 search_tool = TavilySearch(max_results=2)  # type: ignore
 
+from services.location import locate_current_position
+from services.calendar import get_my_schedule
+
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
 query_refine_prompt = _CPT.from_messages([
@@ -234,7 +237,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                 break
     system_constraints = build_dynamic_constraints(user_call, state.get("episode_context", ""))
     main_search_tool   = search_tool
-    llm_with_tools     = llm_synth.bind_tools([search_tool])
+    llm_with_tools     = llm_synth.bind_tools([search_tool, locate_current_position, get_my_schedule])
 
     base_persona = load_rukiruki_persona(user_call)
 
@@ -280,7 +283,15 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             break
 
     image_base64 = state.get("image_base64")
-    vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
+    # 「これ」「何」などの単独の指示語・疑問詞は日常会話にも頻出し、無関係な発話でも
+    # マッチして画像を過剰に解釈してしまう（机の上の物等に意図せず言及する）原因になっていた。
+    # そのため「画像を見てほしい」という意図が明確なフレーズのみに絞っている。
+    vision_keywords = [
+        "見て", "みてください", "これ何", "これなに", "これは何",
+        "何が見える", "何か見える", "何が映って", "何が写って",
+        "写ってる", "写ってます", "映ってる", "映ってます",
+        "視覚で", "カメラに",
+    ]
     user_text = ""
     if last_human:
         if isinstance(last_human.content, str):
@@ -342,6 +353,12 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                         address_result = "空間の歪みにより住所を特定できませんでした。"
                     messages.append(ToolMessage(
                         content=str(address_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "get_my_schedule":
+                    schedule_result = await get_my_schedule.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(schedule_result),
                         tool_call_id=str(tool_call["id"])
                     ))
             response = await llm_with_tools.ainvoke(messages)

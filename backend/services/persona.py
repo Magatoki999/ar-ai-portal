@@ -109,6 +109,15 @@ def build_dynamic_constraints(user_call: str, episode_context: str = "") -> str:
         "- 明確な依頼がない場合は使用しないでください（毎回使うとデータが増えすぎてしまいます）。\n"
         "例: 'この景色、しっかり覚えておきますね！||SAVE_PHOTO||'\n"
     )
+    constraints += (
+        "\n【予定確認ツール（get_my_schedule）の使用ルール】\n"
+        f"{user_call}さんから「今日の予定」「これからの予定」「カレンダーに何かある？」のように"
+        "実際のスケジュールを尋ねられたときだけ get_my_schedule ツールを呼んでください。\n"
+        "- 雑談や、過去の出来事についての会話では絶対に呼ばないでください（無関係なAPI呼び出しは厳禁です）。\n"
+        "- ツールの結果が「予定はありません」だった場合は、その通りに伝えてください。決して京都の年中行事"
+        "（祭りや誕生日）の話で代用しないでください。\n"
+    )
+
     print(
         f"[DEBUG constraints] SHOW_IMAGE含む={'SHOW_IMAGE' in constraints} "
         f"長さ={len(constraints)}"

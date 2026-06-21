@@ -17,6 +17,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from langchain_core.tools import tool
 
 from services.memory import _sb, _sb_headers  # 既存の Supabase 接続ヘルパーを再利用
 
@@ -280,3 +281,41 @@ async def mark_calendar_checked() -> None:
             print(f"[Calendar] app_state更新失敗: {res.status_code} {res.text[:150]}")
     except Exception as e:
         print(f"[Calendar] mark_calendar_checked エラー: {e}")
+
+
+# ─── 会話中にLLMが「予定は？」と聞かれたときだけ呼ぶTool ───
+# calendar_prep_job（先回り提案）とは別経路。こちらはユーザーの質問に応答するためのもので、
+# LLMが必要と判断したときだけ呼ばれるため、聞かれていないターンではAPIコストが発生しない。
+
+@tool
+async def get_my_schedule(hours_ahead: int = 48) -> str:
+    """
+    ユーザーから「今日の予定」「これからの予定」「カレンダー」について聞かれたときに呼ぶツール。
+    Googleカレンダーから直近の予定を取得し、ルキルキが話せる短い文章にして返す。
+    予定が無い場合は「予定はありません」という旨の文字列を返す。
+
+    Args:
+        hours_ahead: 何時間先までの予定を取得するか（デフォルト48時間 = 今日と明日）。
+                      「今日」だけ聞かれた場合も無理に絞り込まず、デフォルトのままでよい。
+    """
+    events = await get_upcoming_events(hours_ahead=hours_ahead)
+    if not events:
+        return "直近の予定はありません。"
+
+    lines = []
+    for ev in events[:5]:  # 多すぎると喋りすぎになるので上限5件
+        title = ev.get("title", "（無題の予定）")
+        start = ev.get("start", "")
+        # ISO形式の日時から "M/D H:MM" 程度の簡潔な表記に変換（失敗時はそのまま使う）
+        try:
+            dt = datetime.fromisoformat(start)
+            start_str = dt.strftime("%m/%d %H:%M")
+        except (ValueError, TypeError):
+            start_str = start
+        location = ev.get("location", "")
+        line = f"{start_str} {title}"
+        if location:
+            line += f"（{location}）"
+        lines.append(line)
+
+    return "予定一覧：\n" + "\n".join(lines)
