@@ -109,11 +109,9 @@ async def lifespan(app: FastAPI):
         lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
         "interval", minutes=1,
     )
-    scheduler.add_job(
-        lambda: _run(calendar_prep_job, llm),
-        "cron", hour="8,12,15,18", minute=0,
-        timezone=timezone(timedelta(hours=+9)),  # JST 8/12/15/18時に確実に実行する
-    )
+    # ⚠️ calendar_prep_job は Render無料プランのスリープでcronが時刻通りに
+    # 動かないため、cron登録は廃止。[INITIAL_GREETING]時に呼び出す方式に変更済み
+    # （下記 /api/chat 内の is_initial_greeting 分岐を参照）。
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
     yield
@@ -308,6 +306,15 @@ async def chat_endpoint(payload: ChatMessage):
             "親しみのある丁寧語で呟いてください。空間エフェクトタグの埋め込みを忘れないでください。"
             "URLの出力は厳禁です。）"
         )
+        # カレンダー先回り提案チェック（fire-and-forget）。
+        # 通常の挨拶応答をブロックしないよう非同期タスクとして投げる。
+        # 内部で「前回チェックから6時間経過しているか」を判定するので、
+        # アプリを開くたびに呼んでも問題ない（間隔が空いていなければ即returnする）。
+        # ⚠️ 挨拶の音声再生と被って上書きされないよう、8秒待ってから発火する。
+        async def _delayed_calendar_check():
+            await asyncio.sleep(8)
+            await calendar_prep_job(llm)
+        asyncio.create_task(_delayed_calendar_check())
 
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))

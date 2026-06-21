@@ -24,7 +24,13 @@ from services.emotion import (
     get_growth_context,
 )
 from services.memory import save_agent_memo
-from services.calendar import get_upcoming_events, build_prep_suggestion, find_past_episode_for_event
+from services.calendar import (
+    get_upcoming_events,
+    build_prep_suggestion,
+    find_past_episode_for_event,
+    should_run_calendar_check,
+    mark_calendar_checked,
+)
 
 
 search_tool = TavilySearch(max_results=2)  # type: ignore
@@ -251,13 +257,25 @@ async def calendar_prep_job(llm) -> None:
     """
     直近48時間以内のGoogleカレンダー予定を確認し、
     準備した方がよさそうなものがあれば、ルキルキが自発的に一言提案する。
-    APSchedulerから1日数回（例: 3時間おき）呼ばれることを想定。
+
+    Render無料プランはアイドル時にスリープするため、APSchedulerのcronには頼らず、
+    「アプリが開かれた（[INITIAL_GREETING]が呼ばれた）タイミング」で呼び出される。
+    app_state テーブルの最終チェック日時を見て、6時間以上経過していなければ
+    何もしない（should_run_calendar_check が判定する）。
     """
     if not state.manager.active_connections:
         return
     if not state.is_target_found:
         print("[カレンダー先回り] スキップ：ターゲットロスト中")
         return
+
+    if not await should_run_calendar_check(min_interval_hours=6):
+        print("[カレンダー先回り] スキップ：前回チェックから6時間未経過")
+        return
+
+    # チェックを実行することが決まったら、まず最終チェック日時を更新する
+    # （提案の有無に関わらず「チェックした」事実を記録し、6時間ごとの間隔を守る）
+    await mark_calendar_checked()
 
     events = await get_upcoming_events(hours_ahead=48)
     if not events:

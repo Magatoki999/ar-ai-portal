@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from services.memory import _sb, _sb_headers  # 既存の Supabase 接続ヘルパーを再利用
+
 JST = timezone(timedelta(hours=+9))
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -189,8 +191,6 @@ async def find_past_episode_for_event(event: dict) -> dict | None:
 
     services.memory の Supabase 接続設定（_sb / _sb_headers）を再利用する。
     """
-    from services.memory import _sb, _sb_headers  # 既存の接続ヘルパーを再利用
-
     url, key = _sb()
     if not url or not key:
         return None
@@ -217,3 +217,66 @@ async def find_past_episode_for_event(event: dict) -> dict | None:
     except Exception as e:
         print(f"[Calendar] 過去エピソード検索エラー: {e}")
     return None
+
+
+# ─── app_state テーブル（汎用キーバリュー）を使った最終チェック日時の管理 ───
+# Render無料プランはスリープするため、APSchedulerのcronに頼らず、
+# 「アプリが開かれたタイミング」で最後にチェックした時刻を見て、
+# 6時間以上空いていれば再チェックする方式にする。
+_LAST_CHECK_KEY = "calendar_prep_last_checked_at"
+
+
+async def should_run_calendar_check(min_interval_hours: int = 6) -> bool:
+    """
+    app_state テーブルの最終チェック日時を見て、min_interval_hours 時間以上
+    経過していれば True を返す（再チェックしてよい）。
+    レコードが無い場合（初回）は True を返す。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    endpoint = f"{url}/rest/v1/app_state?key=eq.{_LAST_CHECK_KEY}&select=value"
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            print(f"[Calendar] app_state取得失敗: {res.status_code} {res.text[:150]}")
+            return False
+
+        rows = res.json()
+        if not rows:
+            return True  # 初回チェック
+
+        last_checked_str = rows[0].get("value")
+        if not last_checked_str:
+            return True
+
+        last_checked = datetime.fromisoformat(last_checked_str)
+        elapsed_hours = (datetime.now(JST) - last_checked).total_seconds() / 3600
+        return elapsed_hours >= min_interval_hours
+
+    except Exception as e:
+        print(f"[Calendar] should_run_calendar_check エラー: {e}")
+        return False
+
+
+async def mark_calendar_checked() -> None:
+    """app_state テーブルに現在時刻（JST）を最終チェック日時として upsert する。"""
+    url, key = _sb()
+    if not url or not key:
+        return
+
+    endpoint = f"{url}/rest/v1/app_state"
+    headers  = {**_sb_headers(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
+    payload  = {
+        "key":   _LAST_CHECK_KEY,
+        "value": datetime.now(JST).isoformat(),
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, headers=headers, json=payload, timeout=5.0)
+        if res.status_code not in (200, 201):
+            print(f"[Calendar] app_state更新失敗: {res.status_code} {res.text[:150]}")
+    except Exception as e:
+        print(f"[Calendar] mark_calendar_checked エラー: {e}")
