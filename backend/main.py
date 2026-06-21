@@ -111,8 +111,8 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         lambda: _run(calendar_prep_job, llm),
-        "cron", hour=8, minute=0,
-        timezone=timezone(timedelta(hours=+9)),  # JST 8:00 に確実に実行する
+        "cron", hour="8,12,15,18", minute=0,
+        timezone=timezone(timedelta(hours=+9)),  # JST 8/12/15/18時に確実に実行する
     )
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
