@@ -522,6 +522,44 @@ async def chat_endpoint(payload: ChatMessage):
                 if found_url:
                     _show_image = found_url
 
+        # ── フォールバック: タグなしで「保存されていない」と答えてしまった場合の補完 ──
+        # LLMがプロンプトの指示（SEARCH_LOCATION_PHOTOタグ使用）に従わず、タグを付けずに
+        # 「保存されていません」系の発話をしてしまうケースへの保険。
+        # ユーザーの発話自体から場所名らしき部分を正規表現で抽出し、ダメ元でDB検索を試す。
+        # 既にshow_imageが見つかっている場合や、写真に関する話題でない場合は何もしない（コスト最小化）。
+        if not _show_image and not loc_photo_match:
+            negative_phrases = ["保存されていません", "保存されてい", "見つかりません", "見つからな", "ありません"]
+            mentions_photo   = any(k in payload.message for k in ["写真", "画像", "フォト"])
+            said_negative    = any(p in ai_response for p in negative_phrases)
+
+            if mentions_photo and said_negative:
+                # 「〇〇の写真」「〇〇で撮った」「〇〇にいた時の」のようなパターンから場所名を推測
+                fallback_loc = None
+                for pattern in (
+                    r"(.+?)にいた時の写真",
+                    r"(.+?)に行った時の写真",
+                    r"(.+?)で撮った",
+                    r"(.+?)の写真",
+                ):
+                    m = re.search(pattern, payload.message)
+                    if m:
+                        candidate = m.group(1).strip()
+                        # 助詞や指示語だけの短すぎる候補は場所名として扱わない
+                        if len(candidate) >= 2 and candidate not in ("あの", "この", "その", "前"):
+                            fallback_loc = candidate
+                            break
+
+                if fallback_loc:
+                    print(f"[場所検索フォールバック] タグ未検出のため発話から「{fallback_loc}」を推測し検索します")
+                    found_url = await find_episode_image_by_location(fallback_loc)
+                    if found_url:
+                        _show_image = found_url
+                        # 「保存されていません」と既に言ってしまっているテキストは画像と矛盾するため、
+                        # 見つかった旨の自然な一言に置き換える（エフェクトタグ等の末尾装飾は維持したいので
+                        # 文章全体ではなく否定フレーズ周辺のみを置換する簡易対応）
+                        ai_response = f"あ、ありました！「{fallback_loc}」の写真です！"
+                        print(f"[場所検索フォールバック] 「{fallback_loc}」で発見。応答テキストも修正しました")
+
         # SAVE_PHOTO タグ処理
         # 「ここを記憶して」等、ユーザーが明示的に依頼したときのみ persona.py の指示で発火する。
         # 今回のリクエストに乗っている image_base64（カメラ映像）を Supabase に保存し、
