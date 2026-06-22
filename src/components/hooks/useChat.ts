@@ -282,7 +282,11 @@ export function useChat({
   const playAppearWav = useCallback((): Promise<void> => {
     return new Promise((resolve) => {
       const audio = audioInstanceRef.current;
-      if (!audio) { resolve(); return; }
+      if (!audio) {
+        console.warn("[起動セリフ] audioInstanceRef が無いため再生スキップ");
+        resolve();
+        return;
+      }
 
       try {
         audio.pause();
@@ -290,19 +294,39 @@ export function useChat({
         audio.onerror = null;
         if (initAudioPipeline) initAudioPipeline(audio);
 
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
+        let resolved = false;
+        // フェイルセーフ：wavが何らかの理由で onended/onerror を発火させない場合に備え、
+        // 最大8秒で強制解決する。resolveOnce より先に宣言しておく（巻き上げに依存しないため）。
+        const failsafe = setTimeout(() => {
+          resolveOnce("8秒フェイルセーフ（鳴り終わったか確認できず強制終了）");
+        }, 8000);
+        timersRef.current.push(failsafe);
+
+        const resolveOnce = (reason: string) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(failsafe);
+          console.log(`[起動セリフ] 終了（理由: ${reason}）`);
+          resolve();
+        };
+
+        audio.onended = () => resolveOnce("再生完了（onended）");
+        audio.onerror = () => resolveOnce("再生エラー（onerror）");
 
         audio.src = "/ruki_appear.wav";
         onAiStatusChange("talking");
 
-        audio.play().catch(() => resolve());
-
-        // 念のためのフェイルセーフ：wavが何らかの理由で
-        // onended/onerror を発火させない場合に備え、最大8秒で強制解決
-        const failsafe = setTimeout(() => resolve(), 8000);
-        timersRef.current.push(failsafe);
-      } catch {
+        console.log("[起動セリフ] /ruki_appear.wav 再生開始を試行します");
+        audio.play()
+          .then(() => {
+            console.log("[起動セリフ] play() 成功。音声が鳴っているはずです");
+          })
+          .catch((err) => {
+            console.warn("[起動セリフ] play() 失敗。鳴っていません:", err);
+            resolveOnce("play()失敗");
+          });
+      } catch (err) {
+        console.warn("[起動セリフ] try-catchで例外。鳴っていません:", err);
         resolve();
       }
     });
@@ -313,12 +337,19 @@ export function useChat({
   // wav 再生は初回マーカー認識時のみ（lastGreetingTimeRef === 0 の場合）。
   const triggerInitialGreeting = useCallback(async () => {
     const isFirstEver = lastGreetingTimeRef.current === 0;
+    console.log(
+      `[起動セリフ] triggerInitialGreeting呼び出し。isFirstEver=${isFirstEver} `
+      + `(lastGreetingTimeRef=${lastGreetingTimeRef.current})`
+    );
     lastGreetingTimeRef.current = Date.now();
     stopAudio();
     onSubtitleChange("ルキルキが現実世界と同期中...");
 
     if (isFirstEver) {
+      console.log("[起動セリフ] 初回認識のためwavを再生します");
       await playAppearWav();
+    } else {
+      console.log("[起動セリフ] 初回ではないためwav再生をスキップします");
     }
 
     // wav 再生完了後に API 挨拶を呼ぶ
