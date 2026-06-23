@@ -127,7 +127,9 @@ export function RukiHUD({
             type="text"
             placeholder="ルキルキに話しかける..."
             autoComplete="off"
-            className="flex-1 bg-black/60 backdrop-blur-md border border-purple-500/30 rounded-2xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-400/60 transition-colors"
+            // text-base(16px)を指定。iOS Safariは16px未満のinputにフォーカスすると
+            // 自動的にページ全体をズームインする仕様があり、AR画面が毎回崩れる原因になっていた。
+            className="flex-1 bg-black/60 backdrop-blur-md border border-purple-500/30 rounded-2xl px-4 py-3 text-base text-white placeholder-gray-500 focus:outline-none focus:border-purple-400/60 transition-colors"
           />
           <button
             type="submit"
