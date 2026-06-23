@@ -1,7 +1,7 @@
 // hooks/useChat.ts
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type {
   AIStatus,
   HistoryItem,
@@ -108,6 +108,19 @@ export function useChat({
   const isBusyRef            = useRef<boolean>(false); // API呼び出し中フラグ
   const lastGreetingTimeRef  = useRef<number>(0);
   const chatHistoryRef       = useRef<HistoryItem[]>([]); // chatHistory の最新値を ref でも保持
+
+  // 起動セリフ（ruki_appear.wav）専用のAudio要素。
+  // メインの audioInstanceRef（API応答の音声再生用）とは完全に分離する。
+  // 同じAudio要素を共有すると、wav再生中にAPI応答が先に返ってきた場合に
+  // audio.src の上書きでwavが途中で打ち切られる／衝突するため。
+  const appearAudioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    appearAudioRef.current = new Audio();
+    return () => {
+      appearAudioRef.current?.pause();
+      appearAudioRef.current = null;
+    };
+  }, []);
 
   const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
@@ -277,64 +290,41 @@ export function useChat({
       onAiStatusChange, onSearchPhaseChange, onSubtitleChange,
       updateHistory, handleEngrave, applyResponse]);
 
-  // ── 固定wav再生をPromiseで待つヘルパー ──
-  // onended / onerror / 再生失敗のいずれでも resolve する（API呼び出しを止めないため）
-  const playAppearWav = useCallback((): Promise<void> => {
-    return new Promise((resolve) => {
-      const audio = audioInstanceRef.current;
-      if (!audio) {
-        console.warn("[起動セリフ] audioInstanceRef が無いため再生スキップ");
-        resolve();
-        return;
-      }
+  // ── 固定wav再生（起動セリフ専用Audio要素を使用） ──
+  // メインのaudio（API応答再生用）とは独立しているため、
+  // API応答が先に返ってきても衝突・打ち切りが起きない。
+  // そのためtriggerInitialGreeting側ではawaitせず「鳴らしっぱなし」で進める。
+  const playAppearWav = useCallback((): void => {
+    const audio = appearAudioRef.current;
+    if (!audio) {
+      console.warn("[起動セリフ] appearAudioRef が無いため再生スキップ");
+      return;
+    }
 
-      try {
-        audio.pause();
-        audio.onended = null;
-        audio.onerror = null;
-        if (initAudioPipeline) initAudioPipeline(audio);
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.onended = () => console.log("[起動セリフ] 終了（理由: 再生完了/onended）");
+      audio.onerror = () => console.warn("[起動セリフ] 終了（理由: 再生エラー/onerror）");
+      audio.src = "/ruki_appear.wav";
 
-        let resolved = false;
-        // フェイルセーフ：wavが何らかの理由で onended/onerror を発火させない場合に備え、
-        // 最大8秒で強制解決する。resolveOnce より先に宣言しておく（巻き上げに依存しないため）。
-        const failsafe = setTimeout(() => {
-          resolveOnce("8秒フェイルセーフ（鳴り終わったか確認できず強制終了）");
-        }, 8000);
-        timersRef.current.push(failsafe);
-
-        const resolveOnce = (reason: string) => {
-          if (resolved) return;
-          resolved = true;
-          clearTimeout(failsafe);
-          console.log(`[起動セリフ] 終了（理由: ${reason}）`);
-          resolve();
-        };
-
-        audio.onended = () => resolveOnce("再生完了（onended）");
-        audio.onerror = () => resolveOnce("再生エラー（onerror）");
-
-        audio.src = "/ruki_appear.wav";
-        onAiStatusChange("talking");
-
-        console.log("[起動セリフ] /ruki_appear.wav 再生開始を試行します");
-        audio.play()
-          .then(() => {
-            console.log("[起動セリフ] play() 成功。音声が鳴っているはずです");
-          })
-          .catch((err) => {
-            console.warn("[起動セリフ] play() 失敗。鳴っていません:", err);
-            resolveOnce("play()失敗");
-          });
-      } catch (err) {
-        console.warn("[起動セリフ] try-catchで例外。鳴っていません:", err);
-        resolve();
-      }
-    });
-  }, [audioInstanceRef, initAudioPipeline, onAiStatusChange, timersRef]);
+      console.log("[起動セリフ] /ruki_appear.wav 再生開始を試行します（メイン音声とは独立）");
+      audio.play()
+        .then(() => {
+          console.log("[起動セリフ] play() 成功。音声が鳴っているはずです");
+        })
+        .catch((err) => {
+          console.warn("[起動セリフ] play() 失敗。鳴っていません:", err);
+        });
+    } catch (err) {
+      console.warn("[起動セリフ] try-catchで例外。鳴っていません:", err);
+    }
+  }, []);
 
   // ── 初期挨拶（マーカー認識時） ──
-  // ruki_appear.wav を最後まで再生してから、API に挨拶を投げる。
-  // wav 再生は初回マーカー認識時のみ（lastGreetingTimeRef === 0 の場合）。
+  // ruki_appear.wav は専用Audio要素で再生を「開始」するだけで、完了をawaitしない。
+  // これによりAPIの待ち時間と起動セリフの再生が並行して進む。
+  // wav再生は初回マーカー認識時のみ（lastGreetingTimeRef === 0 の場合）。
   const triggerInitialGreeting = useCallback(async () => {
     const isFirstEver = lastGreetingTimeRef.current === 0;
     console.log(
@@ -346,13 +336,13 @@ export function useChat({
     onSubtitleChange("ルキルキが現実世界と同期中...");
 
     if (isFirstEver) {
-      console.log("[起動セリフ] 初回認識のためwavを再生します");
-      await playAppearWav();
+      console.log("[起動セリフ] 初回認識のためwavを再生開始します（APIと並行）");
+      playAppearWav(); // await しない。再生開始と同時にAPI呼び出しへ進む
     } else {
       console.log("[起動セリフ] 初回ではないためwav再生をスキップします");
     }
 
-    // wav 再生完了後に API 挨拶を呼ぶ
+    // wav再生の完了を待たず、すぐにAPI挨拶を呼ぶ（並行実行）
     await callChat("[INITIAL_GREETING]", [], { isGreeting: true });
   }, [callChat, stopAudio, onSubtitleChange, playAppearWav]);
 
