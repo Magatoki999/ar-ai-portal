@@ -44,6 +44,8 @@ async def save_episode_memory(
     arweave_tx_id: str = "",
     location_name: str = "",
     image_url: str = "",
+    lat: float | None = None,
+    lng: float | None = None,
 ) -> None:
     url, key = _sb()
     if not url or not key:
@@ -62,6 +64,11 @@ async def save_episode_memory(
         data["location_name"] = location_name
     if image_url:
         data["image_url"] = image_url
+    # lat/lng は 0.0 のような正当な値もあり得るため、None チェックで判定する
+    # （location_name 等の "truthy" チェックとは意図的に分けている）
+    if lat is not None and lng is not None:
+        data["lat"] = lat
+        data["lng"] = lng
     try:
         async with httpx.AsyncClient() as client:
             await client.post(endpoint, json=data, headers=headers, timeout=5.0)
@@ -168,10 +175,14 @@ async def maybe_save_episode(
     location_name: str = "",
     image_url: str = "",
     llm=None,
+    lat: float | None = None,
+    lng: float | None = None,
 ) -> None:
     """
     記憶キーワードにマッチした会話か、ENGRAVE トリガーが発火した場合にのみ保存する。
     llm を渡すとキーワードを LLM 抽出する（省略時はルールベース）。
+    lat/lng を渡すと、その時点のGPS座標も一緒に記録する
+    （「この場所の写真見せて」のような指示語ベースの検索に使うため）。
     """
     memorable_keywords = [
         "完成", "できた", "やった", "疲れた", "眠い", "バグ", "お香",
@@ -227,6 +238,8 @@ async def maybe_save_episode(
         arweave_tx_id=arweave_tx_id,
         location_name=location_name,
         image_url=image_url,
+        lat=lat,
+        lng=lng,
     )
 
 
@@ -364,6 +377,72 @@ async def check_nearby_spot(lat: float, lng: float) -> dict | None:
         if dist <= spot.get("radius_m", 100):
             return spot
     return None
+
+
+async def find_episode_image_by_proximity(
+    lat: float, lng: float, radius_m: float = 150
+) -> str | None:
+    """
+    「この場所の写真見せて」「ここの写真ある？」のような、固有の場所名を
+    含まない指示語ベースの依頼に対応するための検索。
+    find_episode_image_by_location() が location_name の文字列一致で探すのに対し、
+    こちらは現在のGPS座標から radius_m メートル以内に記録された、
+    image_url 付きのエピソードメモリの中から最も新しいものを返す。
+
+    注意: lat/lng 列を持たない古い記憶（このカラム追加より前に保存されたもの）は
+    対象にならない。今後保存される記憶からのみ検索対象になる。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return None
+
+    # まずPostgREST側で大まかな範囲（緯度経度の±矩形）に絞り込み、
+    # 件数を抑えてからPython側でHaversineの正確な距離判定を行う。
+    # 緯度1度 ≈ 111km なので、radius_mを度数に変換する簡易換算。
+    deg_margin = (radius_m / 111_000) * 1.5  # 矩形は円より広いので少し余裕を持たせる
+    lat_min, lat_max = lat - deg_margin, lat + deg_margin
+    lng_min, lng_max = lng - deg_margin, lng + deg_margin
+
+    endpoint = (
+        f"{url}/rest/v1/episode_memories"
+        f"?lat=gte.{lat_min}&lat=lte.{lat_max}"
+        f"&lng=gte.{lng_min}&lng=lte.{lng_max}"
+        f"&image_url=not.is.null"
+        f"&order=created_at.desc&limit=20"
+        f"&select=image_url,location_name,lat,lng,created_at"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            print(f"[近接検索エラー] status={res.status_code} body={res.text[:200]}")
+            return None
+
+        rows = res.json()
+        if not rows:
+            print(f"[近接検索] 半径{radius_m}m以内に該当する写真なし")
+            return None
+
+        # 矩形で絞り込んだ候補の中から、実際にHaversine距離が radius_m 以内かつ
+        # 最も新しいもの（rowsはcreated_at降順なので先頭から探索）を選ぶ
+        for row in rows:
+            row_lat, row_lng = row.get("lat"), row.get("lng")
+            if row_lat is None or row_lng is None:
+                continue
+            dist = calc_distance_m(lat, lng, row_lat, row_lng)
+            if dist <= radius_m:
+                print(
+                    f"[近接検索] 一致: {row.get('location_name', '（名称なし）')} "
+                    f"距離={dist:.0f}m ({row.get('created_at', '')[:16]})"
+                )
+                return row["image_url"]
+
+        print(f"[近接検索] 矩形内に{len(rows)}件あったが、半径{radius_m}m以内に該当なし")
+        return None
+
+    except Exception as e:
+        print(f"[近接検索エラー] {e}")
+        return None
 
 
 # ═══════════════════════════════════════════════════════

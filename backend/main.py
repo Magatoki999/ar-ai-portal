@@ -40,6 +40,7 @@ from services.memory import (
     maybe_save_episode,
     update_episode_image_url,
     find_episode_image_by_location,
+    find_episode_image_by_proximity,
     check_nearby_spot,
     register_memory_spot,
     get_active_agent_memos,
@@ -512,15 +513,25 @@ async def chat_endpoint(payload: ChatMessage):
 
         # SEARCH_LOCATION_PHOTO タグ処理
         # nodes.py の synthesizer_node がタグ未解決のまま末尾に残している場合のみ発火。
-        # 場所名で episode_memories を検索し、見つかった image_url を show_image_url にセットする。
+        # タグの内容が "HERE" の場合は「この場所」のような指示語ベースの依頼を意味し、
+        # 固有名詞での検索ではなく、現在のGPS座標からの近接検索（find_episode_image_by_proximity）
+        # を行う。それ以外は通常通り location_name の文字列一致検索。
         loc_photo_match = re.search(r"\|\|SEARCH_LOCATION_PHOTO:(.*?)\|\|", ai_response)
         if loc_photo_match:
             loc_query = loc_photo_match.group(1).strip()
             ai_response = re.sub(r"\|\|SEARCH_LOCATION_PHOTO:.*?\|\|", "", ai_response).strip()
             if not _show_image:
-                found_url = await find_episode_image_by_location(loc_query)
-                if found_url:
-                    _show_image = found_url
+                if loc_query.upper() == "HERE":
+                    if lat is not None and lng is not None:
+                        found_url = await find_episode_image_by_proximity(lat, lng)
+                        if found_url:
+                            _show_image = found_url
+                    else:
+                        print("[近接検索] GPS座標が無いため検索をスキップしました")
+                else:
+                    found_url = await find_episode_image_by_location(loc_query)
+                    if found_url:
+                        _show_image = found_url
 
         # ── フォールバック: タグなしで「保存されていない」と答えてしまった場合の補完 ──
         # LLMがプロンプトの指示（SEARCH_LOCATION_PHOTOタグ使用）に従わず、タグを付けずに
@@ -533,32 +544,53 @@ async def chat_endpoint(payload: ChatMessage):
             said_negative    = any(p in ai_response for p in negative_phrases)
 
             if mentions_photo and said_negative:
-                # 「〇〇の写真」「〇〇で撮った」「〇〇にいた時の」のようなパターンから場所名を推測
-                fallback_loc = None
-                for pattern in (
-                    r"(.+?)にいた時の写真",
-                    r"(.+?)に行った時の写真",
-                    r"(.+?)で撮った",
-                    r"(.+?)の写真",
-                ):
-                    m = re.search(pattern, payload.message)
-                    if m:
-                        candidate = m.group(1).strip()
-                        # 助詞や指示語だけの短すぎる候補は場所名として扱わない
-                        if len(candidate) >= 2 and candidate not in ("あの", "この", "その", "前"):
-                            fallback_loc = candidate
-                            break
+                # 「この場所」「ここ」「さっきの場所」のような指示語が含まれる場合は、
+                # 固有名詞の場所名として検索しても絶対に見つからないため、
+                # 先にGPS近接検索を試す（こちらを優先）。
+                demonstrative_words = ["この場所", "ここ", "この辺", "さっきの場所", "今いる場所", "現在地"]
+                is_demonstrative = any(w in payload.message for w in demonstrative_words)
 
-                if fallback_loc:
-                    print(f"[場所検索フォールバック] タグ未検出のため発話から「{fallback_loc}」を推測し検索します")
-                    found_url = await find_episode_image_by_location(fallback_loc)
-                    if found_url:
-                        _show_image = found_url
-                        # 「保存されていません」と既に言ってしまっているテキストは画像と矛盾するため、
-                        # 見つかった旨の自然な一言に置き換える（エフェクトタグ等の末尾装飾は維持したいので
-                        # 文章全体ではなく否定フレーズ周辺のみを置換する簡易対応）
-                        ai_response = f"あ、ありました！「{fallback_loc}」の写真です！"
-                        print(f"[場所検索フォールバック] 「{fallback_loc}」で発見。応答テキストも修正しました")
+                if is_demonstrative:
+                    if lat is not None and lng is not None:
+                        print("[近接検索フォールバック] 指示語を検出。GPS座標で検索します")
+                        found_url = await find_episode_image_by_proximity(lat, lng)
+                        if found_url:
+                            _show_image = found_url
+                            ai_response = "あ、ありました！この辺りで撮った写真です！"
+                            print("[近接検索フォールバック] 発見。応答テキストも修正しました")
+                    else:
+                        print("[近接検索フォールバック] GPS座標が無いため検索をスキップしました")
+                else:
+                    # 「〇〇の写真」「〇〇で撮った」「〇〇にいた時の」のようなパターンから場所名を推測
+                    fallback_loc = None
+                    for pattern in (
+                        r"(.+?)にいた時の写真",
+                        r"(.+?)に行った時の写真",
+                        r"(.+?)で撮った",
+                        r"(.+?)の写真",
+                    ):
+                        m = re.search(pattern, payload.message)
+                        if m:
+                            candidate = m.group(1).strip()
+                            # 助詞や指示語だけの短すぎる候補・指示語を含む候補は場所名として扱わない
+                            if (
+                                len(candidate) >= 2
+                                and candidate not in ("あの", "この", "その", "前")
+                                and not any(w in candidate for w in demonstrative_words)
+                            ):
+                                fallback_loc = candidate
+                                break
+
+                    if fallback_loc:
+                        print(f"[場所検索フォールバック] タグ未検出のため発話から「{fallback_loc}」を推測し検索します")
+                        found_url = await find_episode_image_by_location(fallback_loc)
+                        if found_url:
+                            _show_image = found_url
+                            # 「保存されていません」と既に言ってしまっているテキストは画像と矛盾するため、
+                            # 見つかった旨の自然な一言に置き換える（エフェクトタグ等の末尾装飾は維持したいので
+                            # 文章全体ではなく否定フレーズ周辺のみを置換する簡易対応）
+                            ai_response = f"あ、ありました！「{fallback_loc}」の写真です！"
+                            print(f"[場所検索フォールバック] 「{fallback_loc}」で発見。応答テキストも修正しました")
 
         # SAVE_PHOTO タグ処理
         # 「ここを記憶して」等、ユーザーが明示的に依頼したときのみ persona.py の指示で発火する。
@@ -588,6 +620,8 @@ async def chat_endpoint(payload: ChatMessage):
                 print("[場所記憶撮影] image_base64 が無いため撮影をスキップしました")
 
         # エピソードメモリ保存（fire-and-forget）
+        # lat/lng も一緒に保存し、今後「この場所の写真見せて」のような
+        # 指示語ベースの依頼にGPS近接検索で対応できるようにする。
         _location = nearby_spot["name"] if nearby_spot else ""
         asyncio.create_task(
             maybe_save_episode(
@@ -597,6 +631,8 @@ async def chat_endpoint(payload: ChatMessage):
                 location_name=_location,
                 image_url=_photo_url,
                 llm=llm,
+                lat=lat,
+                lng=lng,
             )
         )
 
