@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import type { AIStatus, SearchPhase } from "./lib/types";
 
 import { useVoice }      from "./hooks/useVoice";
@@ -32,6 +32,11 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   // ── エフェクト同期 ref（レンダリングループと共有） ──
   const currentEffectRef = useRef<string>("cyber");
 
+  // マーカーロスト時、直前のセリフをすぐ消さず少し見せておくための遅延タイマー。
+  // 連続でロスト/再認識が起きた場合に前のタイマーが古い字幕で上書きしないよう、
+  // refで保持して都度クリアする。
+  const lostSubtitleTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // ── UI ステート ──
   const [aiStatus,         setAiStatus]         = useState<AIStatus>("idle");
   const [searchPhase,      setSearchPhase]      = useState<SearchPhase>("OFFLINE");
@@ -44,6 +49,28 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   const [spotProposal,     setSpotProposal]     = useState<string | null>(null);
 
   const [isCapturing,      setIsCapturing]      = useState(false);
+
+  // setSubtitle のラッパー。新しい字幕がセットされる時点で、ロスト後に仕込んだ
+  // 「5秒後にプレースホルダーへ戻す」タイマーが残っていれば必ずキャンセルする。
+  // これによりロスト中でもテキストで会話を続けた場合、その返答がタイマーで
+  // 後から上書きされる事故を防ぐ。
+  const updateSubtitle = useCallback((text: string) => {
+    if (lostSubtitleTimerRef.current) {
+      clearTimeout(lostSubtitleTimerRef.current);
+      lostSubtitleTimerRef.current = null;
+    }
+    setSubtitle(text);
+  }, []);
+
+  // アンマウント時、保留中のロスト字幕タイマーが残らないようクリア
+  useEffect(() => {
+    return () => {
+      if (lostSubtitleTimerRef.current) {
+        clearTimeout(lostSubtitleTimerRef.current);
+        lostSubtitleTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // ── ENGRAVE トースト（5秒後に自動消去） ──
   const handleEngraveToast = useCallback((txId: string) => {
@@ -111,7 +138,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     stopAudio,
     onAiStatusChange:    setAiStatus,
     onSearchPhaseChange: setSearchPhase,
-    onSubtitleChange:    setSubtitle,
+    onSubtitleChange:    updateSubtitle,
     onSpatialEffect: (effect) => {
       setSpatialEffect(effect);
       currentEffectRef.current = effect;
@@ -129,7 +156,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     timersRef,
     initAudioPipeline,
     onProactiveSpeech: (text, effect) => {
-      setSubtitle(text);
+      updateSubtitle(text);
       setSpatialEffect(effect);
       currentEffectRef.current = effect;
     },
@@ -144,6 +171,12 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     blinkTargetsRef,
     updateMouthMorph,
     onTargetFound: () => {
+      // 再認識時、ロストで仕込んだ「字幕を5秒後にプレースホルダーへ戻す」タイマーが
+      // 残っていると、新しい会話の字幕を後から上書きしてしまうため先にキャンセルする。
+      if (lostSubtitleTimerRef.current) {
+        clearTimeout(lostSubtitleTimerRef.current);
+        lostSubtitleTimerRef.current = null;
+      }
       notifyTargetFound();
       chatOnTargetFound();
     },
@@ -152,9 +185,19 @@ export default function MindARViewer({ address }: MindARViewerProps) {
       // busy / thinking 状態を強制解除してロスト後も会話できるようにする
       resetBusy();
       setAiStatus("idle");
-      setSubtitle("（マーカーをかざしてください。話しかけることもできます）");
+
+      // ルキルキが話していたセリフ（字幕）はすぐに消さず、5秒間そのまま見せておく。
+      // それまでに別の理由で字幕が更新されていれば、このタイマーは古い文言で
+      // 上書きしないようにキャンセルする。
+      if (lostSubtitleTimerRef.current) {
+        clearTimeout(lostSubtitleTimerRef.current);
+      }
+      lostSubtitleTimerRef.current = setTimeout(() => {
+        setSubtitle("（マーカーをかざしてください。話しかけることもできます）");
+        lostSubtitleTimerRef.current = null;
+      }, 5000);
     },
-    onSubtitleChange: setSubtitle,
+    onSubtitleChange: updateSubtitle,
     onStatusChange:   setAiStatus,
   });
 
@@ -170,9 +213,9 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   // ── 記憶写真撮影（カメラフレーム → Supabase 保存） ──
   const handleCaptureSave = async () => {
     const frame = captureARCameraFrame();
-    if (!frame) { setSubtitle("カメラ映像が取得できませんでした"); return; }
+    if (!frame) { updateSubtitle("カメラ映像が取得できませんでした"); return; }
 
-    setSubtitle("📷 記憶写真を撮影・保存中...");
+    updateSubtitle("📷 記憶写真を撮影・保存中...");
     setIsCapturing(true);
     try {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -207,11 +250,11 @@ export default function MindARViewer({ address }: MindARViewerProps) {
           body: JSON.stringify({ wallet_address: address, image_url: imageUrl }),
         });
       }
-      setSubtitle("📷 記憶写真を保存しました！");
+      updateSubtitle("📷 記憶写真を保存しました！");
       setSnapImageUrl(imageUrl);
     } catch (err) {
       console.error("[写真保存]", err);
-      setSubtitle("写真の保存に失敗しました");
+      updateSubtitle("写真の保存に失敗しました");
     } finally {
       setIsCapturing(false);
     }
