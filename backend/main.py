@@ -121,8 +121,8 @@ async def lifespan(app: FastAPI):
     # ai_news_digest テーブルを更新する。深夜帯にして他の処理と被らないようにしている。
     scheduler.add_job(
         lambda: _run(daily_ai_news_job, llm),
-        "cron", hour=5, minute=2,
-        timezone=timezone(timedelta(hours=9)),
+        "interval", minutes=2,
+
     )
     # ⚠️ calendar_prep_job は Render無料プランのスリープでcronが時刻通りに
     # 動かないため、cron登録は廃止。[INITIAL_GREETING]時に呼び出す方式に変更済み
