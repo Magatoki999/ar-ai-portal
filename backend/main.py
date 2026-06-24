@@ -50,7 +50,13 @@ from services.memory import (
     save_user_profile_field,
 )
 from services.snap import generate_snap, upload_to_supabase_storage
-from services.scheduler import auto_research_job, proactive_talk_job, trigger_proactive_speech, calendar_prep_job
+from services.scheduler import (
+    auto_research_job,
+    proactive_talk_job,
+    trigger_proactive_speech,
+    calendar_prep_job,
+    daily_ai_news_job,
+)
 from services.persona import (
     load_rukiruki_persona,
     load_magatoki_context,
@@ -109,6 +115,14 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
         "interval", minutes=1,
+    )
+    # AI情報ダイジェスト: 毎日 5:00 JST に1回だけ実行。
+    # 「今日のAI情報は？」と聞かれたとき get_today_ai_news Tool が参照する
+    # ai_news_digest テーブルを更新する。深夜帯にして他の処理と被らないようにしている。
+    scheduler.add_job(
+        lambda: _run(daily_ai_news_job, llm),
+        "cron", hour=5, minute=2,
+        timezone=timezone(timedelta(hours=9)),
     )
     # ⚠️ calendar_prep_job は Render無料プランのスリープでcronが時刻通りに
     # 動かないため、cron登録は廃止。[INITIAL_GREETING]時に呼び出す方式に変更済み

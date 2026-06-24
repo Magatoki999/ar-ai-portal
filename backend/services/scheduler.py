@@ -23,7 +23,7 @@ from services.emotion import (
     get_calendar_context,
     get_growth_context,
 )
-from services.memory import save_agent_memo
+from services.memory import save_agent_memo, save_ai_news_digest
 from services.calendar import (
     get_upcoming_events,
     build_prep_suggestion,
@@ -99,6 +99,64 @@ async def auto_research_job(llm) -> None:
         print(f"[脳内リサーチ] 成果レポートをDBに格納しました: {memo_data.get('title')}")
     except Exception as e:
         print(f"[脳内リサーチ] リサーチプロセスでエラーが発生しました: {e}")
+
+
+# ─── AI情報ダイジェストジョブ（1日1回） ───
+# 「今日のAI情報は？」と聞かれたときに答えられるよう、AI関連の最新情報を
+# 複数キーワードで検索し、まとめて1つの短い要約にしてDBに保存する。
+# auto_research_job と違い、検索は1キーワードではなく複数行い、
+# 結果を1つのダイジェストに統合する。
+_AI_NEWS_KEYWORDS = [
+    "AI 最新ニュース",
+    "LLM 新モデル",
+    "生成AI 業界動向",
+]
+
+
+async def daily_ai_news_job(llm) -> None:
+    print("─── [脳内情報調査部] AI情報の本日分ダイジェスト作成を開始します ───")
+
+    all_results = []
+    for keyword in _AI_NEWS_KEYWORDS:
+        try:
+            result = await search_tool.ainvoke({"query": keyword})
+            all_results.append({"keyword": keyword, "result": result})
+        except Exception as e:
+            print(f"[AI情報ダイジェスト] 「{keyword}」検索エラー: {e}")
+
+    if not all_results:
+        print("[AI情報ダイジェスト] 検索結果が1件も得られなかったためスキップします")
+        return
+
+    digest_prompt = (
+        "あなたはルキルキの脳内エージェント「情報調査部」です。\n"
+        "以下は複数のキーワードでAI関連ニュースを検索した結果です。これらを統合し、"
+        "今日1日分のAI業界ダイジェストとして整理してください。\n\n"
+        "出力は必ず以下のJSON形式のみにしてください（説明文や前置き、Markdownのコードブロックは禁止）。\n"
+        '{"summary": "ルキルキが話す用の自然な口調の要約。150〜200文字程度。'
+        '重要なトピックを2〜3個織り込み、URLは含めない。", '
+        '"items": [{"title": "記事タイトル", "url": "URL", "note": "一言要約（30文字程度）"}, ...]}\n\n'
+        f"検索結果:\n{str(all_results)[:4000]}"
+    )
+
+    clean = ""
+    try:
+        response = await llm.ainvoke([HumanMessage(content=digest_prompt)])
+        clean    = re.sub(r"```json|```", "", response.content.strip()).strip()
+        data     = json.loads(clean)
+
+        summary = data.get("summary", "")
+        items   = data.get("items", [])
+        if not summary:
+            print("[AI情報ダイジェスト] LLM応答にsummaryが含まれていなかったためスキップします")
+            return
+
+        await save_ai_news_digest(summary=summary, items=items)
+
+    except json.JSONDecodeError:
+        print(f"[AI情報ダイジェスト] JSON解析に失敗しました: {clean[:200]}")
+    except Exception as e:
+        print(f"[AI情報ダイジェスト] 生成エラー: {e}")
 
 
 # ─── 自発発話ジョブ ───

@@ -13,6 +13,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
 from services.state import emotional_state
@@ -590,3 +591,118 @@ async def mark_memos_as_consumed(memo_ids: list) -> None:
                 )
             except Exception:
                 pass
+
+
+# ═══════════════════════════════════════════════════════
+# AI情報ダイジェスト（毎日1回、AI関連の最新情報をまとめたもの）
+# 「今日のAI情報は？」と聞かれたときに参照する。
+# scheduler.py の daily_ai_news_job() から1日1回保存され、
+# agents/nodes.py の get_today_ai_news Tool から読み出される。
+# ═══════════════════════════════════════════════════════
+
+async def save_ai_news_digest(
+    summary: str,
+    items: list | None = None,
+    digest_date: str | None = None,
+) -> bool:
+    """
+    その日のAI情報ダイジェストを保存する。
+    digest_date は "YYYY-MM-DD" 形式の文字列。省略時は今日の日付（JST）を使う。
+    digest_date は UNIQUE 制約があるため、同じ日に複数回呼ばれた場合は
+    upsert（Prefer: resolution=merge-duplicates）で上書きする。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    if digest_date is None:
+        digest_date = datetime.now(timezone.utc).astimezone(
+            timezone(timedelta(hours=9))
+        ).strftime("%Y-%m-%d")
+
+    endpoint = f"{url}/rest/v1/ai_news_digest"
+    headers = {
+        **_sb_headers(),
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    data = {
+        "digest_date": digest_date,
+        "summary": summary,
+        "items": items or [],
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, json=data, headers=headers, timeout=10.0)
+        if res.status_code not in (200, 201):
+            print(f"[AI情報ダイジェスト保存エラー] status={res.status_code} body={res.text[:200]}")
+            return False
+        print(f"[AI情報ダイジェスト] {digest_date} 分を保存しました")
+        return True
+    except Exception as e:
+        print(f"[AI情報ダイジェスト保存エラー] {e}")
+        return False
+
+
+async def get_latest_ai_news_digest() -> dict | None:
+    """
+    最新のAI情報ダイジェストを1件取得する。
+    「今日のAI情報は？」と聞かれたとき、まずこれを呼ぶ。
+    その日の分がまだ無い場合（ジョブ実行前など）は、直前に保存された分が返る
+    （呼び出し側で digest_date を見て「今日」か「以前」かを判断できる）。
+    見つからない場合は None。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return None
+
+    endpoint = (
+        f"{url}/rest/v1/ai_news_digest"
+        f"?order=digest_date.desc&limit=1"
+        f"&select=digest_date,summary,items,created_at"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            print(f"[AI情報ダイジェスト取得エラー] status={res.status_code} body={res.text[:200]}")
+            return None
+        rows = res.json()
+        if not rows:
+            print("[AI情報ダイジェスト] 保存済みのダイジェストがありません")
+            return None
+        return rows[0]
+    except Exception as e:
+        print(f"[AI情報ダイジェスト取得エラー] {e}")
+        return None
+
+
+@tool
+async def get_today_ai_news() -> str:
+    """
+    ユーザーから「今日のAI情報は？」「最近のAIニュースある？」のように
+    AI業界の最新情報について聞かれたときに呼ぶツール。
+    daily_ai_news_job が毎日1回保存したダイジェストの中から最新のものを返す。
+    まだ1件も保存されていない場合は、その旨を伝える文字列を返す。
+    """
+    print("[AI情報ダイジェスト] get_today_ai_news が呼ばれました")
+    digest = await get_latest_ai_news_digest()
+    if not digest:
+        print("[AI情報ダイジェスト] 該当データなし。未生成メッセージを返します")
+        return "AI情報のダイジェストはまだ用意できていません。"
+
+    digest_date = digest.get("digest_date", "")
+    summary     = digest.get("summary", "")
+
+    # JST基準で「今日」かどうかを判定し、古い情報なら一言添える
+    today_str = datetime.now(timezone.utc).astimezone(
+        timezone(timedelta(hours=9))
+    ).strftime("%Y-%m-%d")
+
+    if digest_date == today_str:
+        print(f"[AI情報ダイジェスト] {digest_date}分（本日分）を返します")
+        return summary
+    else:
+        print(f"[AI情報ダイジェスト] {digest_date}分（本日分ではない）を返します")
+        return f"（{digest_date}時点の情報です）{summary}"
+
