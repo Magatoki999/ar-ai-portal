@@ -48,6 +48,7 @@ from services.memory import (
     get_user_profile,
     save_username_to_db,
     save_user_profile_field,
+    should_generate_ai_news_today,
 )
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.scheduler import (
@@ -116,16 +117,9 @@ async def lifespan(app: FastAPI):
         lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
         "interval", minutes=1,
     )
-    # AI情報ダイジェスト: 毎日 5:00 JST に1回だけ実行。
-    # 「今日のAI情報は？」と聞かれたとき get_today_ai_news Tool が参照する
-    # ai_news_digest テーブルを更新する。深夜帯にして他の処理と被らないようにしている。
-    scheduler.add_job(
-        lambda: _run(daily_ai_news_job, llm),
-        "cron", hour=5, minute=0,
-        timezone=timezone(timedelta(hours=9)),
-    )
-    # ⚠️ calendar_prep_job は Render無料プランのスリープでcronが時刻通りに
-    # 動かないため、cron登録は廃止。[INITIAL_GREETING]時に呼び出す方式に変更済み
+    # ⚠️ calendar_prep_job と daily_ai_news_job は、いずれもRender無料プランのスリープで
+    # cronが時刻通りに動かないため、固定時刻のcron登録は廃止。
+    # 代わりに [INITIAL_GREETING] 時に呼び出す方式に統一済み
     # （下記 /api/chat 内の is_initial_greeting 分岐を参照）。
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
@@ -330,6 +324,19 @@ async def chat_endpoint(payload: ChatMessage):
             await asyncio.sleep(8)
             await calendar_prep_job(llm)
         asyncio.create_task(_delayed_calendar_check())
+
+        # AI情報ダイジェストの生成チェック（fire-and-forget）。
+        # 当初はAPSchedulerのcronで毎日5:00 JSTに固定実行していたが、
+        # Render無料プランはその時刻にスリープしていることが多く、
+        # 実行が空振りするリスクが高かった。calendar_prep_job と同じ方式に変更し、
+        # 「アプリが開かれたタイミング」で「今日の分がまだ無いか」を判定して生成する。
+        # 検索・LLM要約に数秒〜十数秒かかるため、挨拶の音声再生とは被らないよう
+        # calendar_prep_job より少し後ろ（15秒後）にずらして発火する。
+        async def _delayed_ai_news_check():
+            await asyncio.sleep(15)
+            if await should_generate_ai_news_today():
+                await daily_ai_news_job(llm)
+        asyncio.create_task(_delayed_ai_news_check())
 
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))

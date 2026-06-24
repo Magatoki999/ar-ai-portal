@@ -1,8 +1,13 @@
 # services/scheduler.py
 # ─────────────────────────────────────────────────────────────────────────────
-# APScheduler で動く定期ジョブ群。
-#   - auto_research_job  : 15分ごとにキーワードを Tavily 検索して agent_memos に保存
-#   - proactive_talk_job : 1分ごとに無言を検知して自発的に話しかける
+# APScheduler で動く定期ジョブ群、および main.py から都度呼ばれる関数群。
+#   - auto_research_job  : 15分ごとにキーワードを Tavily 検索して agent_memos に保存（cron）
+#   - proactive_talk_job : 1分ごとに無言を検知して自発的に話しかける（cron）
+#   - calendar_prep_job  : [INITIAL_GREETING] 時に main.py から呼ばれる（cron登録なし）
+#   - daily_ai_news_job  : [INITIAL_GREETING] 時に main.py から呼ばれる（cron登録なし）
+#     ※ calendar_prep_job / daily_ai_news_job は、いずれもRender無料プランのスリープで
+#       固定時刻のcronが時刻通りに動かないため、「アプリが開かれたタイミング」で
+#       判定する方式に統一している。
 # ─────────────────────────────────────────────────────────────────────────────
 import os
 import re
@@ -101,11 +106,14 @@ async def auto_research_job(llm) -> None:
         print(f"[脳内リサーチ] リサーチプロセスでエラーが発生しました: {e}")
 
 
-# ─── AI情報ダイジェストジョブ（1日1回） ───
+# ─── AI情報ダイジェストジョブ（1日1回・呼び出し元で日次判定） ───
 # 「今日のAI情報は？」と聞かれたときに答えられるよう、AI関連の最新情報を
 # 複数キーワードで検索し、まとめて1つの短い要約にしてDBに保存する。
 # auto_research_job と違い、検索は1キーワードではなく複数行い、
 # 結果を1つのダイジェストに統合する。
+# 呼び出しは main.py の [INITIAL_GREETING] 処理から、
+# memory.should_generate_ai_news_today() が True を返したときだけ行われる
+# （cronでの固定時刻実行はRender無料プランのスリープで空振りするため廃止）。
 _AI_NEWS_KEYWORDS = [
     "AI 最新ニュース",
     "LLM 新モデル",

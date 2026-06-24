@@ -677,6 +677,24 @@ async def get_latest_ai_news_digest() -> dict | None:
         return None
 
 
+async def should_generate_ai_news_today() -> bool:
+    """
+    今日（JST）の分の ai_news_digest がまだ無いかどうかを判定する。
+    Render無料プランはスリープするため、APSchedulerのcronに固定時刻で頼らず、
+    calendar_prep_job と同じ方式（[INITIAL_GREETING] のたびにチェックする）で運用する。
+    最新行の digest_date が今日と異なれば True（生成すべき）、同じなら False（今日はもう済んでいる）。
+    1件も無い場合（初回）も True。
+    """
+    digest = await get_latest_ai_news_digest()
+    today_str = datetime.now(timezone.utc).astimezone(
+        timezone(timedelta(hours=9))
+    ).strftime("%Y-%m-%d")
+
+    if not digest:
+        return True
+    return digest.get("digest_date") != today_str
+
+
 @tool
 async def get_today_ai_news() -> str:
     """
