@@ -250,10 +250,18 @@ export default function MindARViewer({ address }: MindARViewerProps) {
       const imageUrl = `${supabaseUrl}/storage/v1/object/public/memories/${fileName}`;
       const baseUrl  = process.env.NEXT_PUBLIC_API_URL;
       if (baseUrl) {
+        // 直前のユーザー発話を一緒に送る。バックエンド側で食事の発話かどうかを判定し、
+        // 「これ食べてる」のように話しながら撮った場合は meal_logs にも自動で紐付ける
+        // （孤食ロボット機能：食事の様子を写真付きで記録できるようにするため）。
+        const lastUserMsg = [...chatHistory].reverse().find((h) => h.role === "user");
         await fetch(`${baseUrl}/api/save_memory_image`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wallet_address: address, image_url: imageUrl }),
+          body: JSON.stringify({
+            wallet_address: address,
+            image_url: imageUrl,
+            recent_user_text: lastUserMsg?.text ?? "",
+          }),
         });
       }
       updateSubtitle("📷 記憶写真を保存しました！");

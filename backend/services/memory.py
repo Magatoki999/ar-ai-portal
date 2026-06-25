@@ -750,9 +750,11 @@ async def save_meal_log(
     healthiness: str | None = None,
     lat: float | None = None,
     lng: float | None = None,
+    image_url: str | None = None,
 ) -> bool:
     """
     1件の食事記録を保存する。description以外は分かる範囲でよい（不明ならNone）。
+    image_url は📷ボタンで食事を撮った場合のみ渡される（テキストのみの記録ではNone）。
     """
     url, key = _sb()
     if not url or not key:
@@ -773,6 +775,8 @@ async def save_meal_log(
     if lat is not None and lng is not None:
         data["lat"] = lat
         data["lng"] = lng
+    if image_url:
+        data["image_url"] = image_url
 
     try:
         async with httpx.AsyncClient() as client:
@@ -796,7 +800,7 @@ async def get_recent_meal_logs(limit: int = 7) -> list:
     endpoint = (
         f"{url}/rest/v1/meal_logs"
         f"?order=created_at.desc&limit={limit}"
-        f"&select=meal_type,description,is_alone,healthiness,created_at"
+        f"&select=meal_type,description,is_alone,healthiness,image_url,created_at"
     )
     try:
         async with httpx.AsyncClient() as client:
@@ -831,7 +835,10 @@ def build_meal_context(logs: list) -> str:
             time_str = ""
         desc = log.get("description", "")
         alone_mark = "（一人）" if log.get("is_alone") else ""
-        lines.append(f"- {time_str} {desc}{alone_mark}")
+        # episode_memories の get_recent_episodes と同じ [image:URL] 形式で埋め込む。
+        # agents/nodes.py 側はこの形式を認識して ||SHOW_IMAGE:URL|| タグの判断材料にできる。
+        image_mark = f" [image:{log['image_url']}]" if log.get("image_url") else ""
+        lines.append(f"- {time_str} {desc}{alone_mark}{image_mark}")
 
         if log.get("is_alone"):
             alone_count += 1

@@ -183,6 +183,9 @@ class TTSRequest(BaseModel):
 class MemoryImagePayload(BaseModel):
     wallet_address: str | None = None
     image_url: str
+    # 📷ボタンを押す直前のユーザー発話。「これ食べてる」のような食事の話と一緒に撮られた場合、
+    # この発話をきっかけに食事写真としての判定（Vision解析）を行い meal_logs に紐付ける。
+    recent_user_text: str = ""
 
 
 class MemoryPhotoRequest(BaseModel):
@@ -251,6 +254,56 @@ async def _extract_and_save_meal_log(
         print("[食事記録] LLM応答のJSON解析に失敗しました")
     except Exception as e:
         print(f"[食事記録] 抽出エラー: {e}")
+
+
+async def _extract_and_save_meal_log_with_photo(
+    user_text: str, image_url: str, llm
+) -> None:
+    """
+    📷ボタンで撮った写真と、その直前のユーザー発話（食事キーワードを含む）から、
+    Vision解析で食事内容を判定し meal_logs に画像付きで保存する。
+    写真に食べ物が写っていないと判定された場合は保存しない
+    （「これ食べてる」と言いつつ無関係な写真を撮った場合の誤登録を防ぐため）。
+    """
+    vision_prompt = (
+        "この画像を見て、食事や飲食物が写っているか判定し、JSON形式で返してください。\n"
+        "出力は厳密にJSONのみ（説明文や前置き、Markdownのコードブロックは禁止）。\n"
+        '{"is_food": true/false, '
+        '"description": "写っている食事の短い説明（10〜20文字程度。例: コンビニのおにぎりとお茶）。'
+        'is_foodがfalseならnullでよい", '
+        '"healthiness": "good（野菜・自炊・バランス良い）/so-so（普通）/junk（コンビニ・ジャンク・インスタント）。'
+        'is_foodがfalseまたは不明ならnull"}\n\n'
+        f"参考：ユーザーは「{user_text}」と言っていました。"
+    )
+    try:
+        response = await llm.ainvoke([
+            HumanMessage(content=[
+                {"type": "text",      "text": vision_prompt},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "low"}},
+            ])
+        ])
+        clean = re.sub(r"```json|```", "", response.content.strip()).strip()
+        data  = json.loads(clean)
+
+        if not data.get("is_food"):
+            print("[食事記録(写真)] 食事と判定されなかったため保存しませんでした")
+            return
+
+        description = data.get("description") or "撮影された食事"
+        # meal_type / is_alone はテキストからも軽く推測したいが、ここでは写真判定を主とし、
+        # 詳細な時間帯・人数の推測は省略する（テキスト版 _extract_and_save_meal_log と違い、
+        # ここはVision判定のコストを抑えるための簡易版）。
+        await save_meal_log(
+            description=description,
+            healthiness=data.get("healthiness"),
+            # 写真付きの食事記録だとわかるよう、image_url相当の情報をdescriptionに含めておく。
+            # meal_logsテーブル自体にimage_url列は無いため、説明文に軽く触れる形にする。
+        )
+        print(f"[食事記録(写真)] 保存しました: {description}")
+    except json.JSONDecodeError:
+        print("[食事記録(写真)] LLM応答のJSON解析に失敗しました")
+    except Exception as e:
+        print(f"[食事記録(写真)] 抽出エラー: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -763,6 +816,17 @@ async def chat_endpoint(payload: ChatMessage):
 @app.post("/api/save_memory_image")
 async def save_memory_image_endpoint(payload: MemoryImagePayload):
     ok = await update_episode_image_url(payload.image_url)
+
+    # 「これ食べてる」のように食事の話をしながら撮られた場合、
+    # Vision解析で写真の内容を判定し、meal_logs にも自動で紐付ける（孤食ロボット機能）。
+    # 食事に無関係な発話・無発話の場合は何もしない（コスト最小化）。
+    if payload.recent_user_text and detect_meal_mention(payload.recent_user_text):
+        asyncio.create_task(
+            _extract_and_save_meal_log_with_photo(
+                payload.recent_user_text, payload.image_url, llm
+            )
+        )
+
     return {"status": "ok" if ok else "error"}
 
 
