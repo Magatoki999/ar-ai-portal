@@ -33,7 +33,7 @@ export function RukiFaceIcon({ aiStatus }: RukiFaceIconProps) {
 
   return (
     <div
-      className="fixed bottom-24 right-4 rounded-full overflow-hidden border border-purple-400/40 bg-black/40 backdrop-blur-sm shadow-lg"
+      className="fixed top-20 right-4 rounded-full overflow-hidden border border-purple-400/40 bg-black/40 backdrop-blur-sm shadow-lg"
       style={{ width: 80, height: 80, zIndex: 110, pointerEvents: "none" }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
