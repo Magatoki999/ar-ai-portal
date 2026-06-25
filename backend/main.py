@@ -49,6 +49,11 @@ from services.memory import (
     save_username_to_db,
     save_user_profile_field,
     should_generate_ai_news_today,
+    detect_meal_mention,
+    save_meal_log,
+    get_recent_meal_logs,
+    build_meal_context,
+    should_check_meal_reminder,
 )
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.scheduler import (
@@ -57,6 +62,7 @@ from services.scheduler import (
     trigger_proactive_speech,
     calendar_prep_job,
     daily_ai_news_job,
+    meal_reminder_job,
 )
 from services.persona import (
     load_rukiruki_persona,
@@ -208,6 +214,46 @@ async def tts_endpoint(payload: TTSRequest):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 食事記録の抽出・保存（孤食ロボット機能）
+# ユーザー発話に食事キーワードが含まれていたとき、main.py の /api/chat から
+# fire-and-forget で呼ばれる。LLMに軽く内容を整理させてから meal_logs に保存する。
+# ─────────────────────────────────────────────────────────────────────────────
+async def _extract_and_save_meal_log(
+    user_text: str, llm, lat: float | None, lng: float | None
+) -> None:
+    extract_prompt = (
+        "次のユーザー発言から、食事に関する情報だけを抜き出してJSON形式で返してください。\n"
+        "出力は厳密にJSONのみ（説明文や前置き、Markdownのコードブロックは禁止）。\n"
+        '{"description": "食べた物の短い説明（10〜20文字程度。例: コンビニのおにぎり）", '
+        '"meal_type": "breakfast/lunch/dinner/snackのいずれか。不明ならnull", '
+        '"is_alone": "一人で食べたと明言・推測できればtrue、誰かと食べたならfalse、不明ならnull", '
+        '"healthiness": "good（野菜・自炊・バランス良い）/so-so（普通）/junk（コンビニ・ジャンク・インスタント）。不明ならnull"}\n\n'
+        f"ユーザー発言: {user_text}"
+    )
+    try:
+        response = await llm.ainvoke(extract_prompt)
+        clean    = re.sub(r"```json|```", "", response.content.strip()).strip()
+        data     = json.loads(clean)
+
+        description = data.get("description", "")
+        if not description:
+            return  # 食事の具体的な内容が抽出できなかった場合は保存しない
+
+        await save_meal_log(
+            description=description,
+            meal_type=data.get("meal_type"),
+            is_alone=data.get("is_alone"),
+            healthiness=data.get("healthiness"),
+            lat=lat,
+            lng=lng,
+        )
+    except json.JSONDecodeError:
+        print("[食事記録] LLM応答のJSON解析に失敗しました")
+    except Exception as e:
+        print(f"[食事記録] 抽出エラー: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # チャットエンドポイント
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/chat")
@@ -338,6 +384,15 @@ async def chat_endpoint(payload: ChatMessage):
                 await daily_ai_news_job(llm)
         asyncio.create_task(_delayed_ai_news_check())
 
+        # 食事リマインダーチェック（fire-and-forget・孤食ロボット機能）。
+        # 今が食事時間帯（朝/昼/晩）で、まだ今日その食事の記録が無ければ
+        # 「一緒に食べている気分」になれる一言を自発的に届ける。
+        # calendar_prep_job(8秒) / daily_ai_news_job(15秒) よりさらに後ろ（22秒後）にずらす。
+        async def _delayed_meal_check():
+            await asyncio.sleep(22)
+            await meal_reminder_job(llm)
+        asyncio.create_task(_delayed_meal_check())
+
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%Y年%m月%d日 %H時%M分%S秒")
@@ -378,6 +433,12 @@ async def chat_endpoint(payload: ChatMessage):
         print(f"[episode_context] 長さ={len(episode_context)} image含む={_has_image}")
     calendar_context = get_calendar_context()
     growth_context   = get_growth_context()
+
+    # ── 食事記録（孤食ロボット機能） ──
+    # 直近の食事記録を振り返り用コンテキストとして渡す。
+    # 0件の場合は build_meal_context() が空文字を返すので、プロンプトに何も追加されない。
+    recent_meal_logs = await get_recent_meal_logs(limit=7)
+    meal_context     = build_meal_context(recent_meal_logs)
 
     # ── ユーザープロフィール / identity_context ──
     user_profile = await get_user_profile(wallet_address) if wallet_address else None
@@ -492,6 +553,7 @@ async def chat_endpoint(payload: ChatMessage):
             "growth_context":            growth_context,
             "episode_context":           episode_context,
             "emotion_context":           emotion_context,
+            "meal_context":              meal_context,
             "identity_context":          identity_context,
             "location_context":          location_context,
             "time_context":              time_context,
@@ -656,6 +718,14 @@ async def chat_endpoint(payload: ChatMessage):
                 lng=lng,
             )
         )
+
+        # 食事記録の保存（孤食ロボット機能・fire-and-forget）
+        # ユーザー発話に食事キーワードが含まれる場合のみ、LLMに軽く内容を整理させてから保存する。
+        # 雑談中は一切呼ばれないため、通常会話のコストは増えない。
+        if detect_meal_mention(payload.message):
+            asyncio.create_task(
+                _extract_and_save_meal_log(payload.message, llm, lat, lng)
+            )
 
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)

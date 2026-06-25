@@ -724,3 +724,157 @@ async def get_today_ai_news() -> str:
         print(f"[AI情報ダイジェスト] {digest_date}分（本日分ではない）を返します")
         return f"（{digest_date}時点の情報です）{summary}"
 
+
+# ═══════════════════════════════════════════════════════
+# 食事記録（孤食ロボット機能）
+# 「ご飯食べた」「コンビニで弁当買った」のような発話を検知して記録し、
+# ①振り返って話す ②食事時間帯にプロアクティブに声をかける ③ゆるい健康アドバイスをする
+# という3つの体験を支える土台。
+# ═══════════════════════════════════════════════════════
+
+MEAL_KEYWORDS = [
+    "ご飯", "ごはん", "食べた", "食べる", "食事", "ランチ", "朝食", "昼食", "夕食", "晩飯",
+    "弁当", "コンビニ", "外食", "自炊", "作った", "レンジ", "出前", "デリバリー", "おやつ",
+]
+
+
+def detect_meal_mention(user_text: str) -> bool:
+    """ユーザー発話に食事関連のキーワードが含まれるかどうかを判定する。"""
+    return any(kw in user_text for kw in MEAL_KEYWORDS)
+
+
+async def save_meal_log(
+    description: str,
+    meal_type: str | None = None,
+    is_alone: bool | None = None,
+    healthiness: str | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> bool:
+    """
+    1件の食事記録を保存する。description以外は分かる範囲でよい（不明ならNone）。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    endpoint = f"{url}/rest/v1/meal_logs"
+    headers  = {**_sb_headers(), "Content-Type": "application/json"}
+    data: dict = {
+        "description": description,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if meal_type:
+        data["meal_type"] = meal_type
+    if is_alone is not None:
+        data["is_alone"] = is_alone
+    if healthiness:
+        data["healthiness"] = healthiness
+    if lat is not None and lng is not None:
+        data["lat"] = lat
+        data["lng"] = lng
+
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, json=data, headers=headers, timeout=5.0)
+        if res.status_code not in (200, 201):
+            print(f"[食事記録] 保存失敗: status={res.status_code} body={res.text[:200]}")
+            return False
+        print(f"[食事記録] 保存しました: {description[:30]}")
+        return True
+    except Exception as e:
+        print(f"[食事記録エラー] {e}")
+        return False
+
+
+async def get_recent_meal_logs(limit: int = 7) -> list:
+    """直近の食事記録を新しい順に取得する。傾向の振り返り・アドバイス生成に使う。"""
+    url, key = _sb()
+    if not url or not key:
+        return []
+
+    endpoint = (
+        f"{url}/rest/v1/meal_logs"
+        f"?order=created_at.desc&limit={limit}"
+        f"&select=meal_type,description,is_alone,healthiness,created_at"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            print(f"[食事記録取得エラー] status={res.status_code} body={res.text[:200]}")
+            return []
+        return res.json()
+    except Exception as e:
+        print(f"[食事記録取得エラー] {e}")
+        return []
+
+
+def build_meal_context(logs: list) -> str:
+    """
+    直近の食事記録をプロンプト用の短い文字列に整形する。
+    1件も無ければ空文字（プロンプトに何も追加しない）。
+    """
+    if not logs:
+        return ""
+
+    JST = timezone(timedelta(hours=9))
+    lines = []
+    alone_count = 0
+    junk_count  = 0
+
+    for log in logs:
+        try:
+            dt = datetime.fromisoformat(log["created_at"]).astimezone(JST)
+            time_str = dt.strftime("%m/%d %H:%M")
+        except (KeyError, ValueError, TypeError):
+            time_str = ""
+        desc = log.get("description", "")
+        alone_mark = "（一人）" if log.get("is_alone") else ""
+        lines.append(f"- {time_str} {desc}{alone_mark}")
+
+        if log.get("is_alone"):
+            alone_count += 1
+        if log.get("healthiness") == "junk":
+            junk_count += 1
+
+    summary_note = ""
+    if alone_count >= 3:
+        summary_note += "（最近、一人で食べている記録が多い）"
+    if junk_count >= 3:
+        summary_note += "（最近、コンビニ・外食が続いている）"
+
+    return "【最近の食事記録】" + summary_note + "\n" + "\n".join(lines)
+
+
+async def should_check_meal_reminder(meal_type: str) -> bool:
+    """
+    その日の meal_type（"breakfast"/"lunch"/"dinner"）の記録がまだ無いかを判定する。
+    食事時間帯のプロアクティブ発話（「お昼食べた？」等）を、同じ食事について
+    1日に何度も繰り返さないようにするためのガード。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    JST = timezone(timedelta(hours=9))
+    today_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).isoformat()
+
+    endpoint = (
+        f"{url}/rest/v1/meal_logs"
+        f"?meal_type=eq.{meal_type}&created_at=gte.{today_start_utc}"
+        f"&select=id&limit=1"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            return False
+        rows = res.json()
+        return len(rows) == 0  # 今日まだ記録が無ければ True（声をかけてよい）
+    except Exception as e:
+        print(f"[食事リマインダー判定エラー] {e}")
+        return False
+
+

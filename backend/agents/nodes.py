@@ -262,6 +262,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         f"{state.get('growth_context', '')}"
         f"{state.get('emotion_context', '')}"
         f"{state.get('episode_context', '')}"
+        f"{state.get('meal_context', '')}"
         f"{state.get('time_context', '')}"
         f"{state.get('location_context', '')}"
         f"{agent_insights}"

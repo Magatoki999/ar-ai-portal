@@ -28,7 +28,13 @@ from services.emotion import (
     get_calendar_context,
     get_growth_context,
 )
-from services.memory import save_agent_memo, save_ai_news_digest
+from services.memory import (
+    save_agent_memo,
+    save_ai_news_digest,
+    should_check_meal_reminder,
+    get_recent_meal_logs,
+    build_meal_context,
+)
 from services.calendar import (
     get_upcoming_events,
     build_prep_suggestion,
@@ -391,3 +397,92 @@ async def calendar_prep_job(llm) -> None:
 
         # 1回のジョブ実行で複数件まとめて喋らせると不自然なので、1件だけ提案して終了
         break
+
+
+# ─── 食事リマインダー・ゆるい健康アドバイス（孤食ロボット機能） ───
+# 「ご飯食べた？」と一緒に食べている気分にさせる声かけと、
+# 直近の食事傾向を振り返ったゆるいアドバイスを行う。
+# calendar_prep_job と同じく [INITIAL_GREETING] 時に main.py から呼ばれる（cron登録なし）。
+
+# (開始時, 終了時, meal_type, 声かけの種類) のタプル。時間帯は JST。
+_MEAL_WINDOWS = [
+    (6,  10, "breakfast", "朝食"),
+    (11, 14, "lunch",     "昼食"),
+    (17, 21, "dinner",    "夕食"),
+]
+
+
+def _current_meal_window():
+    """現在時刻（JST）がどの食事時間帯に当たるかを返す。当たらなければ None。"""
+    JST = timezone(timedelta(hours=9))
+    hour = datetime.now(JST).hour
+    for start, end, meal_type, label in _MEAL_WINDOWS:
+        if start <= hour < end:
+            return meal_type, label
+    return None
+
+
+async def meal_reminder_job(llm) -> None:
+    """
+    今が食事時間帯で、その食事についてまだ今日記録が無ければ、
+    「一緒に食べている気分」になれるような一言を自発的に届ける。
+    時間帯に当たらない場合や、すでに記録済みの場合は何もしない。
+    """
+    if not state.manager.active_connections:
+        return
+
+    window = _current_meal_window()
+    if not window:
+        return
+    meal_type, meal_label = window
+
+    if not await should_check_meal_reminder(meal_type):
+        print(f"[食事リマインダー] スキップ：今日の{meal_label}は既に記録済み")
+        return
+
+    # 直近の食事記録を踏まえて、ゆるい一言を生成する（説教にならないよう注意書きを入れる）
+    recent_logs  = await get_recent_meal_logs(limit=5)
+    meal_context = build_meal_context(recent_logs)
+
+    prompt = (
+        f"あなたはXR観測ナビゲーター「ルキルキ」です。今は{meal_label}の時間帯です。"
+        f"{meal_label}をまだ取っていないかもしれないユーザーに、一緒に食事をしている気分に"
+        "なれるような、優しく気にかける一言を作ってください。\n"
+        "【絶対ルール】\n"
+        "- 説教や指示にならないこと（「ちゃんと食べなさい」のような言い方は禁止）。\n"
+        "- 1文、40文字以内。\n"
+        "- 直近の食事記録（下記）に同じような食事が続いていれば、軽く触れてもよいが、"
+        "深刻に指摘しないこと（「最近コンビニ多いけど、たまには違うのも気分変わるかもね」程度の軽さ）。\n"
+        "- 記録が無ければ、ただ「お昼食べた？一緒の気分になりたいな」程度の軽い声かけでよい。\n\n"
+        f"{meal_context if meal_context else '（直近の食事記録はまだありません）'}"
+    )
+
+    try:
+        response = await llm.ainvoke(prompt)
+        message  = response.content.strip().strip('"')
+    except Exception as e:
+        print(f"[食事リマインダー] 生成エラー: {e}")
+        return
+
+    if not message:
+        return
+
+    spatial_effect = "sakura"
+    audio_base64   = await generate_tts(message)
+    audio_mime = (
+        "audio/wav"
+        if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+        else "audio/mpeg"
+    )
+
+    await state.manager.broadcast(
+        {
+            "type":           "proactive_speech",
+            "reply":          message,
+            "audio_data":     audio_base64,
+            "audio_mime":     audio_mime,
+            "spatial_effect": spatial_effect,
+        }
+    )
+    print(f"[食事リマインダー] {meal_label}の声かけを配信しました: {message}")
+    state.last_user_interaction = datetime.now(timezone.utc)
