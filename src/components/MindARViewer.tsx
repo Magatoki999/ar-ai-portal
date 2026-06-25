@@ -50,6 +50,10 @@ export default function MindARViewer({ address }: MindARViewerProps) {
 
   const [isCapturing,      setIsCapturing]      = useState(false);
 
+  // マーカーロスト中かどうか。RukiFaceIcon（右下の顔アイコン）の表示切り替えに使う。
+  // 字幕の5秒保持（lostSubtitleTimerRef）とは独立しており、アイコンはロスト中ずっと表示し続ける。
+  const [isTargetLost, setIsTargetLost] = useState(false);
+
   // setSubtitle のラッパー。新しい字幕がセットされる時点で、ロスト後に仕込んだ
   // 「5秒後にプレースホルダーへ戻す」タイマーが残っていれば必ずキャンセルする。
   // これによりロスト中でもテキストで会話を続けた場合、その返答がタイマーで
@@ -177,6 +181,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         clearTimeout(lostSubtitleTimerRef.current);
         lostSubtitleTimerRef.current = null;
       }
+      setIsTargetLost(false);
       notifyTargetFound();
       chatOnTargetFound();
     },
@@ -185,6 +190,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
       // busy / thinking 状態を強制解除してロスト後も会話できるようにする
       resetBusy();
       setAiStatus("idle");
+      setIsTargetLost(true);
 
       // ルキルキが話していたセリフ（字幕）はすぐに消さず、5秒間そのまま見せておく。
       // それまでに別の理由で字幕が更新されていれば、このタイマーは古い文言で
@@ -284,6 +290,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         onSendMessage={handleSendMessage}
         onCaptureSave={handleCaptureSave}
         inputRef={inputRef}
+        isTargetLost={isTargetLost}
       />
 
       {/* ミッションログパネル */}

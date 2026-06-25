@@ -2,6 +2,7 @@
 "use client";
 
 import type { AIStatus, SearchPhase } from "../lib/types";
+import { RukiFaceIcon } from "./RukiFaceIcon";
 
 interface RukiHUDProps {
   aiStatus:          AIStatus;
@@ -17,6 +18,9 @@ interface RukiHUDProps {
   onCaptureSave:     () => void;
   inputRef:          React.RefObject<HTMLInputElement>;
   isGpsLoading?:     boolean;
+  // マーカーロスト中かどうか。true の間、右下に顔アイコン（RukiFaceIcon）を表示する。
+  // ロスト中も会話自体は継続できるため、ルキルキの存在感が薄くならないようにするための表示。
+  isTargetLost?:     boolean;
 }
 
 export function RukiHUD({
@@ -32,6 +36,7 @@ export function RukiHUD({
   onSendMessage,
   onCaptureSave,
   inputRef,
+  isTargetLost = false,
 }: RukiHUDProps) {
   const phaseColor =
     searchPhase === "STABLE"  ? "text-emerald-400" :
@@ -95,6 +100,9 @@ export function RukiHUD({
           </p>
         </div>
       </div>
+
+      {/* マーカーロスト中の顔アイコン（右下・タップ透過） */}
+      {isTargetLost && <RukiFaceIcon aiStatus={aiStatus} />}
 
       {/* 入力エリア: ここだけタップを受け取る */}
       <div className="px-4 pb-6" style={{ pointerEvents: "auto" }}>
