@@ -12,11 +12,10 @@ interface RukiFaceIconProps {
   facialEmotion?: FacialEmotion;
 }
 
-// 1枚目は常に idle_01.png で固定。2枚目だけが状態/感情に応じて切り替わる。
 // 画像はすべて public/images/ 配下に配置されている。
-const FIRST_FRAME = "/images/idle_01.png";
+const IDLE_FIRST_FRAME = "/images/idle_01.png";
 
-// 2枚目のファイル名（拡張子・パスを除いた部分）。
+// 2枚目（および、talking中に感情がある場合は1枚目も含めて）のファイル名キー。
 // thinking中は常に "thinking"、idle中は常に "idle"。
 // talking中だけ facialEmotion（fun/sad/worry/angry/neutral）で変わる。
 // neutral は専用画像が無いため talking_02.png を使う。
@@ -34,14 +33,11 @@ function resolveSecondFrameKey(
 export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
   const [frameIndex, setFrameIndex] = useState<0 | 1>(0);
 
-  // 一時デバッグ用ログ：実際に渡されている props を確認する
-  useEffect(() => {
-    console.log("[RukiFaceIcon] props更新", { aiStatus, facialEmotion });
-  }, [aiStatus, facialEmotion]);
-
-  // 1秒ごとに 1枚目(idle_01固定) ⇄ 2枚目(可変) を切り替える。
-  // aiStatus / facialEmotion が変わってもインターバル自体は張り直さず、
-  // 参照する画像パスだけを切り替える。
+  // 1秒ごとに1枚目⇄2枚目を切り替えるインターバル。
+  // ただし talking中に具体的な感情（fun/sad/worry/angry）がある場合は、
+  // 1枚目も2枚目と同じ画像にして実質ストップモーションにする
+  // （以前は1秒ごとにidle_01.pngへ戻ってしまい、感情がついたり消えたりするように
+  //   見える問題があったため、会話中は感情をはっきり維持する仕様に変更）。
   useEffect(() => {
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev === 0 ? 1 : 0));
@@ -51,12 +47,15 @@ export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
 
   const secondFrameKey = resolveSecondFrameKey(aiStatus, facialEmotion);
   const secondFrame = `/images/${secondFrameKey}_02.png`;
-  const src = frameIndex === 0 ? FIRST_FRAME : secondFrame;
 
-  // 一時デバッグ用ログ：実際に解決された画像パスを確認する
-  useEffect(() => {
-    console.log("[RukiFaceIcon] secondFrameKey=", secondFrameKey, "secondFrame=", secondFrame);
-  }, [secondFrameKey, secondFrame]);
+  // talking中に具体的な感情がある場合だけ、1枚目も2枚目と同じ画像に固定する。
+  // それ以外（idle/thinking/talkingでneutral）は、従来通り
+  // idle_01.png（1枚目）⇄ 各状態の02（2枚目）のアニメーションを維持する。
+  const hasSpecificEmotion =
+    aiStatus === "talking" && !!facialEmotion && facialEmotion !== "neutral";
+  const firstFrame = hasSpecificEmotion ? secondFrame : IDLE_FIRST_FRAME;
+
+  const src = frameIndex === 0 ? firstFrame : secondFrame;
 
   return (
     <div
