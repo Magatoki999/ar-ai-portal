@@ -2,25 +2,41 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AIStatus } from "../lib/types";
+import type { AIStatus, FacialEmotion } from "../lib/types";
 
 interface RukiFaceIconProps {
   aiStatus: AIStatus;
+  // セリフの意味合いから判定された感情。evaluator_node が品質評価と同時に分類する。
+  // aiStatus が "talking" のときだけ参照される（thinking中は常にthinking表示、
+  // idle中は常にidle表示で、facialEmotionは無視される）。
+  facialEmotion?: FacialEmotion;
 }
 
-// aiStatus（idle/thinking/talking）ごとに2枚のフレームを1秒ごとに切り替える。
-// マーカーロスト中、ルキルキの存在感が薄くならないよう右下に小さく表示するためのアイコン。
-const FRAME_PATHS: Record<AIStatus, [string, string]> = {
-  idle:     ["/idle_01.png",     "/idle_02.png"],
-  thinking: ["/thinking_01.png", "/thinking_02.png"],
-  talking:  ["/talking_01.png",  "/talking_02.png"],
-};
+// 1枚目は常に idle_01.png で固定。2枚目だけが状態/感情に応じて切り替わる。
+// 画像はすべて public/images/ 配下に配置されている。
+const FIRST_FRAME = "/images/idle_01.png";
 
-export function RukiFaceIcon({ aiStatus }: RukiFaceIconProps) {
+// 2枚目のファイル名（拡張子・パスを除いた部分）。
+// thinking中は常に "thinking"、idle中は常に "idle"。
+// talking中だけ facialEmotion（fun/sad/worry/angry/neutral）で変わる。
+// neutral は専用画像が無いため talking_02.png を使う。
+function resolveSecondFrameKey(
+  aiStatus: AIStatus,
+  facialEmotion: FacialEmotion | undefined
+): string {
+  if (aiStatus === "thinking") return "thinking";
+  if (aiStatus === "idle") return "idle";
+  // aiStatus === "talking"
+  if (facialEmotion && facialEmotion !== "neutral") return facialEmotion;
+  return "talking";
+}
+
+export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
   const [frameIndex, setFrameIndex] = useState<0 | 1>(0);
 
-  // 1秒ごとに 01 ⇄ 02 を切り替える。aiStatus が変わっても
-  // インターバル自体は張り直さず、表示する画像パスだけを切り替える。
+  // 1秒ごとに 1枚目(idle_01固定) ⇄ 2枚目(可変) を切り替える。
+  // aiStatus / facialEmotion が変わってもインターバル自体は張り直さず、
+  // 参照する画像パスだけを切り替える。
   useEffect(() => {
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev === 0 ? 1 : 0));
@@ -28,8 +44,9 @@ export function RukiFaceIcon({ aiStatus }: RukiFaceIconProps) {
     return () => clearInterval(interval);
   }, []);
 
-  const frames = FRAME_PATHS[aiStatus] ?? FRAME_PATHS.idle;
-  const src = frames[frameIndex];
+  const secondFrameKey = resolveSecondFrameKey(aiStatus, facialEmotion);
+  const secondFrame = `/images/${secondFrameKey}_02.png`;
+  const src = frameIndex === 0 ? FIRST_FRAME : secondFrame;
 
   return (
     <div

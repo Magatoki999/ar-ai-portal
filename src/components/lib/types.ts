@@ -7,6 +7,11 @@
 export type AIStatus    = "idle" | "thinking" | "talking";
 export type SearchPhase = "OFFLINE" | "STABLE" | "CONNECTING..." | "TAVILY_SEARCHING..." | "DATA_ANALYZING...";
 
+// RukiFaceIcon（マーカーロスト中の顔アイコン）の表情。2026-06-26追加。
+// evaluator_node がセリフの意味合いから分類する。thinking中は使われず、
+// aiStatus が "talking" のときだけこの値で表情が変わる（idle中はneutral相当の固定表示）。
+export type FacialEmotion = "fun" | "sad" | "worry" | "angry" | "neutral";
+
 export interface MorphTargetRef {
   mesh: any;
   idxs: number[];
@@ -28,6 +33,7 @@ export interface ChatApiResponse {
   arweave_tx_id:     string;
   show_image_url:    string;
   engrave_triggered: boolean;
+  facial_emotion?:   FacialEmotion;
   status:            string;
 }
 
@@ -51,6 +57,7 @@ export interface WsProactiveSpeech {
   audio_data:     string | null;
   audio_mime?:    string;
   spatial_effect: string;
+  facial_emotion?: FacialEmotion;
 }
 
 export interface WsStatusUpdate {

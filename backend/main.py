@@ -626,6 +626,9 @@ async def chat_endpoint(payload: ChatMessage):
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
         arweave_tx_id  = result.get("arweave_tx_id", "")
+        # RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替に使う。
+        # evaluator_node が品質評価と同時に分類している（追加LLM呼び出しなし）。
+        facial_emotion = result.get("facial_emotion", "neutral")
 
         # ENGRAVE 判定
         _engrave = result.get("engrave_triggered", False)
@@ -806,6 +809,7 @@ async def chat_endpoint(payload: ChatMessage):
         "show_image_url":   _show_image,
         "engrave_triggered": result.get("engrave_triggered", False),
         "audio_mime":       audio_mime,
+        "facial_emotion":   facial_emotion,
         "status":           "success",
     }
 

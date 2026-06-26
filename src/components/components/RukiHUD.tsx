@@ -1,7 +1,7 @@
 // components/RukiHUD.tsx
 "use client";
 
-import type { AIStatus, SearchPhase } from "../lib/types";
+import type { AIStatus, SearchPhase, FacialEmotion } from "../lib/types";
 import { RukiFaceIcon } from "./RukiFaceIcon";
 
 interface RukiHUDProps {
@@ -21,6 +21,8 @@ interface RukiHUDProps {
   // マーカーロスト中かどうか。true の間、右下に顔アイコン（RukiFaceIcon）を表示する。
   // ロスト中も会話自体は継続できるため、ルキルキの存在感が薄くならないようにするための表示。
   isTargetLost?:     boolean;
+  // RukiFaceIcon の表情（fun/sad/worry/angry/neutral）。2026-06-26追加。
+  facialEmotion?:    FacialEmotion;
 }
 
 export function RukiHUD({
@@ -37,6 +39,7 @@ export function RukiHUD({
   onCaptureSave,
   inputRef,
   isTargetLost = false,
+  facialEmotion = "neutral",
 }: RukiHUDProps) {
   const phaseColor =
     searchPhase === "STABLE"  ? "text-emerald-400" :
@@ -102,7 +105,7 @@ export function RukiHUD({
       </div>
 
       {/* マーカーロスト中の顔アイコン（右下・タップ透過） */}
-      {isTargetLost && <RukiFaceIcon aiStatus={aiStatus} />}
+      {isTargetLost && <RukiFaceIcon aiStatus={aiStatus} facialEmotion={facialEmotion} />}
 
       {/* 入力エリア: ここだけタップを受け取る */}
       <div className="px-4 pb-6" style={{ pointerEvents: "auto" }}>

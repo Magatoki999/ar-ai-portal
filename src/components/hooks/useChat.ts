@@ -7,6 +7,7 @@ import type {
   HistoryItem,
   SearchPhase,
   ChatApiResponse,
+  FacialEmotion,
 } from "../lib/types";
 import { base64ToAudioUrl, resolveAudioMime } from "../lib/audio";
 
@@ -29,6 +30,8 @@ interface UseChatOptions {
   onShowImage:         (url: string) => void;
   onSpotProposal:      (name: string) => void;
   onSnapResult:        (url: string) => void;
+  // RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替用。2026-06-26追加。
+  onFacialEmotionChange?: (emotion: FacialEmotion) => void;
 }
 
 // ── GPS 取得 ──
@@ -100,6 +103,7 @@ export function useChat({
   onShowImage,
   onSpotProposal,
   onSnapResult,
+  onFacialEmotionChange,
 }: UseChatOptions) {
   const [chatHistory,       setChatHistory]       = useState<HistoryItem[]>([]);
   const [isUploadingMemory, setIsUploadingMemory] = useState(false);
@@ -178,13 +182,16 @@ export function useChat({
     if (data.spot_proposal)  onSpotProposal(data.spot_proposal);
     if (data.arweave_tx_id)  onEngraveToast(data.arweave_tx_id);
     if (data.show_image_url) onShowImage(data.show_image_url);
+    // RukiFaceIcon の表情切替（talking 中のみ反映される。idle/thinking 中は無視されるため、
+    // 値が来ても安全に渡せる）。
+    if (data.facial_emotion) onFacialEmotionChange?.(data.facial_emotion);
 
     onSubtitleChange(data.reply);
     // 非ブロッキングで再生開始。完了後に isBusy を解除
     playReply(data.audio_data, data.audio_mime, () => {
       isBusyRef.current = false;
     });
-  }, [onSpatialEffect, onSpotProposal, onEngraveToast, onShowImage,
+  }, [onSpatialEffect, onSpotProposal, onEngraveToast, onShowImage, onFacialEmotionChange,
       onSubtitleChange, playReply, currentEffectRef]);
 
   // ── ENGRAVE 処理 ──

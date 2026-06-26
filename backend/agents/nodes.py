@@ -522,31 +522,60 @@ async def evaluator_node(state: RukirukiState) -> dict:
     生成された返答を自己評価する。
     スコアが低ければ retry_count をインクリメントして再試行フラグを立てる。
     最大2回まで再試行。
+
+    2026-06-26追加: 同じLLM呼び出しの中で、返答の感情（facial_emotion）も分類する。
+    追加のLLM呼び出しを増やさず、品質評価と同時に判定することでコストを抑える狙い。
+    facial_emotion は RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切り替えに使われる。
     """
     ai_reply = state.get("ai_reply", "")
     retry_count = state.get("retry_count", 0)
 
-    # 最大2回まで（3回目以降は必ずOKにして無限ループを防ぐ）
+    # 最大2回まで（3回目以降は必ずOKにして無限ループを防ぐ）。
+    # facial_emotion はこの場合判定できないため neutral 扱いにする
+    # （フロント側では aiStatus が thinking/idle のときは無視されるため実害はない）。
     if retry_count >= 2 or not ai_reply:
-        return {"eval_score": 10}
+        return {"eval_score": 10, "facial_emotion": "neutral"}
 
     prompt = (
         "あなたはルキルキの返答品質評価者です。\n"
-        "以下の返答を0〜10点で評価し、点数だけを出力してください。\n\n"
-        "減点基準:\n"
+        "以下の返答について、①品質評価（0〜10点）と②セリフの意味合いから読み取れる感情、"
+        "の2つをJSON形式で出力してください。\n"
+        "出力は厳密にJSONのみ（説明文や前置き、Markdownのコードブロックは禁止）。\n\n"
+        '{"score": 0〜10の整数, "facial_emotion": "fun/sad/worry/angry/neutralのいずれか"}\n\n'
+        "①品質評価の減点基準:\n"
         "- URLが含まれている (-5点)\n"
         "- 100文字を大きく超えて長すぎる (-2点)\n"
         "- 日本語として不自然 (-3点)\n"
         "- エフェクトタグが残っている (-2点)\n\n"
+        "②facial_emotionの判定基準（セリフ全体のトーンで判断。複数当てはまる場合は最も強い感情を選ぶ）:\n"
+        "- fun: 楽しい・嬉しい・笑っている・はしゃいでいるトーン\n"
+        "- sad: 寂しい・切ない・残念がっているトーン\n"
+        "- worry: 心配・不安・気がかりなトーン\n"
+        "- angry: 怒り・ムッとしている・ツッコミが強いトーン\n"
+        "- neutral: 上記のどれにも明確に当てはまらない、落ち着いた・普通のトーン\n\n"
         f"返答:\n{ai_reply}\n\n"
-        "点数（数字のみ）:"
+        "JSON:"
     )
     try:
         res = await llm_fast.ainvoke([HumanMessage(content=prompt)])
-        score_text = res.content.strip()
-        score = int(re.search(r"\d+", score_text).group())
+        clean = re.sub(r"```json|```", "", res.content.strip()).strip()
+
+        try:
+            data = json.loads(clean)
+            score = int(data.get("score", 10))
+            facial_emotion = data.get("facial_emotion", "neutral")
+        except (json.JSONDecodeError, ValueError, TypeError):
+            # JSON解析に失敗した場合、数字だけは抜き出せる可能性があるのでフォールバックする
+            match = re.search(r"\d+", clean)
+            score = int(match.group()) if match else 10
+            facial_emotion = "neutral"
+            print(f"[Evaluator] JSON解析失敗。scoreのみ抽出: {clean[:100]}")
+
         score = max(0, min(10, score))
-        print(f"[Evaluator] score={score} retry={retry_count}")
+        if facial_emotion not in ("fun", "sad", "worry", "angry", "neutral"):
+            facial_emotion = "neutral"
+
+        print(f"[Evaluator] score={score} retry={retry_count} facial_emotion={facial_emotion}")
 
         # ─── Arweave永続化判定 ───
         # eval_score >= 8 かつ 感情が excited / melancholy の場合のみ保存
@@ -573,10 +602,10 @@ async def evaluator_node(state: RukirukiState) -> dict:
             print(f"[Arweave] 永続化条件を満たしました（理由: {reason}）")
             arweave_tx_id = await save_to_arweave(state)
 
-        return {"eval_score": score, "arweave_tx_id": arweave_tx_id}
+        return {"eval_score": score, "arweave_tx_id": arweave_tx_id, "facial_emotion": facial_emotion}
     except Exception as e:
         print(f"[Evaluator Node Error] {e}")
-        return {"eval_score": 10, "arweave_tx_id": ""}
+        return {"eval_score": 10, "arweave_tx_id": "", "facial_emotion": "neutral"}
 
 
 # ─── ⑧ 条件分岐関数（should_retry） ───

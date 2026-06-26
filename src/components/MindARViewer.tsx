@@ -7,7 +7,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import type { AIStatus, SearchPhase } from "./lib/types";
+import type { AIStatus, SearchPhase, FacialEmotion } from "./lib/types";
 
 import { useVoice }      from "./hooks/useVoice";
 import { useWebSocket }  from "./hooks/useWebSocket";
@@ -53,6 +53,10 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   // マーカーロスト中かどうか。RukiFaceIcon（右下の顔アイコン）の表示切り替えに使う。
   // 字幕の5秒保持（lostSubtitleTimerRef）とは独立しており、アイコンはロスト中ずっと表示し続ける。
   const [isTargetLost, setIsTargetLost] = useState(false);
+
+  // RukiFaceIcon の表情（fun/sad/worry/angry/neutral）。evaluator_node がセリフの意味合いから
+  // 分類した結果をAPIレスポンスから受け取る。aiStatusが"talking"のときだけ参照される。
+  const [facialEmotion, setFacialEmotion] = useState<FacialEmotion>("neutral");
 
   // setSubtitle のラッパー。新しい字幕がセットされる時点で、ロスト後に仕込んだ
   // 「5秒後にプレースホルダーへ戻す」タイマーが残っていれば必ずキャンセルする。
@@ -151,6 +155,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     onShowImage:     (url) => setShowImageUrl(url),
     onSpotProposal:  handleSpotProposal,
     onSnapResult:    (url) => setSnapImageUrl(url),
+    onFacialEmotionChange: setFacialEmotion,
   });
 
   // ── 3. WebSocket フック ──
@@ -299,6 +304,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         onCaptureSave={handleCaptureSave}
         inputRef={inputRef}
         isTargetLost={isTargetLost}
+        facialEmotion={facialEmotion}
       />
 
       {/* ミッションログパネル */}
