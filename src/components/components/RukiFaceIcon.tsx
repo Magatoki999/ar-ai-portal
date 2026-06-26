@@ -34,6 +34,11 @@ function resolveSecondFrameKey(
 export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
   const [frameIndex, setFrameIndex] = useState<0 | 1>(0);
 
+  // 一時デバッグ用ログ：実際に渡されている props を確認する
+  useEffect(() => {
+    console.log("[RukiFaceIcon] props更新", { aiStatus, facialEmotion });
+  }, [aiStatus, facialEmotion]);
+
   // 1秒ごとに 1枚目(idle_01固定) ⇄ 2枚目(可変) を切り替える。
   // aiStatus / facialEmotion が変わってもインターバル自体は張り直さず、
   // 参照する画像パスだけを切り替える。
@@ -47,6 +52,11 @@ export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
   const secondFrameKey = resolveSecondFrameKey(aiStatus, facialEmotion);
   const secondFrame = `/images/${secondFrameKey}_02.png`;
   const src = frameIndex === 0 ? FIRST_FRAME : secondFrame;
+
+  // 一時デバッグ用ログ：実際に解決された画像パスを確認する
+  useEffect(() => {
+    console.log("[RukiFaceIcon] secondFrameKey=", secondFrameKey, "secondFrame=", secondFrame);
+  }, [secondFrameKey, secondFrame]);
 
   return (
     <div

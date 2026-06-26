@@ -184,6 +184,7 @@ export function useChat({
     if (data.show_image_url) onShowImage(data.show_image_url);
     // RukiFaceIcon の表情切替（talking 中のみ反映される。idle/thinking 中は無視されるため、
     // 値が来ても安全に渡せる）。
+    console.log("[useChat] data.facial_emotion=", data.facial_emotion, "onFacialEmotionChange存在=", !!onFacialEmotionChange);
     if (data.facial_emotion) onFacialEmotionChange?.(data.facial_emotion);
 
     onSubtitleChange(data.reply);
