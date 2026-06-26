@@ -70,6 +70,24 @@ export function RukiFaceIcon({ aiStatus, facialEmotion }: RukiFaceIconProps) {
         height={80}
         style={{ width: "100%", height: "100%", objectFit: "cover" }}
       />
+      {/* 一時デバッグ表示：開発者ツールが使えない環境向けに、画面に直接値を出す。
+          確認が終わったらこのブロックは削除する。 */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          fontSize: 8,
+          color: "white",
+          background: "rgba(0,0,0,0.7)",
+          textAlign: "center",
+          lineHeight: 1.2,
+          padding: "1px 0",
+        }}
+      >
+        {aiStatus}/{facialEmotion ?? "undef"}
+      </div>
     </div>
   );
 }
