@@ -629,7 +629,6 @@ async def chat_endpoint(payload: ChatMessage):
         # RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替に使う。
         # evaluator_node が品質評価と同時に分類している（追加LLM呼び出しなし）。
         facial_emotion = result.get("facial_emotion", "neutral")
-        print(f"[DEBUG] レスポンスに含めるfacial_emotion={facial_emotion!r} (resultのキー一覧={list(result.keys())})")
 
         # ENGRAVE 判定
         _engrave = result.get("engrave_triggered", False)

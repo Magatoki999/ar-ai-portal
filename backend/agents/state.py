@@ -28,6 +28,7 @@ class RukirukiState(TypedDict):
     memo_context: str                  # agent_memosから取得したDBメモ
     episode_context: str               # エピソードメモリ
     emotion_context: str               # 感情ステート
+    meal_context: str                  # 直近の食事記録（孤食ロボット機能）
     identity_context: str              # ウォレット・ユーザー名
     location_context: str              # GPS・セクター
     time_context: str                  # 現在時刻
@@ -44,6 +45,7 @@ class RukirukiState(TypedDict):
     # ─── Self-Evaluator 用 ───
     eval_score: int                    # 0〜10
     retry_count: int                   # 最大2回まで再試行
+    facial_emotion: str                # fun/sad/worry/angry/neutral（顔アイコン用・2026-06-26追加）
 
     # ─── 動的制約オーバーライド ───
     system_constraints_override: str  # ユーザー名で動的生成したconstraints

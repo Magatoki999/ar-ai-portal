@@ -186,10 +186,7 @@ export function useChat({
     // 値が来ても安全に渡せる）。
     if (data.facial_emotion) onFacialEmotionChange?.(data.facial_emotion);
 
-    // 一時デバッグ：字幕の先頭にAPIレスポンスの実際の値を埋め込んで表示する。
-    // 確認が終わったら元のonSubtitleChange(data.reply)に戻す。
-    const _debugTag = `[DEBUG fe=${JSON.stringify(data.facial_emotion)} cb=${typeof onFacialEmotionChange}] `;
-    onSubtitleChange(_debugTag + data.reply);
+    onSubtitleChange(data.reply);
     // 非ブロッキングで再生開始。完了後に isBusy を解除
     playReply(data.audio_data, data.audio_mime, () => {
       isBusyRef.current = false;
