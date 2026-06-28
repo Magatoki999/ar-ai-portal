@@ -12,10 +12,12 @@ import base64
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
+from dotenv import load_dotenv
+load_dotenv()                                    # ← ここに移動（importの直後、他のservices importより前）
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
@@ -73,8 +75,6 @@ from services.persona import (
 # agents モジュール（既存のまま）
 from agents.router import analyze_and_route
 from agents.graph import build_rukiruki_graph
-
-load_dotenv()
 
 # ─── LLM / ツール ───
 llm = ChatOpenAI(
