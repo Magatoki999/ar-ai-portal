@@ -15,6 +15,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
+from urllib.parse import quote
 
 import httpx
 from langchain_core.tools import tool
@@ -151,12 +152,58 @@ async def _fetch_from_google_books(isbn: str) -> dict | None:
 # reading_logs への保存・取得
 # ═══════════════════════════════════════════════════════
 
+async def _find_existing_log(isbn: str | None, title: str) -> dict | None:
+    """
+    同じ本が既に記帳済みかどうかを調べる。
+    ISBNがあればISBN完全一致、無ければタイトル完全一致（部分一致ではない）で判定する。
+    複数件ヒットした場合は最新（created_at降順の先頭）の1件を返す。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return None
+
+    if isbn:
+        # PostgRESTのeq演算子はURLエンコードされた値を渡す必要がある
+        encoded_isbn = quote(isbn, safe="")
+        endpoint = (
+            f"{url}/rest/v1/reading_logs"
+            f"?isbn=eq.{encoded_isbn}"
+            f"&order=created_at.desc&limit=1"
+            f"&select=id,borrow_count,borrowed_at"
+        )
+    else:
+        # ISBN無し（手入力でISBNを入れなかった等）の場合はタイトル完全一致で代替判定。
+        # find_reading_log_by_title（部分一致）とは別の厳密一致クエリ。
+        encoded_title = quote(title, safe="")
+        endpoint = (
+            f"{url}/rest/v1/reading_logs"
+            f"?title=eq.{encoded_title}"
+            f"&order=created_at.desc&limit=1"
+            f"&select=id,borrow_count,borrowed_at"
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_books_headers(), timeout=5.0)
+        if res.status_code != 200:
+            print(f"[読書通帳] 既存記録の確認に失敗: status={res.status_code}")
+            return None
+        rows = res.json()
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[読書通帳] 既存記録の確認エラー: {e}")
+        return None
+
+
 async def save_reading_log(
     book: dict,
     borrowed_at: date | None = None,
 ) -> bool:
     """
-    書誌情報を1件、reading_logsに保存する。
+    書誌情報を reading_logs に保存する。
+    同じ本（ISBN一致、無ければタイトル完全一致）が既に記帳済みの場合は
+    新規行を作らず、既存行の borrow_count を+1し、borrowed_at を最新の日付に更新する
+    （再読・再度借りた場合の「記帳」として扱う）。
     book は fetch_book_by_isbn() の返り値（isbn/title/author/publisher/price/cover_url）を想定。
     borrowed_at省略時は今日の日付。
     """
@@ -169,13 +216,22 @@ async def save_reading_log(
         print("[読書通帳] titleが無いため保存をスキップしました")
         return False
 
+    new_borrowed_at = (borrowed_at or date.today()).isoformat()
+
+    # ── 既存記録があるか確認 ──
+    existing = await _find_existing_log(book.get("isbn"), title)
+    if existing:
+        return await _increment_borrow_count(existing, new_borrowed_at, title)
+
+    # ── 新規作成 ──
     endpoint = f"{url}/rest/v1/reading_logs"
     headers = {**_books_headers(), "Content-Type": "application/json"}
     data: dict = {
         "title": title,
-        "borrowed_at": (borrowed_at or date.today()).isoformat(),
+        "borrowed_at": new_borrowed_at,
         "source": "library",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # borrow_count は列のDEFAULT 1に任せる（明示的には送らない）
     }
     if book.get("isbn"):
         data["isbn"] = book["isbn"]
@@ -194,7 +250,34 @@ async def save_reading_log(
         if res.status_code not in (200, 201):
             print(f"[読書通帳] 保存失敗: status={res.status_code} body={res.text[:200]}")
             return False
-        print(f"[読書通帳] 保存しました: {title[:30]}")
+        print(f"[読書通帳] 新規記帳しました: {title[:30]}")
+        return True
+    except Exception as e:
+        print(f"[読書通帳エラー] {e}")
+        return False
+
+
+async def _increment_borrow_count(existing: dict, new_borrowed_at: str, title: str) -> bool:
+    """既存行のborrow_countを+1し、borrowed_atを最新の日付に更新する（PATCH）。"""
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    row_id = existing["id"]
+    current_count = existing.get("borrow_count") or 1
+    endpoint = f"{url}/rest/v1/reading_logs?id=eq.{row_id}"
+    headers = {**_books_headers(), "Content-Type": "application/json"}
+    data = {
+        "borrow_count": current_count + 1,
+        "borrowed_at": new_borrowed_at,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.patch(endpoint, json=data, headers=headers, timeout=5.0)
+        if res.status_code not in (200, 204):
+            print(f"[読書通帳] 再記帳の更新失敗: status={res.status_code} body={res.text[:200]}")
+            return False
+        print(f"[読書通帳] 再記帳しました（{current_count + 1}回目）: {title[:30]}")
         return True
     except Exception as e:
         print(f"[読書通帳エラー] {e}")
@@ -210,7 +293,7 @@ async def get_recent_reading_logs(limit: int = 10) -> list:
     endpoint = (
         f"{url}/rest/v1/reading_logs"
         f"?order=created_at.desc&limit={limit}"
-        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at"
+        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count"
     )
     try:
         async with httpx.AsyncClient() as client:
@@ -238,7 +321,7 @@ async def find_reading_log_by_title(query: str, limit: int = 5) -> list:
         f"{url}/rest/v1/reading_logs"
         f"?title=ilike.*{encoded_query}*"
         f"&order=created_at.desc&limit={limit}"
-        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at"
+        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count"
     )
     try:
         async with httpx.AsyncClient() as client:
@@ -318,7 +401,9 @@ async def get_book_history(query: str = "") -> str:
             title = _short_title(log.get("title", ""))
             author = log.get("author", "")
             author_part = f"（{author}）" if author else ""
-            lines.append(f"- {borrowed} {title}{author_part}")
+            count = log.get("borrow_count") or 1
+            count_part = f"・{count}回目" if count > 1 else ""
+            lines.append(f"- {borrowed} {title}{author_part}{count_part}")
         return "見つかった読書記録:\n" + "\n".join(lines)
 
     stats = await get_reading_stats()
@@ -330,7 +415,9 @@ async def get_book_history(query: str = "") -> str:
     for log in recent:
         borrowed = log.get("borrowed_at", "")
         title = _short_title(log.get("title", ""))
-        lines.append(f"- {borrowed} {title}")
+        count = log.get("borrow_count") or 1
+        count_part = f"・{count}回目" if count > 1 else ""
+        lines.append(f"- {borrowed} {title}{count_part}")
 
     price_part = f"・合計{stats['total_price']}円分" if stats["total_price"] else ""
     summary = f"これまでの記録: 累計{stats['count']}冊{price_part}\n\n直近の記録:\n" + "\n".join(lines)
