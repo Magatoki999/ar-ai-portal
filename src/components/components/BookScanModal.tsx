@@ -45,6 +45,8 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
   const [manualIsbn, setManualIsbn] = useState("");
   const [priceInput, setPriceInput] = useState("");
   const [errorMsg, setErrorMsg]     = useState("");
+  // ── 診断用（原因特定後に削除予定） ──
+  const [debugInfo, setDebugInfo]   = useState<string>("初期化前");
 
   const scanCanvasRef   = useRef<HTMLCanvasElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -92,7 +94,14 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
   const tryDecodeOneFrame = useCallback(async () => {
     const container = containerRef.current;
     const video = container?.querySelector("video") as HTMLVideoElement | null;
-    if (!video || video.videoWidth === 0) return; // まだ映像が来ていない
+    if (!video) {
+      setDebugInfo("video要素が見つかりません");
+      return;
+    }
+    if (video.videoWidth === 0) {
+      setDebugInfo(`video発見・しかしvideoWidth=0 (readyState=${video.readyState})`);
+      return;
+    }
 
     if (!scanCanvasRef.current) {
       scanCanvasRef.current = document.createElement("canvas");
@@ -101,13 +110,22 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      setDebugInfo("canvas context取得失敗");
+      return;
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+    if (!zxingReaderRef.current) {
+      setDebugInfo(`video OK(${video.videoWidth}x${video.videoHeight})・しかしZXing未初期化`);
+      return;
+    }
+
     try {
-      const result = await zxingReaderRef.current?.decodeFromCanvas(canvas);
+      const result = await zxingReaderRef.current.decodeFromCanvas(canvas);
       if (result && isMountedRef.current) {
         const text = result.getText?.() ?? String(result);
+        setDebugInfo(`検出: ${text}`);
         // ISBN-13は13桁の数字（978/979始まり）。バーコードの生テキストから抽出する。
         const digitsOnly = text.replace(/[^0-9]/g, "");
         if (digitsOnly.length === 13 && (digitsOnly.startsWith("978") || digitsOnly.startsWith("979"))) {
@@ -115,8 +133,11 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
         }
         // 13桁のISBN以外のバーコード（雑誌コード等）は無視して継続スキャン
       }
-    } catch {
-      // デコード失敗（バーコードが視界に無い等）は通常の状態なので無視して継続
+    } catch (err: any) {
+      // デコード失敗（バーコードが視界に無い等）は通常の状態。
+      // 診断用に、想定内（NotFoundException）かどうかだけ画面に出す。
+      const name = err?.name || err?.constructor?.name || "unknown";
+      setDebugInfo(`video OK(${video.videoWidth}x${video.videoHeight})・decode結果なし(${name})`);
     }
   }, [containerRef, lookupIsbn]);
 
@@ -127,13 +148,16 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
     let cancelled = false;
     (async () => {
       try {
+        setDebugInfo("ZXing読み込み中...");
         // @zxing/library は動的importでクライアントバンドルに限定する
         const { BrowserMultiFormatReader } = await import("@zxing/library");
         if (cancelled) return;
         zxingReaderRef.current = new BrowserMultiFormatReader();
+        setDebugInfo("ZXing初期化完了。スキャンループ開始");
         scanIntervalRef.current = setInterval(tryDecodeOneFrame, SCAN_INTERVAL_MS);
       } catch (err) {
         console.error("[読書通帳] ZXing初期化エラー:", err);
+        setDebugInfo(`ZXing初期化エラー: ${String(err)}`);
         if (!cancelled) {
           setErrorMsg("バーコード読み取り機能の初期化に失敗しました。手入力をご利用ください。");
           setState("error");
@@ -225,6 +249,13 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
               fontSize: 13, opacity: 0.6, marginBottom: 16,
             }}>
               （画面奥のカメラ映像を解析中…）
+            </div>
+            {/* ── 診断用表示（原因特定後に削除予定） ── */}
+            <div style={{
+              fontSize: 11, color: "#fbbf24", marginBottom: 16, wordBreak: "break-all",
+              background: "rgba(0,0,0,0.4)", padding: "8px", borderRadius: 6,
+            }}>
+              🔧 {debugInfo}
             </div>
           </>
         )}
