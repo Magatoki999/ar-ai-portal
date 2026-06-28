@@ -11,7 +11,8 @@
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.11",
     "@tanstack/react-query": "^5.100.14",
-    "@zxing/library": "^0.21.3",
+    "@zxing/browser": "^0.2.0",
+    "@zxing/library": "^0.22.0",
     "mind-ar": "^1.2.5",
     "next": "^15.5.18",
     "react": "^18.3.1",

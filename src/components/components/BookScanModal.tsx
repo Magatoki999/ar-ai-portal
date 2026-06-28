@@ -10,7 +10,7 @@
 //     既存のAR描画ループには一切触れない設計にしている。
 //   - 代わりに、既存の captureFrame（useChat.ts）と同じ手法
 //     （containerEl内の<video>からcanvas.drawImageでフレームを読む）を使い、
-//     そのcanvasを @zxing/library の decodeFromCanvas() に渡して
+//     そのcanvasを @zxing/browser の decodeFromCanvas() に渡して
 //     バーコードをデコードする。カメラの専有権は一切移動しない。
 //
 // 呼び出し側（MindARViewer.tsx）には、AR用のcontainerRef（video/canvasの親要素）
@@ -149,8 +149,10 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
     (async () => {
       try {
         setDebugInfo("ZXing読み込み中...");
-        // @zxing/library は動的importでクライアントバンドルに限定する
-        const { BrowserMultiFormatReader } = await import("@zxing/library");
+        // decodeFromCanvas() は @zxing/browser 側のBrowserMultiFormatReaderにあるメソッド。
+        // @zxing/library 単体には存在せず、それが先ほどのTypeErrorの原因だった
+        // （実機検証で確認済み・2026-06-28）。
+        const { BrowserMultiFormatReader } = await import("@zxing/browser");
         if (cancelled) return;
         zxingReaderRef.current = new BrowserMultiFormatReader();
         setDebugInfo("ZXing初期化完了。スキャンループ開始");
