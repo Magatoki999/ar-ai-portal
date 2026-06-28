@@ -41,7 +41,7 @@ search_tool = TavilySearch(max_results=2)  # type: ignore
 from services.location import locate_current_position
 from services.calendar import get_my_schedule
 from services.memory import get_today_ai_news
-from services.books import get_book_history   # ← 追加
+from services.books import get_book_history
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -240,7 +240,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     system_constraints = build_dynamic_constraints(user_call, state.get("episode_context", ""))
     main_search_tool   = search_tool
     llm_with_tools     = llm_synth.bind_tools(
-        [search_tool, locate_current_position, get_my_schedule, get_today_ai_news, get_book_history]  # ← 追加
+        [search_tool, locate_current_position, get_my_schedule, get_today_ai_news, get_book_history]
     )
 
     base_persona = load_rukiruki_persona(user_call)
@@ -372,7 +372,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                         content=str(ai_news_result),
                         tool_call_id=str(tool_call["id"])
                     ))
-                elif tool_call["name"] == "get_book_history":          # ← 追加
+                elif tool_call["name"] == "get_book_history":
                     book_history_result = await get_book_history.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(
                         content=str(book_history_result),

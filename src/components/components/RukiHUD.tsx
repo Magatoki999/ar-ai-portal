@@ -23,6 +23,8 @@ interface RukiHUDProps {
   isTargetLost?:     boolean;
   // RukiFaceIcon の表情（fun/sad/worry/angry/neutral）。2026-06-26追加。
   facialEmotion?:    FacialEmotion;
+  // 読書通帳：バーコードスキャンモーダルを開く。isTargetLost中のみボタンを表示する。
+  onOpenBookScan?:   () => void;
 }
 
 export function RukiHUD({
@@ -40,6 +42,7 @@ export function RukiHUD({
   inputRef,
   isTargetLost = false,
   facialEmotion = "neutral",
+  onOpenBookScan,
 }: RukiHUDProps) {
   const phaseColor =
     searchPhase === "STABLE"  ? "text-emerald-400" :
@@ -123,6 +126,13 @@ export function RukiHUD({
             className="w-10 h-10 rounded-full border border-white/20 bg-black/50 backdrop-blur-sm flex items-center justify-center text-lg"
             aria-label="記憶写真を撮影"
           >📷</button>
+          {isTargetLost && onOpenBookScan && (
+            <button
+              onClick={onOpenBookScan}
+              className="w-10 h-10 rounded-full border border-white/20 bg-black/50 backdrop-blur-sm flex items-center justify-center text-lg"
+              aria-label="読書通帳に記帳"
+            >📔</button>
+          )}
           <button
             onClick={onOpenLog}
             className="w-10 h-10 rounded-full border border-white/20 bg-black/50 backdrop-blur-sm flex items-center justify-center text-lg"

@@ -280,6 +280,20 @@ async def get_reading_stats() -> dict:
     return {"count": count, "total_price": total_price}
 
 
+def _short_title(title: str) -> str:
+    """
+    NDLサーチ等が返す「メインタイトル : サブタイトル」形式から、
+    会話で読み上げるのに適したメインタイトルだけを取り出す。
+    区切り文字が無ければそのまま返す。
+    """
+    if not title:
+        return title
+    for sep in (" : ", "：", ":"):
+        if sep in title:
+            return title.split(sep, 1)[0].strip()
+    return title.strip()
+
+
 # ═══════════════════════════════════════════════════════
 # 会話中の質問応答用Tool（get_my_schedule / get_today_ai_news と同型）
 # ═══════════════════════════════════════════════════════
@@ -301,7 +315,7 @@ async def get_book_history(query: str = "") -> str:
         lines = []
         for log in logs[:5]:
             borrowed = log.get("borrowed_at", "")
-            title = log.get("title", "")
+            title = _short_title(log.get("title", ""))
             author = log.get("author", "")
             author_part = f"（{author}）" if author else ""
             lines.append(f"- {borrowed} {title}{author_part}")
@@ -315,7 +329,7 @@ async def get_book_history(query: str = "") -> str:
     lines = []
     for log in recent:
         borrowed = log.get("borrowed_at", "")
-        title = log.get("title", "")
+        title = _short_title(log.get("title", ""))
         lines.append(f"- {borrowed} {title}")
 
     price_part = f"・合計{stats['total_price']}円分" if stats["total_price"] else ""

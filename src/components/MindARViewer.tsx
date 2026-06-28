@@ -17,6 +17,7 @@ import { useChat }       from "./hooks/useChat";
 import { RukiHUD }       from "./components/RukiHUD";
 import { HistoryPanel }  from "./components/HistoryPanel";
 import { SnapViewer }    from "./components/SnapViewer";
+import { BookScanModal } from "./components/BookScanModal";
 
 interface MindARViewerProps {
   address?: string;
@@ -49,6 +50,10 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   const [spotProposal,     setSpotProposal]     = useState<string | null>(null);
 
   const [isCapturing,      setIsCapturing]      = useState(false);
+
+  // 読書通帳：バーコードスキャンモーダルの開閉。isTargetLost中のみ📔ボタンが出るため、
+  // モーダル自体もisTargetLost中にしか開かれない想定だが、念のため独立したstateにしている。
+  const [showBookScan,     setShowBookScan]     = useState(false);
 
   // マーカーロスト中かどうか。RukiFaceIcon（右下の顔アイコン）の表示切り替えに使う。
   // 字幕の5秒保持（lostSubtitleTimerRef）とは独立しており、アイコンはロスト中ずっと表示し続ける。
@@ -305,6 +310,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         inputRef={inputRef}
         isTargetLost={isTargetLost}
         facialEmotion={facialEmotion}
+        onOpenBookScan={() => setShowBookScan(true)}
       />
 
       {/* ミッションログパネル */}
@@ -320,6 +326,17 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         <SnapViewer
           imageUrl={(snapImageUrl || showImageUrl)!}
           onClose={() => { setSnapImageUrl(null); setShowImageUrl(null); }}
+        />
+      )}
+
+      {/* 読書通帳：バーコードスキャンモーダル（顔アイコン表示中のみ📔ボタンから開く） */}
+      {showBookScan && (
+        <BookScanModal
+          containerRef={containerRef}
+          onClose={() => setShowBookScan(false)}
+          onLogged={(book) => {
+            updateSubtitle(`📔「${book.title}」を記帳しました！`);
+          }}
         />
       )}
     </div>

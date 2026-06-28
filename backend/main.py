@@ -58,6 +58,7 @@ from services.memory import (
     should_check_meal_reminder,
 )
 from services.snap import generate_snap, upload_to_supabase_storage
+from services.books import fetch_book_by_isbn, save_reading_log
 from services.scheduler import (
     auto_research_job,
     proactive_talk_job,
@@ -197,6 +198,15 @@ class SnapRequest(BaseModel):
     member_name: str
     camera_image: str
     wallet_address: str | None = None
+
+
+class BookLogPayload(BaseModel):
+    isbn: str | None = None
+    title: str
+    author: str | None = None
+    publisher: str | None = None
+    price: int | None = None
+    cover_url: str | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -840,6 +850,36 @@ async def save_memory_photo(payload: MemoryPhotoRequest):
     if ok:
         return {"status": "ok", "image_url": payload.image_url}
     return {"status": "error"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 読書通帳エンドポイント
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/books/lookup")
+async def lookup_book_endpoint(isbn: str):
+    """
+    ISBNから書誌情報を取得して返す（保存はしない）。
+    フロントの記帳確認モーダルが、スキャン直後にこれを呼んで
+    タイトル・著者等を表示するために使う。
+    """
+    book = await fetch_book_by_isbn(isbn)
+    if not book:
+        return {"title": None}
+    return book
+
+
+@app.post("/api/books/log")
+async def log_book_endpoint(payload: BookLogPayload):
+    """確認モーダルで「記帳する」を押した内容を保存する。"""
+    ok = await save_reading_log({
+        "isbn": payload.isbn,
+        "title": payload.title,
+        "author": payload.author,
+        "publisher": payload.publisher,
+        "price": payload.price,
+        "cover_url": payload.cover_url,
+    })
+    return {"status": "ok" if ok else "error"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
