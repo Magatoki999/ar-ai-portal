@@ -207,6 +207,10 @@ class BookLogPayload(BaseModel):
     publisher: str | None = None
     price: int | None = None
     cover_url: str | None = None
+    genre: str | None = None
+    series_title: str | None = None
+    volume: str | None = None
+    published_year: int | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -878,6 +882,10 @@ async def log_book_endpoint(payload: BookLogPayload):
         "publisher": payload.publisher,
         "price": payload.price,
         "cover_url": payload.cover_url,
+        "genre": payload.genre,
+        "series_title": payload.series_title,
+        "volume": payload.volume,
+        "published_year": payload.published_year,
     })
     return {"status": "ok" if ok else "error"}
 

@@ -32,6 +32,10 @@ interface BookInfo {
   publisher: string | null;
   price: number | null;
   cover_url: string | null;
+  genre: string | null;
+  series_title: string | null;
+  volume: string | null;
+  published_year: number | null;
 }
 
 interface BookScanModalProps {
@@ -189,6 +193,10 @@ export function BookScanModal({ containerRef, onClose, onLogged }: BookScanModal
           publisher: book.publisher,
           price: Number.isFinite(priceValue) ? priceValue : null,
           cover_url: book.cover_url,
+          genre: book.genre,
+          series_title: book.series_title,
+          volume: book.volume,
+          published_year: book.published_year,
         }),
       });
       if (!res.ok) throw new Error(`status ${res.status}`);

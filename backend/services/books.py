@@ -99,15 +99,6 @@ async def _fetch_from_ndl(isbn: str) -> dict | None:
     if item is None:
         return None
 
-    # ── 診断用（原因特定後に削除予定） ──
-    debug_series = item.find("dcndl:seriesTitle", _NDL_NS)
-    debug_genre = item.find("dcndl:genre", _NDL_NS)
-    debug_issued = item.find("dcterms:issued", _NDL_NS)
-    print(f"[読書通帳][診断] seriesTitle要素: {debug_series} text={debug_series.text if debug_series is not None else 'N/A'}")
-    print(f"[読書通帳][診断] genre要素: {debug_genre}")
-    print(f"[読書通帳][診断] issued要素: {debug_issued} text={debug_issued.text if debug_issued is not None else 'N/A'}")
-    print(f"[読書通帳][診断] itemの子タグ一覧: {[child.tag for child in item]}")
-
     def _text(tag: str) -> str | None:
         el = item.find(tag, _NDL_NS)
         return el.text.strip() if el is not None and el.text else None
