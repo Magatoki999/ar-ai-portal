@@ -181,12 +181,15 @@ async def _fetch_cover_from_google_books(isbn: str) -> str | None:
 
     items = data.get("items")
     if not items:
+        print(f"[読書通帳][表紙補完] Google Booksに登録なし: {isbn}")
         return None
 
     info = items[0].get("volumeInfo", {})
     cover_url = info.get("imageLinks", {}).get("thumbnail")
     if cover_url:
         print(f"[読書通帳][表紙補完] 取得成功: {isbn}")
+    else:
+        print(f"[読書通帳][表紙補完] ヒットしたが画像URLなし: {isbn}")
     return cover_url
 
 
