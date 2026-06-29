@@ -22,11 +22,13 @@
 | **音声合成（TTS）** | Gemini TTS（メイン） / OpenAI TTS（フォールバック） / ElevenLabs（オプション） | `TTS_PROVIDER` 環境変数で切替。デフォルトは `gemini`。 |
 | **画像生成** | OpenAI `gpt-image-1` | 「○○とスナップ」コマンドによる記念写真合成。 |
 | **外部検索** | Tavily Search | 雑談や手持ち知識で解決できない場合のみ限定的に使用。 |
-| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、画像。 |
+| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、画像。 |
 | **カレンダー連携** | Google Calendar API（OAuth2リフレッシュトークン） | 直近48時間の予定を確認し、準備提案を自発的に配信。 |
 | **永久保存** | Arweave | `||ENGRAVE||` タグ発火、または高品質×特定感情の条件で会話を永続化。 |
 | **位置情報** | geopy (Nominatim) | 逆ジオコーディング・GPSセクター判定。 |
 | **定期実行** | APScheduler | 天気更新・自動リサーチ・自発発話の定期ジョブ。カレンダー先回り提案・AI情報ダイジェストは固定cronではなく「アプリが開かれたタイミング」で日次/時間判定する方式。 |
+| **読書通帳（書誌情報取得）** | 国立国会図書館サーチAPI（NDLサーチ・第一候補） / Google Books API（フォールバック） | いずれもAPIキー不要。両APIとも定価・表紙画像は基本的に提供しないため手入力で補完。 |
+| **読書通帳（バーコード読取）** | `@zxing/browser`（要 `@zxing/library@0.22.0` 固定。新しいバージョンだとpeerDependency解決エラーになるため注意） | MindARの既存`<video>`要素から直接フレームを読み取りデコード。新規`getUserMedia`呼び出しは発生しない。 |
 
 詳細な実装の解説（各ファイルの責務、データフロー、過去のトラブルシュート履歴）は `ArtAR_ルキルキ_技術リファレンス.html` を参照してください。
 
@@ -35,20 +37,37 @@
 ## 📁 ディレクトリ構造
 
 ```text
-MagatokiLab-Project/  (ルート階層)
+ar-ai-portal/  (ルート階層。package.json はここに存在する)
 ├── backend/                  # Python側 (AI対話・音声合成・記憶処理)
 │   ├── main.py                # FastAPI エントリーポイント（ルーティングのみ）
 │   ├── rukiruki_persona.md    # ペルソナ定義
 │   ├── keywords.json          # 自動リサーチ用キーワード辞書
 │   ├── requirements.txt
 │   ├── services/              # 状態・DB・TTS・カレンダー等のロジック層
+│   │   └── books.py           # 読書通帳機能（ISBN照会・記帳・会話Tool。2026-06-28追加）
 │   ├── agents/                # LangGraph ノード・グラフ定義
 │   └── context/               # load_magatoki_context() が読む知識ベース（*.md）
-├── frontend/                  # Next.js側 (Web3認証ゲート・MindARビューア)
-│   ├── src/app/                # App Router エントリー
-│   ├── src/components/         # SBTAuthGate, MindARViewer, hooks/, components/, lib/
-│   └── public/                 # avatar.glb, targets.mind, ruki_appear.wav（※未使用。コードから参照なし）
-│       └── images/             # idle/talking/thinking/fun/sad/worry/angryの顔アイコン画像
+├── src/                       # Next.js側 (Web3認証ゲート・MindARビューア)
+│   │                          # ⚠️ frontend/ という階層は存在しない。src/ はリポジトリのルート直下。
+│   ├── app/                    # App Router エントリー
+│   │   ├── page.tsx
+│   │   ├── layout.tsx / providers.tsx
+│   │   └── mindar/page.tsx
+│   └── components/             # SBTAuthGate, MindARViewer, hooks/, components/, lib/
+│       ├── MindARViewer.tsx
+│       ├── SBTAuthGate.tsx
+│       ├── components/         # ⚠️ 二重ネスト構造（components/components/）。実装上の都合でこうなっている
+│       │   ├── RukiHUD.tsx
+│       │   ├── RukiFaceIcon.tsx
+│       │   ├── HistoryPanel.tsx
+│       │   ├── SnapViewer.tsx
+│       │   └── BookScanModal.tsx   # 読書通帳：バーコードスキャンモーダル（2026-06-28追加）
+│       ├── hooks/               # useAR / useChat / useVoice / useWebSocket
+│       └── lib/                 # types.ts / audio.ts
+├── public/                    # ルート直下（src/ と同階層）
+│   ├── avatar.glb / targets.mind
+│   ├── ruki_appear.wav        # ※未使用。コードから参照なし
+│   └── images/                 # idle/talking/thinking/fun/sad/worry/angryの顔アイコン画像
 ├── start.bat                  # Windows用一発起動スクリプト
 ├── README.md                  # 本書（開発手順・仕様書）
 └── AGENTS.md                  # AIエージェント向け指示書（ペルソナ・対話方針）
@@ -66,6 +85,8 @@ python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+> ⚠️ `main.py` 内の `load_dotenv()` は、他のどの `services` / `agents` モジュールをimportするよりも前に呼ぶ必要がある。`services.scheduler` 等が import 時点で `TAVILY_API_KEY` 等の環境変数を即時に読みにいく実装のため、`load_dotenv()` の呼び出しが後ろにあると `ValidationError` で起動時に落ちる（2026-06-28に発見・修正済み）。
 
 `backend/.env` ファイルを作成し、以下の環境変数を設定します。すべてが必須ではなく、使わない機能（カレンダー連携やArweave等）に対応する変数は省略可能です。
 
@@ -106,14 +127,18 @@ CORS_ORIGINS=http://localhost:3000
 
 > ⚠️ `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` のような認証情報は、リポジトリ内に `client_secret.json` のような実ファイルとして置かないでください。環境変数（`.env` はGit管理外、本番はRenderのEnvironment設定）に集約することを推奨します。
 
-### 2. フロントエンド（`frontend/`）のセットアップ
+> ⚠️ Supabaseは2026年に新しいAPIキー形式（`sb_publishable_...` / `sb_secret_...`）への移行を進めており、旧形式（`anon` / `service_role` のJWT）は2026年末までに段階的に廃止予定。新形式の `sb_secret_...` キーはJWTではないため、HTTPヘッダーは `apikey` のみで送る必要があり、`Authorization: Bearer ...` ヘッダーに乗せるとゲートウェイに拒否される（`services/memory.py` の `_sb_headers()` は旧形式前提で両方のヘッダーを送る実装になっているため、新形式キーに切り替える際は要注意。`services/books.py` は新形式に対応した `apikey` のみのヘッダー関数を独自に持っている）。
+
+### 2. フロントエンドのセットアップ
+
+`frontend/` という階層は存在せず、`src/` がリポジトリのルート直下にあります。`package.json` もルートに置かれているため、ルートディレクトリで以下を実行します。
 
 ```cmd
-cd ../frontend
+cd ..
 npm install
 ```
 
-`frontend/.env.local` ファイルを作成します。
+`.env.local` ファイルをルートに作成します。
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
@@ -144,8 +169,7 @@ cd backend
 venv\Scripts\activate
 uvicorn main:app --port 8000
 
-:: フロントエンド（別ターミナル）
-cd frontend
+:: フロントエンド（別ターミナル。frontend/という階層は無いのでルートのまま）
 npm run dev
 ```
 
@@ -166,6 +190,7 @@ npm run dev
 - **記憶の永久保存（ENGRAVE）:** `||ENGRAVE||` タグが立つか、応答品質が高くかつ感情が一定条件を満たす場合に、会話をArweaveブロックチェーンへ永続保存する。
 - **ステルス式名前記憶:** 会話の中でユーザーが名前を名乗ると、バックエンドが `||NAME:名前||` タグで自動抽出してSupabaseに保存（Upsert）。フロント側へ返すテキストからはタグが完全に除去される。
 - **孤食ロボット機能（食事記録・声かけ・ゆるいアドバイス）:** Wikipedia「孤食ロボット」を参考に実装。①「ご飯食べた」等の発話を検知し、LLMで内容を整理して `meal_logs` テーブルに記録する。②朝食(6-10時)/昼食(11-14時)/夕食(17-21時)の時間帯に、その食事の記録が今日まだ無ければ「一緒に食べている気分」になれる一言を自発的に届ける（カレンダー先回り提案と同方式で、Render無料プランのスリープ対策済み）。③直近の食事記録を会話コンテキストに自動的に織り込み、説教にならない範囲でゆるい提案をする（「最近コンビニ多いけど、たまには一緒に作ってみる？」）。④📷ボタンで食事の話をしながら撮ると、Vision解析で写真を `meal_logs` に紐付け、「今日のごはん見せて」で振り返れる。
+- **読書通帳機能（バーコード記帳・会話での読み出し。2026-06-28追加）:** 図書館の読書通帳ATMをAR上で再現した機能。①マーカーロスト中（顔アイコン表示中）にのみ📔ボタンが出現し、タップするとバーコードスキャンモーダルが開く。②既存のMindARカメラ映像（`<video>`要素）から直接フレームを読み取り `@zxing/browser` でISBNをデコードするため、`getUserMedia` の新規呼び出しやMindARの停止・再開は一切発生しない（カメラ専有の競合や黒帯バグの再発を避ける設計）。③検出したISBNを国立国会図書館サーチAPI（NDLサーチ・APIキー不要）→ヒットしなければGoogle Books APIの順で照会し、タイトル・著者・出版社を取得する（定価・表紙画像は両APIとも基本的に持たないため手入力で補完）。④確認画面で内容を確認し「記帳する」を押すと `reading_logs` テーブルに保存される。同じ本（ISBN一致、無ければタイトル完全一致）を再度記帳した場合は新規行を作らず、既存行の `borrow_count` を+1し `borrowed_at` を最新の日付に更新する（再読・再度借りた場合の記録として扱う）。⑤「いつその本借りた？」「最近何冊読んだ？」「合計いくら分読んだ？」のような質問は `get_book_history` ToolとしてSynthesizerの `bind_tools` に登録されており、`get_my_schedule` と同様に聞かれたときだけ呼ばれる（雑談中に余計なDBアクセスは発生しない）。バーコードが読み取れない場合のISBN手入力フォールバックも用意している。
 - **モバイルでの意図しないズーム対策:** `viewport` 設定（`maximumScale: 1`、`userScalable: false`）と、テキスト入力欄のフォントサイズを16px以上にすることで、iOS Safari特有の「入力欄フォーカス時の自動ズーム」とピンチズームの両方を抑制している。
 - **会話を質問で締めくくらない:** 返答の最後を「〜どうですか？」のような問いかけで終えると、ユーザーが「答えなきゃ」と気を遣ってしまう問題があったため、`rukiruki_persona.md`に独立した見出しで明記し、`persona.py`の`SYSTEM_CONSTRAINTS`にも同趣旨の制約を重ねて追加した。意味が分からず聞き返す必要がある場合のみ例外とし、それ以外は感想・意見・相槌だけで言い切るよう指示している。
 

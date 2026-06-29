@@ -51,8 +51,13 @@ _NDL_NS = {
 async def fetch_book_by_isbn(isbn: str) -> dict | None:
     """
     ISBNから書誌情報（title/author/publisher/cover_url）を取得する。
-    NDLサーチAPI（国立国会図書館・日本の書誌データに特化・APIキー不要）
-    → Google Books の順に試行し、両方失敗したらNoneを返す。
+    NDLサーチAPI（国立国会図書館・日本の書誌データに特化・APIキー不要）を正として使い、
+    タイトル等はNDLサーチの結果を優先する。
+    NDLサーチは書影（表紙画像）を提供しないため、cover_urlが無い場合のみ
+    Google Booksに表紙補完のための追加照会を行う（2026-06-28追加）。
+    この追加照会はAPIキー不要・無料枠の範囲内だが、Google Books側のレート制限(429)に
+    当たりやすくなる点・記帳完了までの応答が少し遅くなる点がトレードオフとして発生する。
+    失敗しても記帳自体は継続できるため、cover_url取得の失敗は無視してよい。
     どちらのソースも定価（price）は基本的に持たないため、price は別途
     手入力で補完する前提（記帳モーダルで編集可能にする）。
     """
@@ -60,6 +65,8 @@ async def fetch_book_by_isbn(isbn: str) -> dict | None:
 
     book = await _fetch_from_ndl(isbn)
     if book:
+        if not book.get("cover_url"):
+            book["cover_url"] = await _fetch_cover_from_google_books(isbn)
         return book
 
     book = await _fetch_from_google_books(isbn)
@@ -105,7 +112,8 @@ async def _fetch_from_ndl(isbn: str) -> dict | None:
         "author": _text("dc:creator") or _text("author"),
         "publisher": _text("dc:publisher"),
         "price": None,  # NDLサーチは定価を提供しない
-        "cover_url": None,  # 書影APIは別エンドポイント。2026年に縮小方針が出ているため当面非対応
+        "cover_url": None,  # NDLサーチ自体は書影を返さない。呼び出し元(fetch_book_by_isbn)が
+                             # Google Booksへの追加照会で補完を試みる（2026-06-28〜）
     }
 
 
@@ -146,6 +154,40 @@ async def _fetch_from_google_books(isbn: str) -> dict | None:
         "price": None,  # Google Books APIは定価を持たないことが多い
         "cover_url": info.get("imageLinks", {}).get("thumbnail"),
     }
+
+
+async def _fetch_cover_from_google_books(isbn: str) -> str | None:
+    """
+    NDLサーチでヒットしたがcover_urlが無い場合に、表紙画像だけを
+    Google Booksから補完取得する（2026-06-28追加）。
+    タイトル等はNDLサーチの結果をそのまま使うため、ここでは
+    画像URL以外は一切参照しない。失敗しても呼び出し側はNoneのまま
+    記帳を継続できるため、例外は握って静かにNoneを返す。
+    """
+    endpoint = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, timeout=8.0)
+        if res.status_code == 429:
+            print("[読書通帳][表紙補完] レート制限(429)。表紙無しで続行します")
+            return None
+        if res.status_code != 200:
+            print(f"[読書通帳][表紙補完] status={res.status_code}")
+            return None
+        data = res.json()
+    except Exception as e:
+        print(f"[読書通帳][表紙補完エラー] {e}")
+        return None
+
+    items = data.get("items")
+    if not items:
+        return None
+
+    info = items[0].get("volumeInfo", {})
+    cover_url = info.get("imageLinks", {}).get("thumbnail")
+    if cover_url:
+        print(f"[読書通帳][表紙補完] 取得成功: {isbn}")
+    return cover_url
 
 
 # ═══════════════════════════════════════════════════════
