@@ -59,6 +59,7 @@ from services.memory import (
 )
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.books import fetch_book_by_isbn, save_reading_log
+from services.character_bible import generate_mind_profile
 from services.scheduler import (
     auto_research_job,
     proactive_talk_job,
@@ -888,6 +889,24 @@ async def log_book_endpoint(payload: BookLogPayload):
         "published_year": payload.published_year,
     })
     return {"status": "ok" if ok else "error"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ルキルキ マインドプロファイル（Curator）エンドポイント
+# 現時点では手動トリガー用。将来的にはschedulerの月次ジョブから呼ぶ想定。
+# ユーザー向けの会話フローには一切接続されていない（裏方専用）。
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/internal/generate_mind_profile")
+async def generate_mind_profile_endpoint(year: int | None = None, month: int | None = None):
+    """
+    手動でマインドプロファイルを生成するための診断用エンドポイント。
+    year/monthを省略すると今月分を生成する。
+    既に同名ファイル（ruki_mind/YYYY-MM.md）が存在する場合は上書きしない。
+    """
+    markdown = await generate_mind_profile(year=year, month=month)
+    if markdown is None:
+        return {"status": "error", "message": "生成に失敗、または既に同月分が存在します"}
+    return {"status": "ok", "markdown": markdown}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
