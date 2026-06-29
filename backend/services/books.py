@@ -13,6 +13,7 @@
 # Supabaseへのアクセスは services/memory.py と同じ作法（httpxでPostgRESTを直接叩く）に揃えている。
 # supabase-pyクライアントは使わない。
 # ─────────────────────────────────────────────────────────────────────────────
+import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from urllib.parse import quote
@@ -41,6 +42,8 @@ def _books_headers() -> dict:
 _NDL_NS = {
     "dc": "http://purl.org/dc/elements/1.1/",
     "dcndl": "http://ndl.go.jp/dcndl/terms/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
 }
 
 
@@ -51,22 +54,20 @@ _NDL_NS = {
 async def fetch_book_by_isbn(isbn: str) -> dict | None:
     """
     ISBNから書誌情報（title/author/publisher/cover_url）を取得する。
-    NDLサーチAPI（国立国会図書館・日本の書誌データに特化・APIキー不要）を正として使い、
-    タイトル等はNDLサーチの結果を優先する。
-    NDLサーチは書影（表紙画像）を提供しないため、cover_urlが無い場合のみ
-    Google Booksに表紙補完のための追加照会を行う（2026-06-28追加）。
-    この追加照会はAPIキー不要・無料枠の範囲内だが、Google Books側のレート制限(429)に
-    当たりやすくなる点・記帳完了までの応答が少し遅くなる点がトレードオフとして発生する。
-    失敗しても記帳自体は継続できるため、cover_url取得の失敗は無視してよい。
+    NDLサーチAPI（国立国会図書館・日本の書誌データに特化・APIキー不要）
+    → Google Books の順に試行し、両方失敗したらNoneを返す。
     どちらのソースも定価（price）は基本的に持たないため、price は別途
     手入力で補完する前提（記帳モーダルで編集可能にする）。
+
+    2026-06-28、NDLサーチヒット時にもGoogle Booksへ表紙補完の追加照会を行う
+    実装を一時的に試したが、Google Books APIキー無し運用がレート制限(429)に
+    恒常的に当たることが実機検証で判明したため撤去した。cover_url列は
+    将来また別の書影ソースを試す可能性に備えてテーブル上は残している。
     """
     isbn = isbn.strip().replace("-", "")
 
     book = await _fetch_from_ndl(isbn)
     if book:
-        if not book.get("cover_url"):
-            book["cover_url"] = await _fetch_cover_from_google_books(isbn)
         return book
 
     book = await _fetch_from_google_books(isbn)
@@ -102,9 +103,36 @@ async def _fetch_from_ndl(isbn: str) -> dict | None:
         el = item.find(tag, _NDL_NS)
         return el.text.strip() if el is not None and el.text else None
 
+    def _text_or_rdf_value(tag: str) -> str | None:
+        """
+        DC-NDL仕様では <dcndl:seriesTitle><rdf:Description><rdf:value>値</rdf:value>...
+        のような入れ子構造になる場合があるが、データプロバイダによっては
+        <dcndl:seriesTitle>値</dcndl:seriesTitle> という素のテキストで返る場合もある
+        （2026-06-28、実機検証で両方のパターンを確認）。両方に対応する。
+        """
+        el = item.find(tag, _NDL_NS)
+        if el is None:
+            return None
+        if el.text and el.text.strip():
+            return el.text.strip()
+        # 入れ子構造（rdf:Description/rdf:value）を探す
+        value_el = el.find("./rdf:Description/rdf:value", _NDL_NS)
+        if value_el is not None and value_el.text:
+            return value_el.text.strip()
+        return None
+
     title = _text("title")
     if not title:
         return None
+
+    # 出版年：dcterms:issued（"2024-02"等）→ なければ dc:date の順で試す。
+    # 表示用に先頭4桁（西暦）だけ抜き出す。
+    raw_year = _text("dcterms:issued") or _text("dc:date")
+    published_year = None
+    if raw_year:
+        digits = re.match(r"(\d{4})", raw_year)
+        if digits:
+            published_year = int(digits.group(1))
 
     return {
         "isbn": isbn,
@@ -112,8 +140,13 @@ async def _fetch_from_ndl(isbn: str) -> dict | None:
         "author": _text("dc:creator") or _text("author"),
         "publisher": _text("dc:publisher"),
         "price": None,  # NDLサーチは定価を提供しない
-        "cover_url": None,  # NDLサーチ自体は書影を返さない。呼び出し元(fetch_book_by_isbn)が
-                             # Google Booksへの追加照会で補完を試みる（2026-06-28〜）
+        "cover_url": None,  # NDLサーチは書影を提供しない。Google Booksへの追加照会による
+                             # 補完も2026-06-28に試したがレート制限(429)が頻発したため撤去済み。
+                             # reading_logs.cover_url列は将来の別ソース対応に備えて残してある。
+        "genre": _text("dcndl:genre"),
+        "series_title": _text_or_rdf_value("dcndl:seriesTitle"),
+        "volume": _text_or_rdf_value("dcndl:volume"),
+        "published_year": published_year,
     }
 
 
@@ -146,6 +179,14 @@ async def _fetch_from_google_books(isbn: str) -> dict | None:
     if not title:
         return None
 
+    # Google Books の publishedDate は "2021" や "2021-07-15" 等の形式。先頭4桁を年として使う。
+    published_year = None
+    raw_date = info.get("publishedDate")
+    if raw_date:
+        digits = re.match(r"(\d{4})", raw_date)
+        if digits:
+            published_year = int(digits.group(1))
+
     return {
         "isbn": isbn,
         "title": title,
@@ -153,44 +194,13 @@ async def _fetch_from_google_books(isbn: str) -> dict | None:
         "publisher": info.get("publisher"),
         "price": None,  # Google Books APIは定価を持たないことが多い
         "cover_url": info.get("imageLinks", {}).get("thumbnail"),
+        # Google Booksの categories はジャンルというよりNDC的な分類タグの場合もあるが、
+        # NDLサーチのdcndl:genreが取れなかった場合の代替として一応保持しておく。
+        "genre": ", ".join(info.get("categories", [])) or None,
+        "series_title": None,  # Google Books APIには対応するフィールドが無い
+        "volume": None,        # 同上
+        "published_year": published_year,
     }
-
-
-async def _fetch_cover_from_google_books(isbn: str) -> str | None:
-    """
-    NDLサーチでヒットしたがcover_urlが無い場合に、表紙画像だけを
-    Google Booksから補完取得する（2026-06-28追加）。
-    タイトル等はNDLサーチの結果をそのまま使うため、ここでは
-    画像URL以外は一切参照しない。失敗しても呼び出し側はNoneのまま
-    記帳を継続できるため、例外は握って静かにNoneを返す。
-    """
-    endpoint = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(endpoint, timeout=8.0)
-        if res.status_code == 429:
-            print("[読書通帳][表紙補完] レート制限(429)。表紙無しで続行します")
-            return None
-        if res.status_code != 200:
-            print(f"[読書通帳][表紙補完] status={res.status_code}")
-            return None
-        data = res.json()
-    except Exception as e:
-        print(f"[読書通帳][表紙補完エラー] {e}")
-        return None
-
-    items = data.get("items")
-    if not items:
-        print(f"[読書通帳][表紙補完] Google Booksに登録なし: {isbn}")
-        return None
-
-    info = items[0].get("volumeInfo", {})
-    cover_url = info.get("imageLinks", {}).get("thumbnail")
-    if cover_url:
-        print(f"[読書通帳][表紙補完] 取得成功: {isbn}")
-    else:
-        print(f"[読書通帳][表紙補完] ヒットしたが画像URLなし: {isbn}")
-    return cover_url
 
 
 # ═══════════════════════════════════════════════════════
@@ -249,7 +259,8 @@ async def save_reading_log(
     同じ本（ISBN一致、無ければタイトル完全一致）が既に記帳済みの場合は
     新規行を作らず、既存行の borrow_count を+1し、borrowed_at を最新の日付に更新する
     （再読・再度借りた場合の「記帳」として扱う）。
-    book は fetch_book_by_isbn() の返り値（isbn/title/author/publisher/price/cover_url）を想定。
+    book は fetch_book_by_isbn() の返り値（isbn/title/author/publisher/price/cover_url/
+    genre/series_title/volume/published_year）を想定。
     borrowed_at省略時は今日の日付。
     """
     url, key = _sb()
@@ -288,6 +299,14 @@ async def save_reading_log(
         data["price"] = book["price"]
     if book.get("cover_url"):
         data["cover_url"] = book["cover_url"]
+    if book.get("genre"):
+        data["genre"] = book["genre"]
+    if book.get("series_title"):
+        data["series_title"] = book["series_title"]
+    if book.get("volume"):
+        data["volume"] = book["volume"]
+    if book.get("published_year") is not None:
+        data["published_year"] = book["published_year"]
 
     try:
         async with httpx.AsyncClient() as client:
@@ -338,7 +357,7 @@ async def get_recent_reading_logs(limit: int = 10) -> list:
     endpoint = (
         f"{url}/rest/v1/reading_logs"
         f"?order=created_at.desc&limit={limit}"
-        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count"
+        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count,genre,series_title,volume,published_year"
     )
     try:
         async with httpx.AsyncClient() as client:
@@ -366,7 +385,7 @@ async def find_reading_log_by_title(query: str, limit: int = 5) -> list:
         f"{url}/rest/v1/reading_logs"
         f"?title=ilike.*{encoded_query}*"
         f"&order=created_at.desc&limit={limit}"
-        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count"
+        f"&select=id,isbn,title,author,publisher,price,cover_url,borrowed_at,created_at,borrow_count,genre,series_title,volume,published_year"
     )
     try:
         async with httpx.AsyncClient() as client:
@@ -448,7 +467,9 @@ async def get_book_history(query: str = "") -> str:
             author_part = f"（{author}）" if author else ""
             count = log.get("borrow_count") or 1
             count_part = f"・{count}回目" if count > 1 else ""
-            lines.append(f"- {borrowed} {title}{author_part}{count_part}")
+            genre = log.get("genre", "")
+            genre_part = f"・{genre}" if genre else ""
+            lines.append(f"- {borrowed} {title}{author_part}{count_part}{genre_part}")
         return "見つかった読書記録:\n" + "\n".join(lines)
 
     stats = await get_reading_stats()
