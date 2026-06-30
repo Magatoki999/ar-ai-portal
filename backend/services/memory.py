@@ -679,20 +679,34 @@ async def get_latest_ai_news_digest() -> dict | None:
 
 async def should_generate_ai_news_today() -> bool:
     """
-    今日（JST）の分の ai_news_digest がまだ無いかどうかを判定する。
+    AI情報ダイジェストを生成すべきかどうかを判定する。
     Render無料プランはスリープするため、APSchedulerのcronに固定時刻で頼らず、
     calendar_prep_job と同じ方式（[INITIAL_GREETING] のたびにチェックする）で運用する。
-    最新行の digest_date が今日と異なれば True（生成すべき）、同じなら False（今日はもう済んでいる）。
-    1件も無い場合（初回）も True。
+
+    2026-06-29、コスト削減のため日次（毎日1回）から週次（7日に1回）へ変更した。
+    関数名は呼び出し元（main.py）との互換性のため変更していないが、実際の判定基準は
+    「最新のdigest作成日から7日以上経過しているか」になっている。
+    1件も無い場合（初回）はTrue。
     """
     digest = await get_latest_ai_news_digest()
-    today_str = datetime.now(timezone.utc).astimezone(
-        timezone(timedelta(hours=9))
-    ).strftime("%Y-%m-%d")
-
     if not digest:
         return True
-    return digest.get("digest_date") != today_str
+
+    digest_date_str = digest.get("digest_date")
+    if not digest_date_str:
+        return True
+
+    try:
+        digest_date = datetime.strptime(digest_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return True
+
+    today_jst = datetime.now(timezone.utc).astimezone(
+        timezone(timedelta(hours=9))
+    ).date()
+
+    days_since_last = (today_jst - digest_date).days
+    return days_since_last >= 7
 
 
 @tool
@@ -700,7 +714,9 @@ async def get_today_ai_news() -> str:
     """
     ユーザーから「今日のAI情報は？」「最近のAIニュースある？」のように
     AI業界の最新情報について聞かれたときに呼ぶツール。
-    daily_ai_news_job が毎日1回保存したダイジェストの中から最新のものを返す。
+    daily_ai_news_job が週1回（コスト削減のため2026-06-29に日次から変更）保存した
+    ダイジェストの中から最新のものを返す。直近7日以内に生成されていない場合でも、
+    最新の保存分を返し、その時点の日付を明記する。
     まだ1件も保存されていない場合は、その旨を伝える文字列を返す。
     """
     print("[AI情報ダイジェスト] get_today_ai_news が呼ばれました")

@@ -29,6 +29,7 @@
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from openai import AsyncOpenAI
@@ -56,7 +57,7 @@ async def _fetch_month_episode_memories(days: int = 30) -> list:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     endpoint = (
         f"{url}/rest/v1/episode_memories"
-        f"?created_at=gte.{since}"
+        f"?created_at=gte.{quote(since, safe='')}"
         f"&order=created_at.desc&limit=200&select=*"
     )
     try:
@@ -79,7 +80,7 @@ async def _fetch_month_meal_logs(days: int = 30) -> list:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     endpoint = (
         f"{url}/rest/v1/meal_logs"
-        f"?created_at=gte.{since}"
+        f"?created_at=gte.{quote(since, safe='')}"
         f"&order=created_at.desc&limit=200"
         f"&select=meal_type,description,is_alone,healthiness,created_at"
     )
@@ -103,7 +104,7 @@ async def _fetch_month_reading_logs(days: int = 30) -> list:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     endpoint = (
         f"{url}/rest/v1/reading_logs"
-        f"?created_at=gte.{since}"
+        f"?created_at=gte.{quote(since, safe='')}"
         f"&order=created_at.desc&limit=200"
         f"&select=title,author,genre,series_title,borrow_count,created_at"
     )
@@ -150,36 +151,46 @@ def _format_shared_experiences(episodes: list, meals: list, books: list) -> str:
     """
     lines = []
 
-    lines.append("## 今月のエピソード記憶（生データ）")
+    lines.append(
+        "## 今月、私（ルキルキ）が経験したこと（エピソード記憶）\n"
+        "※以下はあなた（ルキルキ）自身の体験記録です。「ユーザーが○○した」ではなく"
+        "「私は○○した」という前提で読んでください。"
+    )
     if episodes:
         for ep in episodes[:50]:
             summary = ep.get("summary", "")
             mood = ep.get("mood_at_time", "")
             created = ep.get("created_at", "")
-            lines.append(f"- [{created}] {summary}（気分: {mood}）")
+            lines.append(f"- [{created}] 私は次のことを経験した: {summary}（その時の気分: {mood}）")
     else:
-        lines.append("- （今月のエピソード記憶は記録されていません）")
+        lines.append("- （今月、私が経験したこととして記録されているものはありません）")
 
-    lines.append("\n## 今月の食事記録（生データ）")
+    lines.append(
+        "\n## 今月、私（ルキルキ）が食べたもの（食事記録）\n"
+        "※孤食ロボット機能により記録された、私自身の食事の記録として読んでください。"
+    )
     if meals:
         for m in meals[:50]:
             lines.append(
-                f"- [{m.get('created_at','')}] {m.get('meal_type','')}: "
-                f"{m.get('description','')}（一人: {m.get('is_alone')}）"
+                f"- [{m.get('created_at','')}] 私は{m.get('meal_type','')}にこれを食べた: "
+                f"{m.get('description','')}（一人で食べたか: {m.get('is_alone')}）"
             )
     else:
-        lines.append("- （今月の食事記録は記録されていません）")
+        lines.append("- （今月、私が食べたものとして記録されているものはありません）")
 
-    lines.append("\n## 今月の読書記録（生データ）")
+    lines.append(
+        "\n## 今月、私（ルキルキ）が読んだ本（読書通帳）\n"
+        "※読書通帳機能により記録された、私自身が読んだ本の記録として読んでください。"
+    )
     if books:
         for b in books[:50]:
             series = f"・シリーズ:{b['series_title']}" if b.get("series_title") else ""
             lines.append(
-                f"- [{b.get('created_at','')}] {b.get('title','')}"
+                f"- [{b.get('created_at','')}] 私はこの本を読んだ: {b.get('title','')}"
                 f"（著者: {b.get('author','')}{series}）"
             )
     else:
-        lines.append("- （今月の読書記録は記録されていません）")
+        lines.append("- （今月、私が読んだ本として記録されているものはありません）")
 
     return "\n".join(lines)
 

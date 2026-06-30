@@ -17,6 +17,7 @@ load_dotenv()                                    # ← ここに移動（import�
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from langchain_openai import ChatOpenAI
@@ -896,7 +897,7 @@ async def log_book_endpoint(payload: BookLogPayload):
 # 現時点では手動トリガー用。将来的にはschedulerの月次ジョブから呼ぶ想定。
 # ユーザー向けの会話フローには一切接続されていない（裏方専用）。
 # ─────────────────────────────────────────────────────────────────────────────
-@app.post("/api/internal/generate_mind_profile")
+@app.api_route("/api/internal/generate_mind_profile", methods=["GET", "POST"])
 async def generate_mind_profile_endpoint(year: int | None = None, month: int | None = None):
     """
     手動でマインドプロファイルを生成するための診断用エンドポイント。
@@ -907,6 +908,23 @@ async def generate_mind_profile_endpoint(year: int | None = None, month: int | N
     if markdown is None:
         return {"status": "error", "message": "生成に失敗、または既に同月分が存在します"}
     return {"status": "ok", "markdown": markdown}
+
+
+@app.get("/api/internal/view_mind_profile", response_class=PlainTextResponse)
+async def view_mind_profile_endpoint(year: int | None = None, month: int | None = None):
+    """
+    生成済みのマインドプロファイルを、JSON包装せずプレーンテキストでそのまま返す。
+    スマホのブラウザでそのまま読みやすく確認するための診断用エンドポイント。
+    生成自体は行わない（既存ファイルを読むだけ）。
+    """
+    from services.character_bible import _RUKI_MIND_DIR
+    now = datetime.now(timezone.utc)
+    year = year or now.year
+    month = month or now.month
+    path = _RUKI_MIND_DIR / f"{year}-{month:02d}.md"
+    if not path.exists():
+        return f"{year}-{month:02d}.md はまだ生成されていません。"
+    return path.read_text(encoding="utf-8")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

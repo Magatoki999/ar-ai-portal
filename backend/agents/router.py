@@ -24,8 +24,11 @@ class RouterAnalysis(BaseModel):
 
 
 # 💡 思考調停LLMの初期化
+# コスト削減のため2026-06-29にgpt-4oからgpt-4o-miniへ変更。
+# Routerは構造化出力（Literal型でintent/selected_agentsを厳格に分類するだけ）のため、
+# 自由文生成と比べて要求される精度のハードルが低く、gpt-4o-miniでも実用上十分と判断した。
 llm = ChatOpenAI(
-    model="gpt-4o",
+    model="gpt-4o-mini",
     temperature=0.0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
