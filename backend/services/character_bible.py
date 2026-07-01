@@ -42,11 +42,10 @@ _CURATOR_PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "cu
 # マインドプロファイルの書き出し先。リポジトリルート直下（src/, backend/ と同階層）。
 _RUKI_MIND_DIR = Path(__file__).resolve().parent.parent.parent / "ruki_mind"
 
-_OPENAI_MODEL = os.getenv("CHARACTER_BIBLE_MODEL", "gpt-4o-mini")
-# 2026-06-29、コスト最適化の一環でデフォルトをgpt-4oからgpt-4o-miniへ変更。
-# Curatorは月1回しか動かないためコストインパクト自体は小さいが、全体方針として統一した。
-# 長文の人格分析・生成というタスクの性質上、品質に影響が出る可能性はゼロではないため、
-# 生成結果の質が気になる場合は環境変数 CHARACTER_BIBLE_MODEL=gpt-4o で個別に上書きできる。
+_OPENAI_MODEL = os.getenv("CHARACTER_BIBLE_MODEL") or os.getenv("LLM_MODEL_SMART", "gpt-4o-mini")
+# CHARACTER_BIBLE_MODEL が明示的に設定されていればそれを優先、
+# 無ければ LLM_MODEL_SMART（Synthesizer用の高精度モデル）を使う。
+# どちらも未設定の場合のデフォルトは gpt-4o-mini（コスト最適化方針）。
 
 
 # ═══════════════════════════════════════════════════════

@@ -80,8 +80,9 @@ from agents.router import analyze_and_route
 from agents.graph import build_rukiruki_graph
 
 # ─── LLM / ツール ───
+# モデルは .env の LLM_MODEL_FAST で一括管理（nodes.py / router.py と同じ環境変数）。
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
+    model=os.getenv("LLM_MODEL_FAST", "gpt-4o-mini"),
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY"),
 )

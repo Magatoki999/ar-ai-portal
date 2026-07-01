@@ -24,15 +24,20 @@ from services.persona import load_magatoki_context as _load_knowledge
 _MAGATOKI_KNOWLEDGE_CACHE: str = _load_knowledge()
 
 # ─── LLM・ツール初期化 ───
-# Synthesizerは高精度優先（gpt-4o）
+# モデルは .env の LLM_MODEL_SMART / LLM_MODEL_FAST で一括管理する。
+# 省略時のデフォルト値はここで定義しているが、.env を変更するだけで全ノードに反映される。
+# LLM_MODEL_SMART : 高精度優先（Synthesizer用）。デフォルト gpt-4o
+# LLM_MODEL_FAST  : コスト優先（Router/Agent/Evaluator等）。デフォルト gpt-4o-mini
+_MODEL_SMART = os.getenv("LLM_MODEL_SMART", "gpt-4o")
+_MODEL_FAST  = os.getenv("LLM_MODEL_FAST",  "gpt-4o-mini")
+
 llm_synth = ChatOpenAI(
-    model="gpt-4o",
+    model=_MODEL_SMART,
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
-# エージェント・評価は軽量（gpt-4o-mini）
 llm_fast = ChatOpenAI(
-    model="gpt-4o-mini",
+    model=_MODEL_FAST,
     temperature=0.7,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
