@@ -1,8 +1,9 @@
 # services/tts.py
 # ─────────────────────────────────────────────────────────────────────────────
 # 音声合成（TTS）を担当するサービスモジュール。
-# TTS_PROVIDER 環境変数で gemini / elevenlabs / openai を切り替える。
-# フォールバック: gemini 失敗 → openai、elevenlabs 失敗 → openai。
+# TTS_PROVIDER 環境変数で gemini / elevenlabs を切り替える。
+# フォールバック: gemini 失敗 → elevenlabs、elevenlabs 失敗 → gemini（相互フォールバック）。
+# 2026-07-05: OpenAI TTSを撤去し、OPENAI_API_KEYへの依存を完全に解消。
 # ─────────────────────────────────────────────────────────────────────────────
 import os
 import re
@@ -10,27 +11,6 @@ import base64
 import io
 import wave
 import httpx
-
-
-# ─── OpenAI TTS ───
-async def generate_openai_tts(text: str) -> str | None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-    url = "https://api.openai.com/v1/audio/speech"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    data = {"model": "tts-1", "input": text, "voice": "nova"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data, headers=headers, timeout=15.0)
-            if response.status_code == 200:
-                return base64.b64encode(response.content).decode("utf-8")
-    except Exception as e:
-        print(f"[TTSエラー] OpenAI TTSに失敗しました: {e}")
-    return None
 
 
 # ─── ElevenLabs TTS ───
@@ -213,37 +193,45 @@ async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+async def _run_gemini_tts(text: str) -> str | None:
+    """Gemini TTSを実行し、必要ならPCM→WAV変換まで行ってbase64を返す。"""
+    result = await generate_gemini_tts(text)
+    if not result:
+        return None
+    audio_b64, mime_type = result
+    print(
+        f"[TTS分岐] mime_type={mime_type} "
+        f"l16check={'l16' in mime_type.lower()}"
+    )
+    if "l16" in mime_type.lower() or "pcm" in mime_type.lower():
+        audio_b64 = await pcm_to_wav_base64(audio_b64, mime_type)
+        print(f"[TTS分岐] WAV変換完了 base64長={len(audio_b64)}")
+    else:
+        print("[TTS分岐] WAV変換スキップ（非PCM）")
+    return audio_b64
+
+
 # ─── 統合ディスパッチャー ───
 async def generate_tts(text: str) -> str | None:
     """
     TTS_PROVIDER 環境変数に応じてプロバイダーを選択する統合関数。
     デフォルト: gemini
-    選択肢: gemini / elevenlabs / openai
+    選択肢: gemini / elevenlabs（相互フォールバック。OpenAIには依存しない）
     """
     provider = os.getenv("TTS_PROVIDER", "gemini").lower()
     print(f"[TTS] provider={provider} / text={text[:20]}...")
 
     if provider == "elevenlabs":
         audio = await generate_elevenlabs_voice(text)
-        return audio or await generate_openai_tts(text)
-
-    if provider == "openai":
-        return await generate_openai_tts(text)
+        if audio:
+            return audio
+        print("[TTS] ElevenLabs失敗 → Geminiにフォールバック")
+        return await _run_gemini_tts(text)
 
     # gemini（デフォルト）
-    result = await generate_gemini_tts(text)
-    if result:
-        audio_b64, mime_type = result
-        print(
-            f"[TTS分岐] mime_type={mime_type} "
-            f"l16check={'l16' in mime_type.lower()}"
-        )
-        if "l16" in mime_type.lower() or "pcm" in mime_type.lower():
-            audio_b64 = await pcm_to_wav_base64(audio_b64, mime_type)
-            print(f"[TTS分岐] WAV変換完了 base64長={len(audio_b64)}")
-        else:
-            print("[TTS分岐] WAV変換スキップ（非PCM）")
-        return audio_b64
+    audio = await _run_gemini_tts(text)
+    if audio:
+        return audio
 
-    print("[TTS] Gemini失敗 → OpenAIにフォールバック")
-    return await generate_openai_tts(text)
+    print("[TTS] Gemini失敗 → ElevenLabsにフォールバック")
+    return await generate_elevenlabs_voice(text)

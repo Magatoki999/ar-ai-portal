@@ -5,7 +5,7 @@ from typing import List, Optional, Literal
 
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 # ─── 構造化出力用のデータスキーマ定義（Literalで厳格化） ───
@@ -27,10 +27,11 @@ class RouterAnalysis(BaseModel):
 # モデルは .env の LLM_MODEL_FAST で一括管理（nodes.py と同じ環境変数）。
 # コスト削減のため2026-06-29にgpt-4oからgpt-4o-miniへ変更し、
 # 2026-06-30に環境変数経由に統一した。
-llm = ChatOpenAI(
-    model=os.getenv("LLM_MODEL_FAST", "gpt-4o-mini"),
+# 2026-07-05: 構造化出力のみの軽量タスクのためGeminiへ移行。
+llm = ChatGoogleGenerativeAI(
+    model=os.getenv("LLM_MODEL_FAST", "gemini-2.5-flash-lite"),
     temperature=0.0,
-    openai_api_key=os.getenv("OPENAI_API_KEY")
+    google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"),
 )
 
 # 構造化出力を強制バインド
@@ -81,11 +82,10 @@ async def analyze_and_route(
         if not image_base64.startswith("data:image/"):
             image_base64 = f"data:image/jpeg;base64,{image_base64}"
 
+        # Gemini向け: image_urlは文字列（data URI）で渡す
         content_list.append({
             "type": "image_url",
-            "image_url": {
-                "url": image_base64
-            }
+            "image_url": image_base64
         })
 
     messages = [

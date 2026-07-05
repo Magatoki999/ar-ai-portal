@@ -2,8 +2,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # 「○○とスナップ」コマンドで呼ばれる画像生成サービス。
 #   1. context/images/{MEMBER_NAME}.jpg を読み込む
-#   2. カメラ映像（背景）とリファレンス画像を gpt-image-1 edit に渡す
+#   2. カメラ映像（背景）とリファレンス画像を Gemini（Nano Banana）に渡して合成
 #   3. 生成画像を Supabase memories バケットに保存
+# 2026-07-05: gpt-image-1（OpenAI）から gemini-2.5-flash-image（Nano Banana）へ移行。
+#   複数画像合成・被写体の一貫性維持に強みがあり、本ユースケース（人物＋背景の合成）に適性が高い。
 # ─────────────────────────────────────────────────────────────────────────────
 import os
 import base64
@@ -12,6 +14,24 @@ import random
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from google import genai
+from google.genai import types
+
+# ─── Geminiクライアント（プロセス内で使い回す） ───
+_gemini_client: "genai.Client | None" = None
+
+
+def _get_gemini_client() -> "genai.Client | None":
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
+
+
+SNAP_IMAGE_MODEL = os.getenv("SNAP_IMAGE_MODEL", "gemini-2.5-flash-image")
 
 
 # ─── スナップ用ポーズバリエーション ───
@@ -98,9 +118,9 @@ async def generate_snap(
         成功時: (url, None)
         失敗時: (None, "エラーメッセージ")
     """
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        return None, "OpenAI APIキー未設定"
+    client = _get_gemini_client()
+    if client is None:
+        return None, "Gemini APIキー未設定"
 
     # ── 1. リファレンス画像を読み込む（大文字小文字を区別しない） ──
     ref_path = _resolve_reference_path(member_name)
@@ -109,6 +129,7 @@ async def generate_snap(
         return None, f"{member_name}のリファレンス画像が見つかりません"
 
     ref_bytes = ref_path.read_bytes()
+    ref_mime  = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
     print(f"[スナップ] リファレンス画像読み込み: {ref_path} ({len(ref_bytes)}bytes)")
 
     # ── 2. カメラ画像をバイトに変換 ──
@@ -120,7 +141,7 @@ async def generate_snap(
     except Exception as e:
         return None, f"カメラ画像のデコードに失敗: {e}"
 
-    # ── 3. gpt-image-1 edit で画像生成 ──
+    # ── 3. Gemini（Nano Banana）で画像合成 ──
     pose = random.choice(SNAP_POSES)
     prompt = (
         "The person shown in the reference image is naturally posing in the scene "
@@ -134,39 +155,36 @@ async def generate_snap(
     )
     print(f"[スナップ] 選択ポーズ: {pose}")
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            multipart_files = [
-                ("image[]", ("background.jpg", cam_bytes, "image/jpeg")),
-                ("image[]", ("reference.jpg",  ref_bytes, "image/jpeg")),
-            ]
-            data = {
-                "model":   "gpt-image-1",
-                "prompt":  prompt,
-                "n":       "1",
-                "size":    "1024x1024",
-                "quality": "medium",
-            }
-            res = await client.post(
-                "https://api.openai.com/v1/images/edits",
-                headers={"Authorization": f"Bearer {openai_api_key}"},
-                files=multipart_files,
-                data=data,
-            )
+        response = await client.aio.models.generate_content(
+            model=SNAP_IMAGE_MODEL,
+            contents=[
+                types.Part.from_bytes(data=cam_bytes, mime_type="image/jpeg"),
+                types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime),
+                prompt,
+            ],
+        )
 
-        if res.status_code != 200:
-            print(f"[スナップ] OpenAI API エラー: {res.status_code} {res.text[:300]}")
-            return None, f"画像生成に失敗しました: {res.status_code}"
+        generated_bytes = None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            for part in candidates[0].content.parts:
+                inline = getattr(part, "inline_data", None)
+                if inline and inline.data:
+                    # SDKバージョンによりbytesのままの場合とbase64文字列の場合がある
+                    generated_bytes = (
+                        inline.data if isinstance(inline.data, bytes)
+                        else base64.b64decode(inline.data)
+                    )
+                    break
 
-        result   = res.json()
-        img_b64  = result["data"][0].get("b64_json") or result["data"][0].get("url")
-        if not img_b64:
+        if not generated_bytes:
+            print(f"[スナップ] Gemini応答に画像データがありません: {response}")
             return None, "生成画像データが取得できませんでした"
 
-        generated_bytes = base64.b64decode(img_b64)
         print(f"[スナップ] 画像生成成功: {len(generated_bytes)}bytes")
 
     except Exception as e:
-        print(f"[スナップ] OpenAI呼び出しエラー: {e}")
+        print(f"[スナップ] Gemini呼び出しエラー: {e}")
         return None, f"画像生成エラー: {e}"
 
     # ── 4. Supabase memories バケットに保存 ──

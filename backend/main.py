@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -81,10 +81,12 @@ from agents.graph import build_rukiruki_graph
 
 # ─── LLM / ツール ───
 # モデルは .env の LLM_MODEL_FAST で一括管理（nodes.py / router.py と同じ環境変数）。
-llm = ChatOpenAI(
-    model=os.getenv("LLM_MODEL_FAST", "gpt-4o-mini"),
+# 2026-07-05: Router/Agent/Evaluator/Vision系はコスト最適化とプロバイダー分散のため
+# OpenAIからGeminiへ移行（Synthesizer=llm_synthはOpenAIのまま維持）。
+llm = ChatGoogleGenerativeAI(
+    model=os.getenv("LLM_MODEL_FAST", "gemini-2.5-flash-lite"),
     temperature=0.8,
-    openai_api_key=os.getenv("OPENAI_API_KEY"),
+    google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"),
 )
 search_tool = TavilySearch(max_results=2)  # type: ignore
 llm_with_tools = llm.bind_tools([search_tool, locate_current_position])
@@ -296,7 +298,8 @@ async def _extract_and_save_meal_log_with_photo(
         response = await llm.ainvoke([
             HumanMessage(content=[
                 {"type": "text",      "text": vision_prompt},
-                {"type": "image_url", "image_url": {"url": image_url, "detail": "low"}},
+                # Gemini向け: image_urlは文字列で渡す（OpenAI形式の{"url":...,"detail":...}は使わない）
+                {"type": "image_url", "image_url": image_url},
             ])
         ])
         clean = re.sub(r"```json|```", "", response.content.strip()).strip()

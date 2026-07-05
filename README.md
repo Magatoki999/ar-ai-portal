@@ -102,6 +102,11 @@ pip install -r requirements.txt
 # LLM / 会話AI（必須）
 OPENAI_API_KEY=your_openai_api_key
 
+# モデル設定（省略時は下記のデフォルト値が使われる）
+# 新モデルへの切り替えはこの2行を変更するだけで全ファイルに反映される（2026-06-30〜）
+LLM_MODEL_SMART=gpt-4o          # Synthesizer用（高精度優先）
+LLM_MODEL_FAST=gpt-4o-mini      # Router/Agent/Evaluator/main.py用（コスト優先）
+
 # TTS（TTS_PROVIDER で切替。デフォルトは gemini）
 TTS_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key
@@ -217,15 +222,17 @@ OpenAI APIの利用枠を消費する箇所は以下の通り。月々のコス�
 
 | 箇所 | モデル | 発生タイミング | 備考 |
 |---|---|---|---|
-| Synthesizer（メイン会話生成） | `gpt-4o` | ユーザーが話しかけるたび | ルキルキの口調・性格の核心部分のため、コスト最適化の対象外（最後の手段として温存） |
-| Router（意図分類） | `gpt-4o-mini` | 同上 | **2026-06-29、`gpt-4o`から変更。** 構造化出力（Literal型での分類）のみのタスクのため精度への影響は小さいと判断 |
-| Agent / Evaluator | `gpt-4o-mini` | 同上 | 元から軽量モデル |
-| Vision（食事写真の食べ物判定） | `gpt-4o-mini` | 📷ボタン押下時、食事の発話と共に撮影された場合のみ | `detail: "low"`でさらにコスト抑制済み |
+| Synthesizer（メイン会話生成） | `gpt-4o`（`LLM_MODEL_SMART`） | ユーザーが話しかけるたび | ルキルキの口調・性格の核心部分のため、コスト最適化の対象外（最後の手段として温存） |
+| Router（意図分類） | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 同上 | **2026-06-29、`gpt-4o`から変更。** 構造化出力（Literal型での分類）のみのタスクのため精度への影響は小さいと判断 |
+| Agent / Evaluator | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 同上 | 元から軽量モデル |
+| Vision（食事写真の食べ物判定） | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 📷ボタン押下時、食事の発話と共に撮影された場合のみ | `detail: "low"`でさらにコスト抑制済み |
 | スナップ写真生成 | `gpt-image-1` | 「○○とスナップ」コマンド時 | 画像生成は他のテキスト系APIと比べて単価が高い。使用頻度に注意 |
 | AI情報ダイジェスト | `gpt-4o-mini`＋Tavily検索 | **2026-06-29、日次から週次（7日間隔）に変更** | `should_generate_ai_news_today()` |
-| Curator（マインドプロファイル生成） | `gpt-4o-mini`（環境変数`CHARACTER_BIBLE_MODEL`で上書き可） | 月1回・手動トリガー | 2026-06-29、デフォルトを`gpt-4o`から変更。長文の人格分析タスクのため、生成結果の質が気になる場合は`CHARACTER_BIBLE_MODEL=gpt-4o`で個別に戻せる |
+| Curator（マインドプロファイル生成） | `LLM_MODEL_SMART`にフォールバック（`CHARACTER_BIBLE_MODEL`で個別上書き可） | 月1回・手動トリガー | 2026-06-29、デフォルトを`gpt-4o`から変更。長文の人格分析タスクのため、生成結果の質が気になる場合は`CHARACTER_BIBLE_MODEL=gpt-4o`で個別に戻せる |
 
 **今後の検討事項（ローカルLLM）:** Router・Evaluatorのような判定系タスクは、将来的にLlama 3.1 8B等のローカルLLM（Ollama等）への置き換えが現実的と考えられる。Synthesizer（メイン会話）はルキルキらしさの根幹のため、ローカル化の優先度は最も低い。実行環境（どこでローカルLLMを動かすか）の設計が前提として必要なため、現時点では未着手。
+
+**一般公開向けプレゼン資料:** `presentation.html`（スタンドアロンHTML）を2026-06-30に作成。AIやWeb3に興味があるビジネス層向けに「AIキャラクターを育てて、プロンプト資産にする」というコンセプトを訴求する内容。ブラウザで直接開くだけで使える（依存ファイルなし）。
 
 ---
 

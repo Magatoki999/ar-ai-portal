@@ -13,6 +13,7 @@ from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from langchain_core.tools import tool
 
@@ -26,20 +27,22 @@ _MAGATOKI_KNOWLEDGE_CACHE: str = _load_knowledge()
 # ─── LLM・ツール初期化 ───
 # モデルは .env の LLM_MODEL_SMART / LLM_MODEL_FAST で一括管理する。
 # 省略時のデフォルト値はここで定義しているが、.env を変更するだけで全ノードに反映される。
-# LLM_MODEL_SMART : 高精度優先（Synthesizer用）。デフォルト gpt-4o
-# LLM_MODEL_FAST  : コスト優先（Router/Agent/Evaluator等）。デフォルト gpt-4o-mini
+# LLM_MODEL_SMART : 高精度優先（Synthesizer用）。デフォルト gpt-4o（OpenAIのまま維持。
+#                   ルキルキの口調・性格の核心部分のため移行対象外）
+# LLM_MODEL_FAST  : コスト優先（Router/Agent/Evaluator等）。
+#                   2026-07-05にGeminiへ移行。デフォルト gemini-2.5-flash-lite
 _MODEL_SMART = os.getenv("LLM_MODEL_SMART", "gpt-4o")
-_MODEL_FAST  = os.getenv("LLM_MODEL_FAST",  "gpt-4o-mini")
+_MODEL_FAST  = os.getenv("LLM_MODEL_FAST",  "gemini-2.5-flash-lite")
 
 llm_synth = ChatOpenAI(
     model=_MODEL_SMART,
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
-llm_fast = ChatOpenAI(
+llm_fast = ChatGoogleGenerativeAI(
     model=_MODEL_FAST,
     temperature=0.7,
-    openai_api_key=os.getenv("OPENAI_API_KEY")
+    google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"),
 )
 search_tool = TavilySearch(max_results=2)  # type: ignore
 
