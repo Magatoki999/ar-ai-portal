@@ -34,6 +34,55 @@ def _get_gemini_client() -> "genai.Client | None":
 SNAP_IMAGE_MODEL = os.getenv("SNAP_IMAGE_MODEL", "gemini-2.5-flash-image")
 
 
+async def _generate_via_openai_fallback(
+    cam_bytes: bytes, ref_bytes: bytes, prompt: str
+) -> bytes | None:
+    """
+    Nano Banana（Gemini）が失敗した場合の保険。OpenAIのgpt-image-1 edit APIで
+    同じ合成写真を生成する。OPENAI_API_KEYが無い場合はNoneを返す。
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        print("[スナップ] OpenAIフォールバック不可: OPENAI_API_KEY未設定")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            multipart_files = [
+                ("image[]", ("background.jpg", cam_bytes, "image/jpeg")),
+                ("image[]", ("reference.jpg",  ref_bytes, "image/jpeg")),
+            ]
+            data = {
+                "model":   "gpt-image-1",
+                "prompt":  prompt,
+                "n":       "1",
+                "size":    "1024x1024",
+                "quality": "medium",
+            }
+            res = await client.post(
+                "https://api.openai.com/v1/images/edits",
+                headers={"Authorization": f"Bearer {openai_api_key}"},
+                files=multipart_files,
+                data=data,
+            )
+
+        if res.status_code != 200:
+            print(f"[スナップ] OpenAIフォールバックAPIエラー: {res.status_code} {res.text[:300]}")
+            return None
+
+        result  = res.json()
+        img_b64 = result["data"][0].get("b64_json")
+        if not img_b64:
+            print("[スナップ] OpenAIフォールバック: 生成画像データが取得できませんでした")
+            return None
+
+        return base64.b64decode(img_b64)
+
+    except Exception as e:
+        print(f"[スナップ] OpenAIフォールバック呼び出しエラー: {e}")
+        return None
+
+
 # ─── スナップ用ポーズバリエーション ───
 # 毎回ランダムに1つ選んでプロンプトに織り込む。
 SNAP_POSES = [
@@ -190,24 +239,30 @@ async def generate_snap(
                     generated_bytes = data_bytes
 
         if not generated_bytes:
-            print(f"[スナップ] Gemini応答に画像データがありません: {response}")
-            return None, "生成画像データが取得できませんでした"
-
-        num_image_parts = sum(
-            1 for p in (candidates[0].content.parts if candidates else [])
-            if getattr(p, "inline_data", None) and p.inline_data.data
-        )
-        if num_image_parts > 1:
-            print(
-                f"[スナップ] ⚠️ 画像パートが{num_image_parts}枚返されました"
-                f"（最大サイズ={best_size}bytesを採用）。"
-                "リファレンス再生成が混ざっている可能性があります。"
+            print(f"[スナップ] Gemini応答に画像データがありません: {response} → OpenAIにフォールバック")
+            generated_bytes = await _generate_via_openai_fallback(cam_bytes, ref_bytes, prompt)
+            if not generated_bytes:
+                return None, "生成画像データが取得できませんでした（Gemini/OpenAIともに失敗）"
+            print(f"[スナップ] OpenAIフォールバックで画像生成成功: {len(generated_bytes)}bytes")
+        else:
+            num_image_parts = sum(
+                1 for p in (candidates[0].content.parts if candidates else [])
+                if getattr(p, "inline_data", None) and p.inline_data.data
             )
-        print(f"[スナップ] 画像生成成功: {len(generated_bytes)}bytes")
+            if num_image_parts > 1:
+                print(
+                    f"[スナップ] ⚠️ 画像パートが{num_image_parts}枚返されました"
+                    f"（最大サイズ={best_size}bytesを採用）。"
+                    "リファレンス再生成が混ざっている可能性があります。"
+                )
+            print(f"[スナップ] 画像生成成功: {len(generated_bytes)}bytes")
 
     except Exception as e:
-        print(f"[スナップ] Gemini呼び出しエラー: {e}")
-        return None, f"画像生成エラー: {e}"
+        print(f"[スナップ] Gemini呼び出しエラー: {e} → OpenAIにフォールバック")
+        generated_bytes = await _generate_via_openai_fallback(cam_bytes, ref_bytes, prompt)
+        if not generated_bytes:
+            return None, f"画像生成エラー: Gemini({e})、OpenAIフォールバックも失敗"
+        print(f"[スナップ] OpenAIフォールバックで画像生成成功: {len(generated_bytes)}bytes")
 
     # ── 4. Supabase memories バケットに保存 ──
     JST = timezone(timedelta(hours=+9))

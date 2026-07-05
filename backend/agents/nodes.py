@@ -13,7 +13,6 @@ from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from langchain_core.tools import tool
 
@@ -39,17 +38,15 @@ llm_synth = ChatOpenAI(
     temperature=0.8,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
-llm_fast = ChatGoogleGenerativeAI(
-    model=_MODEL_FAST,
-    temperature=0.7,
-    google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"),
-)
+# 2026-07-05追記: Gemini無料枠の429/404時にOpenAI(FALLBACK_MODEL_FAST)へ自動フォールバック。
+llm_fast = build_fast_llm(temperature=0.7, name="Nodes-FAST-LLM")
 search_tool = TavilySearch(max_results=2)  # type: ignore
 
 from services.location import locate_current_position
 from services.calendar import get_my_schedule
 from services.memory import get_today_ai_news
 from services.books import get_book_history
+from services.resilient_llm import build_fast_llm
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
