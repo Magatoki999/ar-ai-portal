@@ -151,7 +151,12 @@ async def generate_snap(
         "Maintain the person's face, hairstyle, and clothing from the reference image "
         "as accurately as possible. "
         "The lighting and perspective should match the background scene. "
-        "Make it look like a candid photograph taken together, full of energy and fun."
+        "Make it look like a candid photograph taken together, full of energy and fun.\n\n"
+        "IMPORTANT OUTPUT RULES:\n"
+        "- Output exactly ONE image: the final composited photo described above.\n"
+        "- Do NOT output the reference image or the background image unmodified or as "
+        "a separate image (e.g. no character sheet, no closeup portrait, no isolated "
+        "render on a plain background). Only the single blended scene counts as output."
     )
     print(f"[スナップ] 選択ポーズ: {pose}")
     try:
@@ -164,23 +169,40 @@ async def generate_snap(
             ],
         )
 
+        # 複数の画像パートが返ってくることがあるため（リファレンスの再生成が
+        # 混ざって返る場合がある）、最初の1枚を無条件採用せず、
+        # 最もバイトサイズが大きい画像（=背景を含む合成写真である可能性が高い）を選ぶ。
         generated_bytes = None
+        best_size = -1
         candidates = getattr(response, "candidates", None) or []
         if candidates:
             for part in candidates[0].content.parts:
                 inline = getattr(part, "inline_data", None)
-                if inline and inline.data:
-                    # SDKバージョンによりbytesのままの場合とbase64文字列の場合がある
-                    generated_bytes = (
-                        inline.data if isinstance(inline.data, bytes)
-                        else base64.b64decode(inline.data)
-                    )
-                    break
+                if not inline or not inline.data:
+                    continue
+                # SDKバージョンによりbytesのままの場合とbase64文字列の場合がある
+                data_bytes = (
+                    inline.data if isinstance(inline.data, bytes)
+                    else base64.b64decode(inline.data)
+                )
+                if len(data_bytes) > best_size:
+                    best_size = len(data_bytes)
+                    generated_bytes = data_bytes
 
         if not generated_bytes:
             print(f"[スナップ] Gemini応答に画像データがありません: {response}")
             return None, "生成画像データが取得できませんでした"
 
+        num_image_parts = sum(
+            1 for p in (candidates[0].content.parts if candidates else [])
+            if getattr(p, "inline_data", None) and p.inline_data.data
+        )
+        if num_image_parts > 1:
+            print(
+                f"[スナップ] ⚠️ 画像パートが{num_image_parts}枚返されました"
+                f"（最大サイズ={best_size}bytesを採用）。"
+                "リファレンス再生成が混ざっている可能性があります。"
+            )
         print(f"[スナップ] 画像生成成功: {len(generated_bytes)}bytes")
 
     except Exception as e:
