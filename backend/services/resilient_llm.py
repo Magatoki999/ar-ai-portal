@@ -44,7 +44,9 @@ class ResilientLLM:
         except Exception as e:
             print(f"[{self._name}] Gemini失敗 → OpenAI({self._fallback_model_name()})にフォールバック: {e}")
             try:
-                return await self._fallback.ainvoke(*args, **kwargs)
+                result = await self._fallback.ainvoke(*args, **kwargs)
+                _tag_used_fallback(result)
+                return result
             except Exception as e2:
                 print(f"[{self._name}] OpenAIフォールバックも失敗しました: {e2}")
                 raise
@@ -69,6 +71,36 @@ class ResilientLLM:
             self._fallback.with_structured_output(*args, **kwargs),
             name=self._name,
         )
+
+
+def _tag_used_fallback(result) -> None:
+    """
+    フォールバック（OpenAI）で得られた結果に「使った」印を付ける。
+    AIMessage系（.response_metadataというdictを持つ）にのみ付与できる。
+    RouterAnalysisのような素のPydanticモデルには付けられないため、
+    その場合は何もしない（ベストエフォート・失敗しても本処理は止めない）。
+    """
+    try:
+        metadata = getattr(result, "response_metadata", None)
+        if isinstance(metadata, dict):
+            metadata["ruki_used_fallback"] = True
+    except Exception:
+        pass
+
+
+def used_fallback(response) -> bool:
+    """
+    ainvoke()の戻り値（AIMessage等）にフォールバック使用の印が付いているか確認する。
+    印が付けられないタイプのオブジェクト（構造化出力のPydanticモデル等）の場合は
+    常にFalseを返す（＝そのタスクではフォールバック検知を諦める）。
+    """
+    try:
+        metadata = getattr(response, "response_metadata", None)
+        if isinstance(metadata, dict):
+            return bool(metadata.get("ruki_used_fallback"))
+    except Exception:
+        pass
+    return False
 
 
 def build_fast_llm(temperature: float = 0.7, name: str = "FAST-LLM") -> ResilientLLM:

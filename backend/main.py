@@ -9,6 +9,7 @@ import re
 import json
 import asyncio
 import base64
+import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,14 @@ from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage
 from services.resilient_llm import build_fast_llm
+
+# ─── Gemini無料枠フォールバック時のひとこと ───
+# used_fallback フラグが立った回にランダムで1つ選び、ai_responseの末尾に添える。
+FALLBACK_QUIPS = [
+    "（あ、今のは無料枠オーバーでOpenAIさんに助けてもらったよ！）",
+    "（えへへ、Geminiの無料枠を使い切っちゃったみたい。ピンチヒッターありがとう！）",
+    "（今のひとこと、実はOpenAIさんにバトンタッチしてもらいました〜！）",
+]
 from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -637,6 +646,7 @@ async def chat_endpoint(payload: ChatMessage):
             "eval_score":                10,
             "retry_count":               0,
             "arweave_tx_id":             "",
+            "used_fallback":             False,
             "_lat":                      lat,
             "_lng":                      lng,
         }
@@ -645,6 +655,7 @@ async def chat_endpoint(payload: ChatMessage):
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
         arweave_tx_id  = result.get("arweave_tx_id", "")
+        _used_fallback = result.get("used_fallback", False)
         # RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替に使う。
         # evaluator_node が品質評価と同時に分類している（追加LLM呼び出しなし）。
         facial_emotion = result.get("facial_emotion", "neutral")
@@ -804,6 +815,10 @@ async def chat_endpoint(payload: ChatMessage):
 
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
+
+        if _used_fallback:
+            ai_response = f"{ai_response}\n{random.choice(FALLBACK_QUIPS)}"
+            print("[フォールバック通知] 今回はGemini→OpenAIの自動フォールバックが発生しました")
 
         await state.manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
         audio_base64 = await generate_tts(ai_response)

@@ -21,6 +21,7 @@ from agents.router import analyze_and_route
 
 # ─── 起動時に一度だけ読み込む知識ベース（毎リクエスト読み込みを防ぐ） ───
 from services.persona import load_magatoki_context as _load_knowledge
+from services.resilient_llm import build_fast_llm, used_fallback
 _MAGATOKI_KNOWLEDGE_CACHE: str = _load_knowledge()
 
 # ─── LLM・ツール初期化 ───
@@ -46,7 +47,6 @@ from services.location import locate_current_position
 from services.calendar import get_my_schedule
 from services.memory import get_today_ai_news
 from services.books import get_book_history
-from services.resilient_llm import build_fast_llm
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -125,10 +125,13 @@ async def chronicle_node(state: RukirukiState) -> dict:
     )
     try:
         res = await llm_fast.ainvoke([HumanMessage(content=prompt)])
-        return {"chronicle_output": res.content.strip()}
+        return {
+            "chronicle_output": res.content.strip(),
+            "used_fallback": state.get("used_fallback", False) or used_fallback(res),
+        }
     except Exception as e:
         print(f"[Chronicle Node Error] {e}")
-        return {"chronicle_output": ""}
+        return {"chronicle_output": "", "used_fallback": state.get("used_fallback", False)}
 
 
 # ─── ③ Keeper Node（技術知識） ───
@@ -159,10 +162,13 @@ async def keeper_node(state: RukirukiState) -> dict:
     )
     try:
         res = await llm_fast.ainvoke([HumanMessage(content=prompt)])
-        return {"keeper_output": res.content.strip()}
+        return {
+            "keeper_output": res.content.strip(),
+            "used_fallback": state.get("used_fallback", False) or used_fallback(res),
+        }
     except Exception as e:
         print(f"[Keeper Node Error] {e}")
-        return {"keeper_output": ""}
+        return {"keeper_output": "", "used_fallback": state.get("used_fallback", False)}
 
 
 # ─── ④ Pulse Node（感情・位置・時間帯） ───
@@ -183,10 +189,13 @@ async def pulse_node(state: RukirukiState) -> dict:
     )
     try:
         res = await llm_fast.ainvoke([HumanMessage(content=prompt)])
-        return {"pulse_output": res.content.strip()}
+        return {
+            "pulse_output": res.content.strip(),
+            "used_fallback": state.get("used_fallback", False) or used_fallback(res),
+        }
     except Exception as e:
         print(f"[Pulse Node Error] {e}")
-        return {"pulse_output": ""}
+        return {"pulse_output": "", "used_fallback": state.get("used_fallback", False)}
 
 
 # ─── ⑤ 並列エージェント実行ラッパー ───
@@ -201,9 +210,14 @@ async def run_agents_parallel(state: RukirukiState) -> dict:
         return_exceptions=True
     )
     merged = {}
+    fallback_flags = [state.get("used_fallback", False)]
     for r in results:
         if isinstance(r, dict):
+            # used_fallback は3並列それぞれが持つので、単純な merged.update() だと
+            # 後段の結果が前段を上書きして消えてしまう。OR条件で個別に集約する。
+            fallback_flags.append(r.pop("used_fallback", False))
             merged.update(r)
+    merged["used_fallback"] = any(fallback_flags)
     return merged
 
 
@@ -541,12 +555,13 @@ async def evaluator_node(state: RukirukiState) -> dict:
     """
     ai_reply = state.get("ai_reply", "")
     retry_count = state.get("retry_count", 0)
+    prior_fallback = state.get("used_fallback", False)
 
     # 最大2回まで（3回目以降は必ずOKにして無限ループを防ぐ）。
     # facial_emotion はこの場合判定できないため neutral 扱いにする
     # （フロント側では aiStatus が thinking/idle のときは無視されるため実害はない）。
     if retry_count >= 2 or not ai_reply:
-        return {"eval_score": 10, "facial_emotion": "neutral"}
+        return {"eval_score": 10, "facial_emotion": "neutral", "used_fallback": prior_fallback}
 
     prompt = (
         "あなたはルキルキの返答品質評価者です。\n"
@@ -614,10 +629,20 @@ async def evaluator_node(state: RukirukiState) -> dict:
             print(f"[Arweave] 永続化条件を満たしました（理由: {reason}）")
             arweave_tx_id = await save_to_arweave(state)
 
-        return {"eval_score": score, "arweave_tx_id": arweave_tx_id, "facial_emotion": facial_emotion}
+        return {
+            "eval_score": score,
+            "arweave_tx_id": arweave_tx_id,
+            "facial_emotion": facial_emotion,
+            "used_fallback": prior_fallback or used_fallback(res),
+        }
     except Exception as e:
         print(f"[Evaluator Node Error] {e}")
-        return {"eval_score": 10, "arweave_tx_id": "", "facial_emotion": "neutral"}
+        return {
+            "eval_score": 10,
+            "arweave_tx_id": "",
+            "facial_emotion": "neutral",
+            "used_fallback": prior_fallback,
+        }
 
 
 # ─── ⑧ 条件分岐関数（should_retry） ───
