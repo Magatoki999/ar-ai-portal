@@ -157,6 +157,45 @@ async def upload_to_supabase_storage(
     return None
 
 
+async def _save_to_reference_library(
+    member_name: str, image_url: str, pose: str
+) -> None:
+    """
+    生成に成功したスナップ画像を、将来の動画生成（被写体参照）用の
+    「キャラクター参照画像ライブラリ」（character_referencesテーブル）に記録する。
+    2026-07-05新規。ベストエフォート実装（失敗してもスナップ機能自体は失敗させない）。
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    )
+    if not supabase_url or not supabase_key:
+        return
+
+    endpoint = f"{supabase_url}/rest/v1/character_references"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {
+        "member_name": member_name.strip().upper(),
+        "image_url":   image_url,
+        "pose":        pose,
+        "source":      "snap",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, json=payload, headers=headers, timeout=8.0)
+        if res.status_code not in (200, 201, 204):
+            print(f"[参照ライブラリ] 記録失敗: {res.status_code} {res.text[:200]}")
+        else:
+            print(f"[参照ライブラリ] {member_name}のポーズ「{pose[:30]}...」を記録しました")
+    except Exception as e:
+        print(f"[参照ライブラリ] 記録エラー（スナップ自体には影響なし）: {e}")
+
+
 # ─── スナップ生成コア ───
 async def generate_snap(
     member_name: str, camera_image_b64: str
@@ -273,5 +312,8 @@ async def generate_snap(
 
     if not image_url:
         return None, "Supabaseへの保存に失敗しました"
+
+    # 将来の動画生成（被写体参照）に備え、成功したポーズを参照ライブラリに記録する
+    await _save_to_reference_library(member_name, image_url, pose)
 
     return image_url, None

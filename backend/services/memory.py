@@ -47,6 +47,7 @@ async def save_episode_memory(
     image_url: str = "",
     lat: float | None = None,
     lng: float | None = None,
+    visual_description: str = "",
 ) -> None:
     url, key = _sb()
     if not url or not key:
@@ -65,6 +66,10 @@ async def save_episode_memory(
         data["location_name"] = location_name
     if image_url:
         data["image_url"] = image_url
+    if visual_description:
+        # 2026-07-05追加：将来のAI動画生成プロンプトの下地として、
+        # 光・時間帯・構図等のイメージを一言で残しておく。
+        data["visual_description"] = visual_description
     # lat/lng は 0.0 のような正当な値もあり得るため、None チェックで判定する
     # （location_name 等の "truthy" チェックとは意図的に分けている）
     if lat is not None and lng is not None:
@@ -206,20 +211,43 @@ async def maybe_save_episode(
     )
 
     # キーワード抽出（LLM 優先、フォールバックはルールベース）
+    # 2026-07-05追加：同じLLM呼び出しに相乗りする形で、将来のAI動画生成の
+    # 参考になる「映像的描写」も一緒に抽出する（追加のAPI呼び出しは発生しない）。
+    # 写真がある場合は実際の画像も渡し、実物を見た上で描写してもらう。
     keywords: list[str]
+    visual_description: str = ""
     if llm:
         try:
             kw_prompt = (
-                "以下の会話から重要なキーワードを3〜5個抽出して、JSONの文字列配列のみで返してください。\n"
-                "説明や前置きは不要です。例: [\"京都\", \"ArtAR\", \"バグ修正\"]\n\n"
+                "以下の会話から重要なキーワードを3〜5個と、この場面を将来のAI動画生成の"
+                "参考素材にできるような短い映像的描写（光の色・時間帯・構図などのイメージ、"
+                "1文程度）を抽出してください。\n"
+                "JSON形式のみで返してください。説明や前置きは不要です。\n"
+                '例: {"keywords": ["京都", "ArtAR", "バグ修正"], '
+                '"visual_description": "夜のデスク周り、PCの光だけがぼんやり顔を照らしている"}\n'
+                "映像化するほどの情報が無い場合は visual_description を空文字にしてください。\n\n"
                 f"ユーザー: {user_text}\nルキルキ: {ai_reply}"
             )
-            kw_res = await llm.ainvoke([HumanMessage(content=kw_prompt)])
+            if image_url:
+                message_content = [
+                    {"type": "text", "text": kw_prompt + "\n（添付の写真も参考にしてください）"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]
+            else:
+                message_content = kw_prompt
+
+            kw_res = await llm.ainvoke([HumanMessage(content=message_content)])
             kw_text = re.sub(r"```json|```", "", kw_res.content.strip()).strip()
-            extracted = json.loads(kw_text)
-            if not isinstance(extracted, list):
-                raise ValueError("list expected")
-            keywords = [str(k) for k in extracted[:5]]
+            parsed = json.loads(kw_text)
+
+            if isinstance(parsed, dict):
+                keywords = [str(k) for k in parsed.get("keywords", [])[:5]]
+                visual_description = str(parsed.get("visual_description") or "").strip()
+            elif isinstance(parsed, list):
+                # 後方互換：万一、配列のみの旧形式で返ってきた場合
+                keywords = [str(k) for k in parsed[:5]]
+            else:
+                raise ValueError("unexpected format")
         except Exception as kw_err:
             keywords = [k for k in memorable_keywords if k in user_text]
             print(f"[キーワード抽出] LLM失敗→フォールバック: {kw_err}")
@@ -227,6 +255,8 @@ async def maybe_save_episode(
         keywords = [k for k in memorable_keywords if k in user_text]
 
     print(f"[エピソード記録] keywords={keywords} summary={summary[:60]}")
+    if visual_description:
+        print(f"[エピソード記録] 映像的描写: {visual_description[:60]}")
     if arweave_tx_id:
         print(f"[エピソード記録] Arweave tx: {arweave_tx_id}")
     if location_name:
@@ -238,6 +268,7 @@ async def maybe_save_episode(
         keywords=keywords,
         arweave_tx_id=arweave_tx_id,
         location_name=location_name,
+        visual_description=visual_description,
         image_url=image_url,
         lat=lat,
         lng=lng,
