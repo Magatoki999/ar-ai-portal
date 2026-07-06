@@ -96,6 +96,21 @@ SNAP_POSES = [
     "both hands raised in a small victory pose, joyful expression",
 ]
 
+# 2026-07-05追加：将来のAI動画生成（被写体参照）に備えた「参照品質」ポーズ。
+# SNAP_POSESと違い、①正面以外のアングルを含む ②顔・体を手で隠さない
+# ③陽気な表情に偏らない、という3点を意識している。
+# REFERENCE_POSE_RATIO の確率でこちらから選ばれ、character_referencesに
+# tag="reference" として記録される（SNAP_POSES側は tag="casual"）。
+REFERENCE_POSES = [
+    "standing naturally facing the camera directly, neutral relaxed expression, arms at sides",
+    "standing in a three-quarter turn toward the camera, calm expression, arms at sides",
+    "standing in profile (side view), neutral expression, arms at sides",
+    "looking slightly away in thought, calm and composed expression, arms at sides",
+]
+
+# 参照用ポーズが選ばれる確率（0.0〜1.0）。デフォルト20%。
+REFERENCE_POSE_RATIO = float(os.getenv("REFERENCE_POSE_RATIO", "0.2"))
+
 
 def _resolve_reference_path(member_name: str) -> pathlib.Path | None:
     """
@@ -158,12 +173,13 @@ async def upload_to_supabase_storage(
 
 
 async def _save_to_reference_library(
-    member_name: str, image_url: str, pose: str
+    member_name: str, image_url: str, pose: str, tag: str = "casual"
 ) -> None:
     """
     生成に成功したスナップ画像を、将来の動画生成（被写体参照）用の
     「キャラクター参照画像ライブラリ」（character_referencesテーブル）に記録する。
     2026-07-05新規。ベストエフォート実装（失敗してもスナップ機能自体は失敗させない）。
+    tag="casual"：通常のSNAP_POSES。tag="reference"：参照品質を意識したREFERENCE_POSES。
     """
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_key = (
@@ -184,6 +200,7 @@ async def _save_to_reference_library(
         "image_url":   image_url,
         "pose":        pose,
         "source":      "snap",
+        "tag":         tag,
     }
     try:
         async with httpx.AsyncClient() as client:
@@ -191,7 +208,7 @@ async def _save_to_reference_library(
         if res.status_code not in (200, 201, 204):
             print(f"[参照ライブラリ] 記録失敗: {res.status_code} {res.text[:200]}")
         else:
-            print(f"[参照ライブラリ] {member_name}のポーズ「{pose[:30]}...」を記録しました")
+            print(f"[参照ライブラリ] {member_name}のポーズ「{pose[:30]}...」を記録しました（tag={tag}）")
     except Exception as e:
         print(f"[参照ライブラリ] 記録エラー（スナップ自体には影響なし）: {e}")
 
@@ -230,7 +247,10 @@ async def generate_snap(
         return None, f"カメラ画像のデコードに失敗: {e}"
 
     # ── 3. Gemini（Nano Banana）で画像合成 ──
-    pose = random.choice(SNAP_POSES)
+    # 2026-07-05更新：REFERENCE_POSE_RATIOの確率で参照品質ポーズを混ぜる
+    use_reference_pose = random.random() < REFERENCE_POSE_RATIO
+    pose = random.choice(REFERENCE_POSES) if use_reference_pose else random.choice(SNAP_POSES)
+    pose_tag = "reference" if use_reference_pose else "casual"
     prompt = (
         "The person shown in the reference image is naturally posing in the scene "
         "shown in the background photo, "
@@ -314,6 +334,6 @@ async def generate_snap(
         return None, "Supabaseへの保存に失敗しました"
 
     # 将来の動画生成（被写体参照）に備え、成功したポーズを参照ライブラリに記録する
-    await _save_to_reference_library(member_name, image_url, pose)
+    await _save_to_reference_library(member_name, image_url, pose, tag=pose_tag)
 
     return image_url, None
