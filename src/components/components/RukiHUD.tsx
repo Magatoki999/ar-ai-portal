@@ -3,6 +3,7 @@
 
 import type { AIStatus, SearchPhase, FacialEmotion } from "../lib/types";
 import { RukiFaceIcon } from "./RukiFaceIcon";
+import { shareToX } from "../lib/share";
 
 interface RukiHUDProps {
   aiStatus:          AIStatus;
@@ -100,10 +101,19 @@ export function RukiHUD({
 
       {/* 字幕エリア（タップ透過） */}
       <div className="mx-4 mb-3">
-        <div className="bg-black/70 backdrop-blur-md rounded-2xl border border-purple-500/20 px-4 py-3 shadow-xl">
+        <div className="relative bg-black/70 backdrop-blur-md rounded-2xl border border-purple-500/20 px-4 py-3 shadow-xl">
           <p className="text-white text-sm leading-relaxed whitespace-pre-line text-center font-medium min-h-[1.5rem]">
             {subtitle || "ルキルキが現れるのを待っています..."}
           </p>
+          {/* 実際の返答があるときだけ表示（プレースホルダー文言はシェア対象外） */}
+          {subtitle && (
+            <button
+              onClick={() => shareToX({ text: subtitle })}
+              style={{ pointerEvents: "auto" }}
+              className="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-black/80 border border-purple-400/40 flex items-center justify-center text-[11px] text-purple-200 hover:bg-purple-900/80 transition-colors shadow-lg"
+              aria-label="Xでシェア"
+            >𝕏</button>
+          )}
         </div>
       </div>
 

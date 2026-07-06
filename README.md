@@ -18,9 +18,9 @@
 | **Web3認証ゲート** | wagmi / RainbowKit (Polygon) | Polygon上のSBT（Soulbound Token）の保有数（`balanceOf`）を検証。保有者のみARビューアへ誘導。 |
 | **フロントエンド** | Next.js (App Router) / MindAR / Three.js | マーカー認識によるAR表示、3Dアバター（GLB）の描画とリアルタイム・リップシンク制御。 |
 | **バックエンド** | FastAPI / LangGraph / LangChain | APIサーバー。動的コンテキスト生成、マルチエージェントによる応答生成、音声合成プロバイダーの制御。 |
-| **会話AI** | LangGraph（Router → Chronicle/Keeper/Pulse → Synthesizer → Evaluator） | OpenAI `gpt-4o`（Synthesizer）/ `gpt-4o-mini`（Router/Agent/Evaluator）。2026-06-29、コスト最適化のためRouterを`gpt-4o`から`gpt-4o-mini`へ変更。 |
-| **音声合成（TTS）** | Gemini TTS（メイン） / OpenAI TTS（フォールバック） / ElevenLabs（オプション） | `TTS_PROVIDER` 環境変数で切替。デフォルトは `gemini`。 |
-| **画像生成** | OpenAI `gpt-image-1` | 「○○とスナップ」コマンドによる記念写真合成。 |
+| **会話AI** | LangGraph（Router → Chronicle/Keeper/Pulse → Synthesizer → Evaluator） | Synthesizerは OpenAI `gpt-4o` 固定（キャラクター性維持のため移行対象外）。Router/Agent/Evaluator/Visionは2026-07-05に `gemini-2.5-flash-lite` へ移行し、無料枠切れ時はOpenAI `gpt-4o-mini` に自動フォールバックする（`services/resilient_llm.py`）。 |
+| **音声合成（TTS）** | Gemini TTS（メイン） ⇄ ElevenLabs（相互フォールバック） | `TTS_PROVIDER` 環境変数で切替。デフォルトは `gemini`。2026-07-05、OpenAI TTSを撤去し相互フォールバック構成に変更。 |
+| **画像生成** | Gemini `gemini-2.5-flash-image`（Nano Banana、メイン） / OpenAI `gpt-image-1`（フォールバック） | 「○○とスナップ」コマンドによる記念写真合成。2026-07-05にOpenAIから移行、失敗時はOpenAIへ自動フォールバック。 |
 | **外部検索** | Tavily Search | 雑談や手持ち知識で解決できない場合のみ限定的に使用。 |
 | **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、画像。 |
 | **カレンダー連携** | Google Calendar API（OAuth2リフレッシュトークン） | 直近48時間の予定を確認し、準備提案を自発的に配信。 |
@@ -47,7 +47,8 @@ ar-ai-portal/  (ルート階層。package.json はここに存在する)
 │   │   └── curator_persona.md  # マインドプロファイル生成AI「Curator」のペルソナ（2026-06-29追加）
 │   ├── services/               # 状態・DB・TTS・カレンダー等のロジック層
 │   │   ├── books.py            # 読書通帳機能（ISBN照会・記帳・会話Tool。2026-06-28追加）
-│   │   └── character_bible.py  # マインドプロファイル生成バッチ（Curator呼び出し。2026-06-29追加）
+│   │   ├── character_bible.py  # マインドプロファイル生成バッチ（Curator呼び出し。2026-06-29追加）
+│   │   └── resilient_llm.py    # Gemini⇄OpenAI自動フォールバックの共通LLMラッパー（2026-07-05追加）
 │   ├── agents/                # LangGraph ノード・グラフ定義
 │   └── context/               # load_magatoki_context() が読む知識ベース（*.md）
 ├── src/                       # Next.js側 (Web3認証ゲート・MindARビューア)
@@ -104,17 +105,25 @@ OPENAI_API_KEY=your_openai_api_key
 
 # モデル設定（省略時は下記のデフォルト値が使われる）
 # 新モデルへの切り替えはこの2行を変更するだけで全ファイルに反映される（2026-06-30〜）
-LLM_MODEL_SMART=gpt-4o          # Synthesizer用（高精度優先）
-LLM_MODEL_FAST=gpt-4o-mini      # Router/Agent/Evaluator/main.py用（コスト優先）
+LLM_MODEL_SMART=gpt-4o                  # Synthesizer/Curator用（高精度優先・OpenAI固定・移行対象外）
+LLM_MODEL_FAST=gemini-2.5-flash-lite    # Router/Agent/Evaluator/Vision/main.py用（コスト優先）
+                                         # 2026-07-05、gpt-4o-miniからGeminiへ移行
 
-# TTS（TTS_PROVIDER で切替。デフォルトは gemini）
+# 2026-07-05追加：Gemini無料枠が429/404等で失敗した際のフォールバック先（省略可）
+FALLBACK_MODEL_FAST=gpt-4o-mini
+
+# TTS（TTS_PROVIDER で切替。デフォルトは gemini。2026-07-05、openai選択肢を廃止）
 TTS_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_VOICE_NAME=Kore
 GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
-# ElevenLabsを使う場合のみ
+# GOOGLE_API_KEY は省略可。未設定時は上記GEMINI_API_KEYがLLM/画像生成でも自動的に使われる
+# ElevenLabsはGeminiの相互フォールバック先として実質必須（2026-07-05〜）
 ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_VOICE_ID=your_voice_id
+
+# スナップ写真生成（省略可・デフォルトはNano Banana）
+SNAP_IMAGE_MODEL=gemini-2.5-flash-image
 
 # Supabase（必須）
 SUPABASE_URL=your_supabase_project_url
@@ -213,24 +222,28 @@ npm run dev
   - **将来のAI動画生成プロンプトへの変換ルールは `ruki_mind/_PromptBuilder/00_builder.md` に下書きとして用意済み（未検証）。** 抽象語（「映画的」「美しい」等）を禁止し「誰が・どこで・何をして・どちらを向いて・カメラ・時間変化」の6要素を必須にするルール、ルキルキ固有の感情表現・姿勢・カメラワークのガイド、シーンタイプ別テンプレートを含む。見た目リファレンス画像（`ruki_mind/reference_images/`）はまだ未整備（GLBモデルからの静止画書き出しが必要）。
 - **モバイルでの意図しないズーム対策:** `viewport` 設定（`maximumScale: 1`、`userScalable: false`）と、テキスト入力欄のフォントサイズを16px以上にすることで、iOS Safari特有の「入力欄フォーカス時の自動ズーム」とピンチズームの両方を抑制している。
 - **会話を質問で締めくくらない:** 返答の最後を「〜どうですか？」のような問いかけで終えると、ユーザーが「答えなきゃ」と気を遣ってしまう問題があったため、`rukiruki_persona.md`に独立した見出しで明記し、`persona.py`の`SYSTEM_CONSTRAINTS`にも同趣旨の制約を重ねて追加した。意味が分からず聞き返す必要がある場合のみ例外とし、それ以外は感想・意見・相槌だけで言い切るよう指示している。
+- **Gemini⇄OpenAI自動フォールバック（ResilientLLM。2026-07-05追加）:** Router/Agent/Evaluator/Visionで使うGemini（無料枠）が429（レート制限）や404（モデル未対応）等で失敗した場合、`services/resilient_llm.py`が自動的にOpenAI（デフォルト`gpt-4o-mini`）へ切り替えて再試行する。無料枠を使い切ってもチャット機能自体が止まらないようにするための保険。スナップ写真生成（Nano Banana）にも同様にOpenAI `gpt-image-1`へのフォールバックを用意している。
+- **フォールバック使用時のキャラクター内言及（2026-07-05追加）:** 上記のフォールバックが発生した回だけ、ルキルキの返答の末尾に「無料枠を使い切っちゃった」旨のセリフをランダムに1つ追加する。Chronicle/Keeper/Pulse/Evaluatorのいずれかでフォールバックが起きたことを`state`経由で検知しており、Supabaseへのエピソード記憶保存はこのセリフを追加する前の文章で行うため、会話履歴にノイズは残らない。Router（構造化出力）のフォールバックはこの仕組みでは検知できない技術的制約がある。
 
 ---
 
 ## 💰 AI利用コストの構成と最適化方針
 
-OpenAI APIの利用枠を消費する箇所は以下の通り。月々のコストを抑えたい場合の参考に。
+**2026-07-05更新：** Router/Agent/Evaluator/Vision/スナップ写真生成をOpenAIからGeminiへ部分移行した。「Synthesizerの人格は絶対に変えない」という条件のもと、判定系タスクのみをコスト最適化の対象とした（全面移行は見送り。判断の経緯は`ArtAR_ルキルキ_技術リファレンス.html`のトラブルシュート履歴22番を参照）。
 
 | 箇所 | モデル | 発生タイミング | 備考 |
 |---|---|---|---|
-| Synthesizer（メイン会話生成） | `gpt-4o`（`LLM_MODEL_SMART`） | ユーザーが話しかけるたび | ルキルキの口調・性格の核心部分のため、コスト最適化の対象外（最後の手段として温存） |
-| Router（意図分類） | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 同上 | **2026-06-29、`gpt-4o`から変更。** 構造化出力（Literal型での分類）のみのタスクのため精度への影響は小さいと判断 |
-| Agent / Evaluator | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 同上 | 元から軽量モデル |
-| Vision（食事写真の食べ物判定） | `gpt-4o-mini`（`LLM_MODEL_FAST`） | 📷ボタン押下時、食事の発話と共に撮影された場合のみ | `detail: "low"`でさらにコスト抑制済み |
-| スナップ写真生成 | `gpt-image-1` | 「○○とスナップ」コマンド時 | 画像生成は他のテキスト系APIと比べて単価が高い。使用頻度に注意 |
-| AI情報ダイジェスト | `gpt-4o-mini`＋Tavily検索 | **2026-06-29、日次から週次（7日間隔）に変更** | `should_generate_ai_news_today()` |
-| Curator（マインドプロファイル生成） | `LLM_MODEL_SMART`にフォールバック（`CHARACTER_BIBLE_MODEL`で個別上書き可） | 月1回・手動トリガー | 2026-06-29、デフォルトを`gpt-4o`から変更。長文の人格分析タスクのため、生成結果の質が気になる場合は`CHARACTER_BIBLE_MODEL=gpt-4o`で個別に戻せる |
+| Synthesizer（メイン会話生成） | `gpt-4o`（`LLM_MODEL_SMART`、OpenAI固定） | ユーザーが話しかけるたび | ルキルキの口調・性格の核心部分のため、移行対象外（最後の手段として温存） |
+| Router（意図分類） | `gemini-2.5-flash-lite`（`LLM_MODEL_FAST`） | 同上 | **2026-07-05、`gpt-4o-mini`から変更。** 失敗時はOpenAI `gpt-4o-mini`へ自動フォールバック（`services/resilient_llm.py`） |
+| Chronicle/Keeper/Pulse/Evaluator | `gemini-2.5-flash-lite`（`LLM_MODEL_FAST`） | 同上 | 同上。3並列実行のため1ターンで最低3回同時にGeminiコールが発生する点に注意（RPMの消費が早い） |
+| Vision（食事写真の食べ物判定） | `gemini-2.5-flash-lite`（`LLM_MODEL_FAST`） | 📷ボタン押下時、食事の発話と共に撮影された場合のみ | 同上。画像コンテンツは辞書形式（`{"url":...}`）で統一し、OpenAIフォールバック時も動作するようにしている |
+| スナップ写真生成 | `gemini-2.5-flash-image`（Nano Banana） | 「○○とスナップ」コマンド時 | 2026-07-05、`gpt-image-1`から変更。失敗時はOpenAI `gpt-image-1`へ自動フォールバック |
+| AI情報ダイジェスト | `gemini-2.5-flash-lite`＋Tavily検索 | 2026-06-29、日次から週次（7日間隔）に変更 | `should_generate_ai_news_today()` |
+| Curator（マインドプロファイル生成） | `LLM_MODEL_SMART`にフォールバック（`CHARACTER_BIBLE_MODEL`で個別上書き可、実質`gpt-4o`、OpenAI固定） | 月1回・手動トリガー | ルキルキの自己認識を書くタスクのため、Synthesizerと同様に移行対象外とした |
 
-**今後の検討事項（ローカルLLM）:** Router・Evaluatorのような判定系タスクは、将来的にLlama 3.1 8B等のローカルLLM（Ollama等）への置き換えが現実的と考えられる。Synthesizer（メイン会話）はルキルキらしさの根幹のため、ローカル化の優先度は最も低い。実行環境（どこでローカルLLMを動かすか）の設計が前提として必要なため、現時点では未着手。
+**Gemini無料枠が切れたらどうなるか：** `services/resilient_llm.py`のResilientLLMが自動的にOpenAI（デフォルト`gpt-4o-mini`、`FALLBACK_MODEL_FAST`で変更可）へ切り替えるため、チャット機能自体は止まらない。ただしフォールバックが多発するとOpenAI課金がじわじわ増えるため、Renderのログで`Gemini失敗 → OpenAI`という行がどれくらいの頻度で出るかを定期的に確認するとよい。頻発するようであれば、Google Cloud Billingを有効化してGeminiの無料枠自体を引き上げる、または3並列（Chronicle/Keeper/Pulse）の呼び出し数を見直すといった対策を検討する。
+
+**今後の検討事項（ローカルLLM）:** Router・Evaluatorのような判定系タスクは、将来的にLlama 3.1 8B等のローカルLLM（Ollama等）への置き換えも選択肢としては残るが、2026-07-05時点ではGeminiの無料枠＋OpenAIフォールバックという構成でコストと可用性のバランスが取れていると判断し、優先度は下げている。実行環境（どこでローカルLLMを動かすか）の設計が前提として必要な点も変わらない。
 
 **一般公開向けプレゼン資料:** `presentation.html`（スタンドアロンHTML）を2026-06-30に作成。AIやWeb3に興味があるビジネス層向けに「AIキャラクターを育てて、プロンプト資産にする」というコンセプトを訴求する内容。ブラウザで直接開くだけで使える（依存ファイルなし）。
 

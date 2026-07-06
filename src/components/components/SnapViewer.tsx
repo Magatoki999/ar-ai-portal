@@ -4,6 +4,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 "use client";
 
+import { shareToX } from "../lib/share";
+
 interface SnapViewerProps {
   imageUrl: string;
   onClose:  () => void;
@@ -33,6 +35,13 @@ export function SnapViewer({ imageUrl, onClose }: SnapViewerProps) {
 
       {/* アクション行 */}
       <div className="flex gap-3 mt-6">
+        <button
+          onClick={() => shareToX({ text: "ルキルキとの思い出📸 #ルキルキ", imageUrl })}
+          style={{ pointerEvents: "auto", cursor: "pointer" }}
+          className="text-xs bg-purple-900/60 border border-purple-500/40 text-purple-200 px-5 py-2 rounded-xl hover:bg-purple-800/60 transition-colors font-mono"
+        >
+          𝕏 SHARE
+        </button>
         <a
           href={imageUrl}
           download="rukiruki_memory.jpg"
