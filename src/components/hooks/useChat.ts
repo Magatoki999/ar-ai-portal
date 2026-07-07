@@ -311,7 +311,8 @@ export function useChat({
   }, [triggerInitialGreeting, onAiStatusChange, onSearchPhaseChange, onSubtitleChange]);
 
   // ── スナップ生成 ──
-  const handleSnap = useCallback(async (memberName: string) => {
+  // memberName2 を渡すと2キャラクター一緒のスナップになる（2026-07-06追加）
+  const handleSnap = useCallback(async (memberName: string, memberName2?: string) => {
     if (isBusyRef.current) return;
     isBusyRef.current = true;
     const cameraImage = captureFrame(containerRef.current);
@@ -320,14 +321,17 @@ export function useChat({
       isBusyRef.current = false;
       return;
     }
+    const isDuo = !!memberName2;
+    const label = isDuo ? `${memberName}と${memberName2}` : memberName;
     onAiStatusChange("thinking");
-    onSubtitleChange(`📸 ${memberName}とのスナップ写真を生成中...`);
+    onSubtitleChange(`📸 ${label}とのスナップ写真を生成中...`);
     try {
       const res = await fetch(`${BASE_URL}/api/snap`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           member_name:    memberName,
+          member_name_2:  memberName2 ?? null,
           camera_image:   cameraImage,
           wallet_address: address ?? null,
         }),
@@ -336,12 +340,12 @@ export function useChat({
       const data = await res.json();
       if (data.status === "ok" && data.image_url) {
         onSnapResult(data.image_url);
-        onSubtitleChange(`✨ ${memberName}とのスナップ写真ができたよ！`);
+        onSubtitleChange(`✨ ${label}とのスナップ写真ができたよ！`);
         const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         updateHistory((prev) => [
           ...prev,
-          { role: "user", text: `${memberName}とスナップ`, timestamp: ts },
-          { role: "ruki", text: data.message ?? `${memberName}とのスナップ写真ができたよ！`, timestamp: ts },
+          { role: "user", text: `${label}とスナップ`, timestamp: ts },
+          { role: "ruki", text: data.message ?? `${label}とのスナップ写真ができたよ！`, timestamp: ts },
         ]);
       } else {
         onSubtitleChange(`スナップ生成に失敗: ${data.message ?? "不明なエラー"}`);
@@ -365,7 +369,16 @@ export function useChat({
     const text     = (formData.get("message") as string).trim();
     if (!text) return;
 
-    // スナップコマンド
+    // スナップコマンド（2026-07-06追加：2人一緒のパターンを先に判定する）
+    // 例:「IZANAとAcielとスナップ」→ duo / 「IZANAとスナップ」→ 単体
+    // 「と」の出現回数で区別しているため、単体パターンより先に判定する必要がある
+    // （duoパターンが不一致の場合のみ単体パターンにフォールバックする）
+    const duoSnapMatch = text.match(/^(.+?)と(.+?)とスナップ$/);
+    if (duoSnapMatch) {
+      if (inputRef.current) inputRef.current.value = "";
+      await handleSnap(duoSnapMatch[1].trim(), duoSnapMatch[2].trim());
+      return;
+    }
     const snapMatch = text.match(/^(.+?)とスナップ$/);
     if (snapMatch) {
       if (inputRef.current) inputRef.current.value = "";

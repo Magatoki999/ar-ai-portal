@@ -35,11 +35,12 @@ SNAP_IMAGE_MODEL = os.getenv("SNAP_IMAGE_MODEL", "gemini-2.5-flash-image")
 
 
 async def _generate_via_openai_fallback(
-    cam_bytes: bytes, ref_bytes: bytes, prompt: str
+    cam_bytes: bytes, ref_bytes: bytes, prompt: str, ref_bytes_2: bytes | None = None
 ) -> bytes | None:
     """
     Nano Banana（Gemini）が失敗した場合の保険。OpenAIのgpt-image-1 edit APIで
     同じ合成写真を生成する。OPENAI_API_KEYが無い場合はNoneを返す。
+    ref_bytes_2を渡すと2人一緒のスナップにも対応する（2026-07-06追加）。
     """
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
@@ -52,6 +53,10 @@ async def _generate_via_openai_fallback(
                 ("image[]", ("background.jpg", cam_bytes, "image/jpeg")),
                 ("image[]", ("reference.jpg",  ref_bytes, "image/jpeg")),
             ]
+            if ref_bytes_2:
+                multipart_files.append(
+                    ("image[]", ("reference2.jpg", ref_bytes_2, "image/jpeg"))
+                )
             data = {
                 "model":   "gpt-image-1",
                 "prompt":  prompt,
@@ -110,6 +115,16 @@ REFERENCE_POSES = [
 
 # 参照用ポーズが選ばれる確率（0.0〜1.0）。デフォルト20%。
 REFERENCE_POSE_RATIO = float(os.getenv("REFERENCE_POSE_RATIO", "0.2"))
+
+# 2026-07-06追加：2キャラクター同時スナップ用のポーズ。
+# SNAP_POSES/REFERENCE_POSESが1人称の動作記述なのに対し、こちらは
+# 「2人の関係性」を記述する必要があるため別プールにしている。
+DUO_POSES = [
+    "standing side by side, both smiling at the camera together",
+    "giving each other a high-five, both looking energetic and happy",
+    "standing back to back in a confident, playful pose",
+    "one pointing excitedly at something off-camera while the other looks in the same direction, both curious",
+]
 
 
 def _resolve_reference_path(member_name: str) -> pathlib.Path | None:
@@ -215,10 +230,12 @@ async def _save_to_reference_library(
 
 # ─── スナップ生成コア ───
 async def generate_snap(
-    member_name: str, camera_image_b64: str
+    member_name: str, camera_image_b64: str, member_name_2: str | None = None
 ) -> tuple[str | None, str | None]:
     """
     スナップ画像を生成して Supabase に保存する。
+    member_name_2 を指定すると、2キャラクターが一緒に写るスナップになる
+    （2026-07-06追加）。
     戻り値: (image_url, error_message)
         成功時: (url, None)
         失敗時: (None, "エラーメッセージ")
@@ -226,6 +243,8 @@ async def generate_snap(
     client = _get_gemini_client()
     if client is None:
         return None, "Gemini APIキー未設定"
+
+    is_duo = bool(member_name_2 and member_name_2.strip())
 
     # ── 1. リファレンス画像を読み込む（大文字小文字を区別しない） ──
     ref_path = _resolve_reference_path(member_name)
@@ -237,6 +256,17 @@ async def generate_snap(
     ref_mime  = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
     print(f"[スナップ] リファレンス画像読み込み: {ref_path} ({len(ref_bytes)}bytes)")
 
+    ref_bytes_2: bytes | None = None
+    ref_mime_2:  str | None = None
+    if is_duo:
+        ref_path_2 = _resolve_reference_path(member_name_2)
+        if ref_path_2 is None:
+            print(f"[スナップ] リファレンス画像が見つかりません: {member_name_2}")
+            return None, f"{member_name_2}のリファレンス画像が見つかりません"
+        ref_bytes_2 = ref_path_2.read_bytes()
+        ref_mime_2  = "image/png" if ref_path_2.suffix.lower() == ".png" else "image/jpeg"
+        print(f"[スナップ] リファレンス画像読み込み（2人目）: {ref_path_2} ({len(ref_bytes_2)}bytes)")
+
     # ── 2. カメラ画像をバイトに変換 ──
     try:
         cam_b64 = camera_image_b64
@@ -247,34 +277,62 @@ async def generate_snap(
         return None, f"カメラ画像のデコードに失敗: {e}"
 
     # ── 3. Gemini（Nano Banana）で画像合成 ──
-    # 2026-07-05更新：REFERENCE_POSE_RATIOの確率で参照品質ポーズを混ぜる
-    use_reference_pose = random.random() < REFERENCE_POSE_RATIO
-    pose = random.choice(REFERENCE_POSES) if use_reference_pose else random.choice(SNAP_POSES)
-    pose_tag = "reference" if use_reference_pose else "casual"
-    prompt = (
-        "The person shown in the reference image is naturally posing in the scene "
-        "shown in the background photo, "
-        f"{pose}. "
-        "Create a realistic photo where the person blends naturally into the environment. "
-        "Maintain the person's face, hairstyle, and clothing from the reference image "
-        "as accurately as possible. "
-        "The lighting and perspective should match the background scene. "
-        "Make it look like a candid photograph taken together, full of energy and fun.\n\n"
-        "IMPORTANT OUTPUT RULES:\n"
-        "- Output exactly ONE image: the final composited photo described above.\n"
-        "- Do NOT output the reference image or the background image unmodified or as "
-        "a separate image (e.g. no character sheet, no closeup portrait, no isolated "
-        "render on a plain background). Only the single blended scene counts as output."
-    )
+    if is_duo:
+        # 2人一緒のスナップ：DUO_POSESから選ぶ。参照ライブラリ用のcasual/reference
+        # 区別は1人用スナップの概念なので、ここでは使わない（pose_tagはNone扱い）。
+        use_reference_pose = False
+        pose = random.choice(DUO_POSES)
+        pose_tag = "duo"
+        prompt = (
+            "The two people shown in the reference images are naturally posing together in "
+            "the scene shown in the background photo, "
+            f"{pose}. "
+            "Create a realistic photo where both people blend naturally into the environment "
+            "and interact with each other naturally. "
+            "Maintain each person's face, hairstyle, and clothing from their respective "
+            "reference image as accurately as possible. Do not mix or swap their outfits or "
+            "features between the two characters. "
+            "The lighting and perspective should match the background scene. "
+            "Make it look like a candid photograph of the three of you together, full of energy and fun.\n\n"
+            "IMPORTANT OUTPUT RULES:\n"
+            "- Output exactly ONE image: the final composited photo described above.\n"
+            "- Do NOT output either reference image or the background image unmodified or as "
+            "a separate image (e.g. no character sheet, no closeup portrait, no isolated "
+            "render on a plain background). Only the single blended scene counts as output."
+        )
+    else:
+        # 2026-07-05更新：REFERENCE_POSE_RATIOの確率で参照品質ポーズを混ぜる
+        use_reference_pose = random.random() < REFERENCE_POSE_RATIO
+        pose = random.choice(REFERENCE_POSES) if use_reference_pose else random.choice(SNAP_POSES)
+        pose_tag = "reference" if use_reference_pose else "casual"
+        prompt = (
+            "The person shown in the reference image is naturally posing in the scene "
+            "shown in the background photo, "
+            f"{pose}. "
+            "Create a realistic photo where the person blends naturally into the environment. "
+            "Maintain the person's face, hairstyle, and clothing from the reference image "
+            "as accurately as possible. "
+            "The lighting and perspective should match the background scene. "
+            "Make it look like a candid photograph taken together, full of energy and fun.\n\n"
+            "IMPORTANT OUTPUT RULES:\n"
+            "- Output exactly ONE image: the final composited photo described above.\n"
+            "- Do NOT output the reference image or the background image unmodified or as "
+            "a separate image (e.g. no character sheet, no closeup portrait, no isolated "
+            "render on a plain background). Only the single blended scene counts as output."
+        )
     print(f"[スナップ] 選択ポーズ: {pose}")
     try:
+        contents: list = [
+            types.Part.from_bytes(data=cam_bytes, mime_type="image/jpeg"),
+            types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime),
+        ]
+        if is_duo:
+            contents.append(types.Part.from_bytes(data=ref_bytes_2, mime_type=ref_mime_2))
+        contents.append(prompt)
+
         response = await client.aio.models.generate_content(
             model=SNAP_IMAGE_MODEL,
-            contents=[
-                types.Part.from_bytes(data=cam_bytes, mime_type="image/jpeg"),
-                types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime),
-                prompt,
-            ],
+            contents=contents,
         )
 
         # 複数の画像パートが返ってくることがあるため（リファレンスの再生成が
@@ -299,7 +357,9 @@ async def generate_snap(
 
         if not generated_bytes:
             print(f"[スナップ] Gemini応答に画像データがありません: {response} → OpenAIにフォールバック")
-            generated_bytes = await _generate_via_openai_fallback(cam_bytes, ref_bytes, prompt)
+            generated_bytes = await _generate_via_openai_fallback(
+                cam_bytes, ref_bytes, prompt, ref_bytes_2=ref_bytes_2
+            )
             if not generated_bytes:
                 return None, "生成画像データが取得できませんでした（Gemini/OpenAIともに失敗）"
             print(f"[スナップ] OpenAIフォールバックで画像生成成功: {len(generated_bytes)}bytes")
@@ -318,7 +378,9 @@ async def generate_snap(
 
     except Exception as e:
         print(f"[スナップ] Gemini呼び出しエラー: {e} → OpenAIにフォールバック")
-        generated_bytes = await _generate_via_openai_fallback(cam_bytes, ref_bytes, prompt)
+        generated_bytes = await _generate_via_openai_fallback(
+            cam_bytes, ref_bytes, prompt, ref_bytes_2=ref_bytes_2
+        )
         if not generated_bytes:
             return None, f"画像生成エラー: Gemini({e})、OpenAIフォールバックも失敗"
         print(f"[スナップ] OpenAIフォールバックで画像生成成功: {len(generated_bytes)}bytes")
@@ -327,13 +389,22 @@ async def generate_snap(
     JST = timezone(timedelta(hours=+9))
     ts  = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
     safe_member_name = member_name.strip().upper().replace(" ", "_")
-    filename  = f"snap_{safe_member_name}_{ts}.jpg"
+    if is_duo:
+        safe_member_name_2 = member_name_2.strip().upper().replace(" ", "_")
+        filename = f"snap_{safe_member_name}_{safe_member_name_2}_{ts}.jpg"
+    else:
+        filename = f"snap_{safe_member_name}_{ts}.jpg"
     image_url = await upload_to_supabase_storage(generated_bytes, filename)
 
     if not image_url:
         return None, "Supabaseへの保存に失敗しました"
 
-    # 将来の動画生成（被写体参照）に備え、成功したポーズを参照ライブラリに記録する
-    await _save_to_reference_library(member_name, image_url, pose, tag=pose_tag)
+    if is_duo:
+        # 2人が写った合成画像は「単体キャラクターの参照素材」としては使いにくいため、
+        # 参照ライブラリには記録しない（各キャラクター単体のスナップの時だけ記録する）。
+        print("[スナップ] 2人一緒のスナップのため参照ライブラリへの記録はスキップします")
+    else:
+        # 将来の動画生成（被写体参照）に備え、成功したポーズを参照ライブラリに記録する
+        await _save_to_reference_library(member_name, image_url, pose, tag=pose_tag)
 
     return image_url, None

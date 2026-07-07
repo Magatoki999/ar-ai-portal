@@ -209,6 +209,8 @@ class MemoryPhotoRequest(BaseModel):
 
 class SnapRequest(BaseModel):
     member_name: str
+    # 2026-07-06追加：指定すると2キャラクター一緒のスナップになる（任意）
+    member_name_2: str | None = None
     camera_image: str
     wallet_address: str | None = None
 
@@ -950,17 +952,32 @@ async def view_mind_profile_endpoint(year: int | None = None, month: int | None 
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/snap")
 async def create_snap(payload: SnapRequest):
-    image_url, error = await generate_snap(payload.member_name, payload.camera_image)
+    is_duo = bool(payload.member_name_2 and payload.member_name_2.strip())
+    image_url, error = await generate_snap(
+        payload.member_name, payload.camera_image, member_name_2=payload.member_name_2
+    )
     if error:
         return {"status": "error", "message": error}
 
     # episode_memories に記録
     JST     = timezone(timedelta(hours=+9))
     now_str = datetime.now(JST).strftime("%m月%d日 %H時%M分")
+    if is_duo:
+        summary = (
+            f"{now_str}、まがときさんが{payload.member_name}と{payload.member_name_2}と"
+            "一緒にスナップ写真を撮影した。"
+        )
+        keywords = ["スナップ", payload.member_name, payload.member_name_2, "写真", "思い出"]
+        message  = f"{payload.member_name}と{payload.member_name_2}とのスナップ写真ができたよ！"
+    else:
+        summary  = f"{now_str}、まがときさんが{payload.member_name}とスナップ写真を撮影した。"
+        keywords = ["スナップ", payload.member_name, "写真", "思い出"]
+        message  = f"{payload.member_name}とのスナップ写真ができたよ！"
+
     await save_episode_memory(
-        summary=f"{now_str}、まがときさんが{payload.member_name}とスナップ写真を撮影した。",
+        summary=summary,
         mood_at_time=state.emotional_state.get("mood", "neutral"),
-        keywords=["スナップ", payload.member_name, "写真", "思い出"],
+        keywords=keywords,
         arweave_tx_id="",
         location_name="",
         image_url=image_url,
@@ -971,7 +988,8 @@ async def create_snap(payload: SnapRequest):
         "status":      "ok",
         "image_url":   image_url,
         "member_name": payload.member_name,
-        "message":     f"{payload.member_name}とのスナップ写真ができたよ！",
+        "member_name_2": payload.member_name_2,
+        "message":     message,
     }
 
 
