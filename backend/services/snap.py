@@ -116,14 +116,23 @@ REFERENCE_POSES = [
 # 参照用ポーズが選ばれる確率（0.0〜1.0）。デフォルト20%。
 REFERENCE_POSE_RATIO = float(os.getenv("REFERENCE_POSE_RATIO", "0.2"))
 
-# 2026-07-06追加：2キャラクター同時スナップ用のポーズ。
+# 2026-07-06追加、2026-07-08改訂：2キャラクター同時スナップ用のポーズ。
 # SNAP_POSES/REFERENCE_POSESが1人称の動作記述なのに対し、こちらは
 # 「2人の関係性」を記述する必要があるため別プールにしている。
+# 2026-07-08：「2人ともカメラ目線で並ぶ」だけだと相互作用が生まれず不自然だった
+# （ユーザーからのフィードバック）ため、互いに向き合って会話・やり取りしている
+# 描写に統一した。
 DUO_POSES = [
-    "standing side by side, both smiling at the camera together",
-    "giving each other a high-five, both looking energetic and happy",
-    "standing back to back in a confident, playful pose",
-    "one pointing excitedly at something off-camera while the other looks in the same direction, both curious",
+    "facing each other in the middle of a lively conversation, one gesturing animatedly "
+    "with their hands while talking, the other listening with an amused, engaged expression",
+    "standing close together, one pointing at something just out of frame while the other "
+    "leans in and looks in the same direction, both curious and focused on it",
+    "leaning toward each other laughing together at a shared joke, both slightly bent forward "
+    "with genuine laughter",
+    "walking side by side mid-conversation, one turned slightly toward the other mid-sentence, "
+    "both gesturing naturally as if deep in discussion",
+    "one showing something small in their open hands to the other, who is leaning in with "
+    "curious, delighted interest",
 ]
 
 
@@ -284,11 +293,12 @@ async def generate_snap(
         pose = random.choice(DUO_POSES)
         pose_tag = "duo"
         prompt = (
-            "The two people shown in the reference images are naturally posing together in "
-            "the scene shown in the background photo, "
+            "The two people shown in the reference images are standing together in "
+            "the scene shown in the background photo, interacting with each other: "
             f"{pose}. "
-            "Create a realistic photo where both people blend naturally into the environment "
-            "and interact with each other naturally. "
+            "This should look like a candid, unposed snapshot caught mid-moment — neither "
+            "person needs to be looking at the camera. "
+            "Create a realistic photo where both people blend naturally into the environment. "
             "Maintain each person's face, hairstyle, and clothing from their respective "
             "reference image as accurately as possible. Do not mix or swap their outfits or "
             "features between the two characters. "
@@ -303,7 +313,15 @@ async def generate_snap(
             "composited from a separate studio render.\n"
             "- Both people should be standing firmly grounded on the visible floor, not floating "
             "slightly above it.\n\n"
-            "Make it look like a candid photograph of the three of you together, full of energy and fun.\n\n"
+            "CRITICAL FOR SCALE (avoid a 'tiny figurine placed on the floor' look):\n"
+            "- Both characters are child-sized humans, not miniature figurines or toys. Scale "
+            "them believably against real objects in the background (doorways, furniture, "
+            "shelves, bags) as a real child of that height would appear — this is usually "
+            "taller and closer to the camera than a small object placed on the ground.\n"
+            "- Do not place them tucked into a small gap next to furniture as if they were an "
+            "object on a shelf; they should occupy the scene as living people standing on the "
+            "main floor area.\n\n"
+            "Make it look like a candid photograph, full of energy and fun.\n\n"
             "IMPORTANT OUTPUT RULES:\n"
             "- Output exactly ONE image: the final composited photo described above.\n"
             "- Do NOT output either reference image or the background image unmodified or as "
