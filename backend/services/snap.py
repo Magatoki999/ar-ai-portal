@@ -123,6 +123,18 @@ REFERENCE_POSE_RATIO = float(os.getenv("REFERENCE_POSE_RATIO", "0.2"))
 # （ユーザーからのフィードバック）ため、互いに向き合って会話・やり取りしている
 # 描写に統一した。
 DUO_POSES = [
+    "facing each other directly, deeply absorbed in conversation, one leaning forward mid-"
+    "explanation with hands gesturing expressively, the other resting their chin thoughtfully "
+    "on one hand while listening intently, both fully focused on each other and nothing else",
+    "standing face to face in an animated discussion, one explaining something with wide, "
+    "expressive hand gestures, the other tilting their head with a thoughtful, considering "
+    "expression, eyes locked on each other",
+    "facing each other closely, one asking an excited question with hands clasped together, "
+    "the other mid-response with a raised finger as if explaining a point, both leaning "
+    "slightly toward one another",
+    "sitting or crouching directly across from each other having a focused conversation, "
+    "body language mirrored, both leaning in toward one another, oblivious to anything else "
+    "around them",
     "facing each other in the middle of a lively conversation, one gesturing animatedly "
     "with their hands while talking, the other listening with an amused, engaged expression",
     "standing close together, one pointing at something just out of frame while the other "
@@ -133,6 +145,21 @@ DUO_POSES = [
     "both gesturing naturally as if deep in discussion",
     "one showing something small in their open hands to the other, who is leaning in with "
     "curious, delighted interest",
+    # 2026-07-08追加：好評だった「見せる／覗き込む」系統を軸に、動作のバリエーションを増やす
+    "one crouching down to examine something on the ground while the other leans over their "
+    "shoulder to look too, both fully absorbed in it",
+    "one playfully tugging the other's sleeve to get their attention, the other turning with "
+    "a surprised, delighted expression",
+    "sitting or crouching side by side looking at the same thing together, shoulders almost "
+    "touching, relaxed and comfortable posture",
+    "one whispering something to the other with a hand cupped near their mouth, the other "
+    "leaning in close to listen, both grinning conspiratorially",
+    "one mid-explanation with both hands raised expressively describing something, the other "
+    "watching with wide, attentive eyes",
+    "walking a few steps ahead and glancing back over their shoulder at the other, who is "
+    "jogging slightly to catch up, both smiling",
+    "one offering a hand to help the other up or across something, the other reaching to take it, "
+    "both focused on each other",
 ]
 
 
@@ -321,6 +348,13 @@ async def generate_snap(
             "- Do not place them tucked into a small gap next to furniture as if they were an "
             "object on a shelf; they should occupy the scene as living people standing on the "
             "main floor area.\n\n"
+            "CRITICAL FOR POSE (avoid a 'default T-pose' look):\n"
+            "- Never render either character with both arms stretched straight out to the sides "
+            "at shoulder height (a neutral T-pose or A-pose). This is a rest pose, not a natural "
+            "human pose, and must not appear in the final image under any circumstance.\n"
+            "- Every limb must be actively engaged in the described interaction "
+            f"({pose}) — arms should be bent, gesturing, reaching, or resting naturally, never "
+            "held rigidly straight out from the body.\n\n"
             "Make it look like a candid photograph, full of energy and fun.\n\n"
             "IMPORTANT OUTPUT RULES:\n"
             "- Output exactly ONE image: the final composited photo described above.\n"
