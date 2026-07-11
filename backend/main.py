@@ -215,6 +215,11 @@ class SnapRequest(BaseModel):
     wallet_address: str | None = None
 
 
+# 2026-07-10追加：MetaMask接続が不安定な環境向けのパスワード認証回避策（テスト運用限定）
+class PasswordAuthRequest(BaseModel):
+    password: str
+
+
 class BookLogPayload(BaseModel):
     isbn: str | None = None
     title: str
@@ -950,6 +955,21 @@ async def view_mind_profile_endpoint(year: int | None = None, month: int | None 
 # ─────────────────────────────────────────────────────────────────────────────
 # スナップエンドポイント
 # ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/auth/password")
+async def password_auth(payload: PasswordAuthRequest):
+    """
+    MetaMask接続が不安定な環境（屋外での実機テスト等）向けの回避策。
+    2026-07-10追加。あくまでテスト運用限定の簡易チェックであり、
+    SBT保有確認の代替として本番公開する場合は使わないこと。
+    """
+    correct_password = os.getenv("TEST_ACCESS_PASSWORD")
+    if not correct_password:
+        return {"status": "error", "message": "パスワード認証が設定されていません"}
+    if payload.password == correct_password:
+        return {"status": "ok"}
+    return {"status": "error", "message": "パスワードが違います"}
+
+
 @app.post("/api/snap")
 async def create_snap(payload: SnapRequest):
     is_duo = bool(payload.member_name_2 and payload.member_name_2.strip())

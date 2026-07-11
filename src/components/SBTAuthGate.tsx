@@ -25,11 +25,83 @@ export default function SBTAuthGate() {
   const { address, isConnected } = useAccount();
   const [mounted, setMounted] = useState(false);
 
+  // 2026-07-10追加：MetaMask接続が不安定な環境向けのパスワード認証回避策（テスト運用限定）
+  const [passwordAuthed, setPasswordAuthed] = useState(false);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+
 // Next.jsのハイドレーションエラー（SSRとクライアントの差異）を防ぐ対策
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
+    // 同じタブ内であれば再読み込みのたびにパスワードを求めないようにする
+    if (typeof window !== 'undefined' && sessionStorage.getItem('rukiruki_password_authed') === 'true') {
+      setPasswordAuthed(true);
+    }
   }, []);
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsVerifying(true);
+    setPasswordError('');
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL;
+      const res = await fetch(`${baseUrl}/api/auth/password`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        sessionStorage.setItem('rukiruki_password_authed', 'true');
+        setPasswordAuthed(true);
+      } else {
+        setPasswordError(data.message ?? 'パスワードが違います');
+      }
+    } catch (err) {
+      console.error('[パスワード認証]', err);
+      setPasswordError('通信エラーが発生しました');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // パスワード入力フォーム（未接続画面・SBT未確認画面の両方から呼び出す共通パーツ）
+  const passwordFallback = (
+    <div className="pt-4 mt-2 border-t border-white/10">
+      {!showPasswordForm ? (
+        <button
+          onClick={() => setShowPasswordForm(true)}
+          className="text-xs text-gray-500 hover:text-gray-300 underline transition-colors"
+        >
+          ウォレットに接続できない場合（テスト用）
+        </button>
+      ) : (
+        <form onSubmit={handlePasswordSubmit} className="space-y-3">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="パスワード"
+            autoComplete="off"
+            className="w-full bg-black/40 border border-white/20 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-400/60 transition-colors"
+          />
+          {passwordError && (
+            <p className="text-xs text-red-400">{passwordError}</p>
+          )}
+          <button
+            type="submit"
+            disabled={isVerifying || !password}
+            className="w-full bg-purple-600/80 hover:bg-purple-500/80 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-4 py-2.5 text-sm text-white transition-colors"
+          >
+            {isVerifying ? '確認中...' : 'パスワードでログイン'}
+          </button>
+        </form>
+      )}
+    </div>
+  );
   
   // スマートコントラクトから、接続されたアドレスのSBT保有数を読み込む
   const { data: balance, isLoading, isError } = useReadContract({
@@ -43,6 +115,12 @@ export default function SBTAuthGate() {
   });
 
   if (!mounted) return null;
+
+  // パスワード認証済みなら、ウォレット接続を経由せず直接ARビューアを起動する
+  // （2026-07-10追加：MetaMask接続が不安定な環境向けの回避策。テスト運用限定）
+  if (passwordAuthed) {
+    return <MindARViewer />;
+  }
 
   // 1. ウォレットが未接続の場合の画面
   if (!isConnected) {
@@ -61,6 +139,7 @@ export default function SBTAuthGate() {
           <div className="flex justify-center pt-2">
             <ConnectButton label="ウォレットを接続して認証" />
           </div>
+          {passwordFallback}
         </div>
       </div>
     );
@@ -94,6 +173,7 @@ export default function SBTAuthGate() {
           <div className="flex justify-center pt-2 gap-3">
             <ConnectButton />
           </div>
+          {passwordFallback}
         </div>
       </div>
     );
