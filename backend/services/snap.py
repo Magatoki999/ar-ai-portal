@@ -264,6 +264,53 @@ async def _save_to_reference_library(
         print(f"[参照ライブラリ] 記録エラー（スナップ自体には影響なし）: {e}")
 
 
+async def _save_scene_reference(
+    member_names: list[str], image_url: str, pose: str, is_duo: bool
+) -> None:
+    """
+    スナップ成功時に「どんなシチュエーションで撮られたか」を記録する
+    （scene_referencesテーブル）。2026-07-10新規。
+
+    character_referencesとの違い：
+    - character_references は「見た目の一貫性」用でduoスナップは対象外にしている
+    - scene_references は「場面・シチュエーションの引き出し」用なので、
+      1人／2人を問わず全件記録する（将来のAI動画生成でシーン構成の参考にするため）
+    - pose の文章がそのままシチュエーションの説明を兼ねるため、
+      追加のAPI呼び出しは発生させない（コストゼロで実装）
+    ベストエフォート実装（失敗してもスナップ機能自体は失敗させない）。
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    )
+    if not supabase_url or not supabase_key:
+        return
+
+    endpoint = f"{supabase_url}/rest/v1/scene_references"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {
+        "member_names": [m.strip().upper() for m in member_names],
+        "image_url":    image_url,
+        "pose":         pose,
+        "is_duo":       is_duo,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, json=payload, headers=headers, timeout=8.0)
+        if res.status_code not in (200, 201, 204):
+            print(f"[シーン参照] 記録失敗: {res.status_code} {res.text[:200]}")
+        else:
+            names_label = "＋".join(member_names)
+            print(f"[シーン参照] {names_label}のシーンを記録しました（is_duo={is_duo}）")
+    except Exception as e:
+        print(f"[シーン参照] 記録エラー（スナップ自体には影響なし）: {e}")
+
+
 # ─── スナップ生成コア ───
 async def generate_snap(
     member_name: str, camera_image_b64: str, member_name_2: str | None = None
@@ -463,10 +510,14 @@ async def generate_snap(
 
     if is_duo:
         # 2人が写った合成画像は「単体キャラクターの参照素材」としては使いにくいため、
-        # 参照ライブラリには記録しない（各キャラクター単体のスナップの時だけ記録する）。
-        print("[スナップ] 2人一緒のスナップのため参照ライブラリへの記録はスキップします")
+        # キャラクター参照ライブラリには記録しない（各キャラクター単体のスナップの時だけ記録する）。
+        print("[スナップ] 2人一緒のスナップのためキャラクター参照ライブラリへの記録はスキップします")
     else:
         # 将来の動画生成（被写体参照）に備え、成功したポーズを参照ライブラリに記録する
         await _save_to_reference_library(member_name, image_url, pose, tag=pose_tag)
+
+    # シーン参照は1人・2人を問わず全件記録する（将来のシーン作りの引き出しを増やすため）
+    member_names = [member_name, member_name_2] if is_duo else [member_name]
+    await _save_scene_reference(member_names, image_url, pose, is_duo)
 
     return image_url, None
