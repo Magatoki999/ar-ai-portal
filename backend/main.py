@@ -72,6 +72,7 @@ from services.memory import (
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.books import fetch_book_by_isbn, save_reading_log
 from services.character_bible import generate_mind_profile
+from services import prompt_builder
 from services.scheduler import (
     auto_research_job,
     proactive_talk_job,
@@ -952,6 +953,75 @@ async def view_mind_profile_endpoint(year: int | None = None, month: int | None 
         return f"{year}-{month:02d}.md はまだ生成されていません。"
     return path.read_text(encoding="utf-8")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# プロンプトビルダー（AI動画生成用プロンプト生成）エンドポイント
+# generate_mind_profile / view_mind_profile と同じく、ユーザー向け会話フローとは
+# 完全に別経路。GET/POST両対応でスマホから直接叩ける。
+# ─────────────────────────────────────────────────────────────────────────────
+@app.api_route("/api/internal/list_scene_references", methods=["GET", "POST"])
+async def list_scene_references_endpoint(limit: int = 20):
+    """直近のscene_referencesを一覧表示（scene_idを選ぶための下見用）。"""
+    try:
+        rows = await prompt_builder.list_recent_scene_references(limit=limit)
+        return {"status": "ok", "count": len(rows), "scene_references": rows}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+ 
+ 
+@app.api_route("/api/internal/generate_video_prompt", methods=["GET", "POST"])
+async def generate_video_prompt_endpoint(scene_id: str, genre: str = "日常"):
+    """
+    指定したscene_referenceから動画生成プロンプトを作り、video_promptsに保存する。
+    例: /api/internal/generate_video_prompt?scene_id=42&genre=会話交流
+    """
+    try:
+        saved = await prompt_builder.generate_video_prompt(scene_id=scene_id, genre=genre)
+        return {"status": "ok", "video_prompt": saved}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"予期しないエラー: {e}"}
+ 
+ 
+@app.api_route("/api/internal/list_video_prompts", methods=["GET", "POST"])
+async def list_video_prompts_endpoint(status: str | None = None, limit: int = 20):
+    """
+    蓄積したvideo_promptsを一覧表示。
+    例: /api/internal/list_video_prompts?status=generated
+    """
+    try:
+        rows = await prompt_builder.list_video_prompts(status=status, limit=limit)
+        return {"status": "ok", "count": len(rows), "video_prompts": rows}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+ 
+ 
+@app.api_route("/api/internal/update_video_prompt_result", methods=["GET", "POST"])
+async def update_video_prompt_result_endpoint(
+    prompt_id: int,
+    tested_model: str,
+    result_video_url: str | None = None,
+    result_notes: str | None = None,
+    status: str = "tested",
+):
+    """
+    Kling/Pollo AI等で実際に試した後、結果を書き戻す。
+    例: /api/internal/update_video_prompt_result?prompt_id=7&tested_model=kling&status=adopted
+    """
+    try:
+        saved = await prompt_builder.update_video_prompt_result(
+            prompt_id=prompt_id,
+            tested_model=tested_model,
+            result_video_url=result_video_url,
+            result_notes=result_notes,
+            status=status,
+        )
+        return {"status": "ok", "video_prompt": saved}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # スナップエンドポイント

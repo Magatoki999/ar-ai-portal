@@ -20,9 +20,10 @@
 | **バックエンド** | FastAPI / LangGraph / LangChain | APIサーバー。動的コンテキスト生成、マルチエージェントによる応答生成、音声合成プロバイダーの制御。 |
 | **会話AI** | LangGraph（Router → Chronicle/Keeper/Pulse → Synthesizer → Evaluator） | Synthesizerは OpenAI `gpt-4o` 固定（キャラクター性維持のため移行対象外）。Router/Agent/Evaluator/Visionは2026-07-05に `gemini-2.5-flash-lite` へ移行し、無料枠切れ時はOpenAI `gpt-4o-mini` に自動フォールバックする（`services/resilient_llm.py`）。 |
 | **音声合成（TTS）** | Gemini TTS（メイン） ⇄ ElevenLabs（相互フォールバック） | `TTS_PROVIDER` 環境変数で切替。デフォルトは `gemini`。2026-07-05、OpenAI TTSを撤去し相互フォールバック構成に変更。 |
-| **画像生成** | Gemini `gemini-2.5-flash-image`（Nano Banana、メイン） / OpenAI `gpt-image-1`（フォールバック） | 「○○とスナップ」コマンドによる記念写真合成。2026-07-05にOpenAIから移行、失敗時はOpenAIへ自動フォールバック。 |
+| **画像生成** | Gemini `gemini-2.5-flash-image`（Nano Banana、メイン） / OpenAI `gpt-image-1`（フォールバック） | 「○○とスナップ」コマンドによる記念写真合成。2026-07-05にOpenAIから移行、失敗時はOpenAIへ自動フォールバック。2026-07-06、2キャラクター同時スナップに対応。 |
+| **SNSシェア** | Web Share API / Web Intent（`lib/share.ts`） | 会話テキスト・スナップ写真をXにシェア。X公式APIは2026年2月に無料枠が実質廃止されたため不使用。2026-07-06追加。 |
 | **外部検索** | Tavily Search | 雑談や手持ち知識で解決できない場合のみ限定的に使用。 |
-| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、画像。 |
+| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶（映像的描写`visual_description`を2026-07-06追加）、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、キャラクター参照画像ライブラリ(`character_references`)、シーン参照ライブラリ(`scene_references`、2026-07-10追加)、画像。 |
 | **カレンダー連携** | Google Calendar API（OAuth2リフレッシュトークン） | 直近48時間の予定を確認し、準備提案を自発的に配信。 |
 | **永久保存** | Arweave | `||ENGRAVE||` タグ発火、または高品質×特定感情の条件で会話を永続化。 |
 | **位置情報** | geopy (Nominatim) | 逆ジオコーディング・GPSセクター判定。 |
@@ -67,7 +68,7 @@ ar-ai-portal/  (ルート階層。package.json はここに存在する)
 │       │   ├── SnapViewer.tsx
 │       │   └── BookScanModal.tsx   # 読書通帳：バーコードスキャンモーダル（2026-06-28追加）
 │       ├── hooks/               # useAR / useChat / useVoice / useWebSocket
-│       └── lib/                 # types.ts / audio.ts
+│       └── lib/                 # types.ts / audio.ts / share.ts（X/SNSシェア共通ユーティリティ。2026-07-06追加）
 ├── public/                    # ルート直下（src/ と同階層）
 │   ├── avatar.glb / targets.mind
 │   ├── ruki_appear.wav        # ※未使用。コードから参照なし
@@ -124,6 +125,12 @@ ELEVENLABS_VOICE_ID=your_voice_id
 
 # スナップ写真生成（省略可・デフォルトはNano Banana）
 SNAP_IMAGE_MODEL=gemini-2.5-flash-image
+# 参照品質ポーズ（REFERENCE_POSES）が選ばれる確率。省略時0.2（20%）。2026-07-06追加
+REFERENCE_POSE_RATIO=0.2
+
+# MetaMask接続不良時のパスワード認証回避策（テスト運用限定）。2026-07-10追加
+# 本番公開時はこの変数自体を削除して経路を無効化すること
+TEST_ACCESS_PASSWORD=（任意のパスワード）
 
 # Supabase（必須）
 SUPABASE_URL=your_supabase_project_url
@@ -223,6 +230,14 @@ npm run dev
 - **モバイルでの意図しないズーム対策:** `viewport` 設定（`maximumScale: 1`、`userScalable: false`）と、テキスト入力欄のフォントサイズを16px以上にすることで、iOS Safari特有の「入力欄フォーカス時の自動ズーム」とピンチズームの両方を抑制している。
 - **会話を質問で締めくくらない:** 返答の最後を「〜どうですか？」のような問いかけで終えると、ユーザーが「答えなきゃ」と気を遣ってしまう問題があったため、`rukiruki_persona.md`に独立した見出しで明記し、`persona.py`の`SYSTEM_CONSTRAINTS`にも同趣旨の制約を重ねて追加した。意味が分からず聞き返す必要がある場合のみ例外とし、それ以外は感想・意見・相槌だけで言い切るよう指示している。
 - **Gemini⇄OpenAI自動フォールバック（ResilientLLM。2026-07-05追加）:** Router/Agent/Evaluator/Visionで使うGemini（無料枠）が429（レート制限）や404（モデル未対応）等で失敗した場合、`services/resilient_llm.py`が自動的にOpenAI（デフォルト`gpt-4o-mini`）へ切り替えて再試行する。無料枠を使い切ってもチャット機能自体が止まらないようにするための保険。スナップ写真生成（Nano Banana）にも同様にOpenAI `gpt-image-1`へのフォールバックを用意している。
+- **フォールバック使用時のキャラクター内言及（2026-07-05追加）:** 上記のフォールバックが発生した回だけ、ルキルキの返答の末尾に「無料枠を使い切っちゃった」旨のセリフをランダムに1つ追加する。Router（構造化出力）のフォールバックはこの仕組みでは検知できない技術的制約がある。
+- **Xシェア機能（2026-07-06追加）:** 会話テキスト・スナップ写真をX（旧Twitter）にシェアするボタンを追加。X公式APIは2026年2月に無料枠が実質廃止（従量課金制）されたため、`lib/share.ts`でWeb Share API（画像添付対応、iOS Safari等）とWeb Intent（テキストのみ、フォールバック）のみを使う設計にした。
+- **キャラクター参照画像ライブラリ（2026-07-06追加）:** 将来のAI動画生成（Gemini Omni Flash等の被写体参照機能）に備え、スナップ生成が成功するたびに`character_references`テーブルへ記録する。`SNAP_POSES`（正面・陽気）に加え、複数アングル・落ち着いた表情を意識した`REFERENCE_POSES`を新設し、`REFERENCE_POSE_RATIO`（デフォルト20%）の確率で混ぜる。
+- **エピソード記憶の映像的描写（2026-07-06追加）:** `services/memory.py`の`maybe_save_episode()`に`visual_description`フィールドを追加。既存のキーワード抽出LLM呼び出しに相乗りする形で実装しており、追加のAPI呼び出しは発生しない。日常会話のプロンプトには含めず、将来のAI動画生成向けの素材としてDBにのみ蓄積する。
+- **2キャラクター同時スナップ（2026-07-06追加）:** 「IZANAとAcielとスナップ」のように2人を同時にスナップできる。フロントエンド（`useChat.ts`）の正規表現で「と」の出現回数から1人/2人を判定し、`services/snap.py`の`DUO_POSES`（向き合って会話する等、2人の相互作用を明示的に記述したポーズ集）で生成する。初期実装では①相互作用が生まれない②スケール感が破綻する③T-poseが頻発する、という3つの課題があったが、プロンプト改善とリファレンス画像の差し替え（腕組み等のアクションポーズに変更）で解決した。キャラクター参照画像を作る際の注意点（1枚1ポーズ・腕を浮かせない・全身を入れる等）も確立している。
+- **シーン参照ライブラリ（2026-07-10追加）:** `character_references`が「見た目」を記録するのに対し、`scene_references`は「どんな場面・どんな相互作用だったか」を記録する。1人・2人スナップを問わず全件記録し、`pose`のテキストがそのままシチュエーション記述を兼ねるため追加コストは無い。
+- **パスワード認証フォールバック（2026-07-10追加）:** 屋外の実機テストでMetaMask接続が不安定になる事象への対応として、`SBTAuthGate.tsx`にウォレット認証を迂回できる簡易パスワード認証を追加。検証はバックエンド（`/api/auth/password`）で行い、環境変数`TEST_ACCESS_PASSWORD`と平文比較する。テスト運用限定で、本番公開時は環境変数を削除して無効化する前提。
+- **Gemini⇄OpenAI自動フォールバック（ResilientLLM。2026-07-05追加）:** Router/Agent/Evaluator/Visionで使うGemini（無料枠）が429（レート制限）や404（モデル未対応）等で失敗した場合、`services/resilient_llm.py`が自動的にOpenAI（デフォルト`gpt-4o-mini`）へ切り替えて再試行する。無料枠を使い切ってもチャット機能自体が止まらないようにするための保険。スナップ写真生成（Nano Banana）にも同様にOpenAI `gpt-image-1`へのフォールバックを用意している。
 - **フォールバック使用時のキャラクター内言及（2026-07-05追加）:** 上記のフォールバックが発生した回だけ、ルキルキの返答の末尾に「無料枠を使い切っちゃった」旨のセリフをランダムに1つ追加する。Chronicle/Keeper/Pulse/Evaluatorのいずれかでフォールバックが起きたことを`state`経由で検知しており、Supabaseへのエピソード記憶保存はこのセリフを追加する前の文章で行うため、会話履歴にノイズは残らない。Router（構造化出力）のフォールバックはこの仕組みでは検知できない技術的制約がある。
 
 ---
@@ -244,6 +259,10 @@ npm run dev
 **Gemini無料枠が切れたらどうなるか：** `services/resilient_llm.py`のResilientLLMが自動的にOpenAI（デフォルト`gpt-4o-mini`、`FALLBACK_MODEL_FAST`で変更可）へ切り替えるため、チャット機能自体は止まらない。ただしフォールバックが多発するとOpenAI課金がじわじわ増えるため、Renderのログで`Gemini失敗 → OpenAI`という行がどれくらいの頻度で出るかを定期的に確認するとよい。頻発するようであれば、Google Cloud Billingを有効化してGeminiの無料枠自体を引き上げる、または3並列（Chronicle/Keeper/Pulse）の呼び出し数を見直すといった対策を検討する。
 
 **今後の検討事項（ローカルLLM）:** Router・Evaluatorのような判定系タスクは、将来的にLlama 3.1 8B等のローカルLLM（Ollama等）への置き換えも選択肢としては残るが、2026-07-05時点ではGeminiの無料枠＋OpenAIフォールバックという構成でコストと可用性のバランスが取れていると判断し、優先度は下げている。実行環境（どこでローカルLLMを動かすか）の設計が前提として必要な点も変わらない。
+
+**Gemini Omni Flash（動画生成）の調査（2026-07-06）:** 2026年6月30日公開の動画生成・編集モデルを調査。被写体参照機能により「マインドプロファイルを将来のAI動画キャスティング素材にする」という長期構想の受け皿になり得ることを確認した一方、①無料枠が無くコストが別次元（約$0.10/秒、10秒で約$1）②実在の人物が写った画像のアップロード・編集は規約上対象外③プレビュー版で仕様変動が激しい、という3点から**今すぐの機能実装は見送り**、将来使えるデータ（キャラクター参照画像ライブラリ、シーン参照ライブラリ、エピソード記憶の映像的描写）の蓄積を優先する方針とした。詳細は`ArtAR_ルキルキ_技術リファレンス.html`のトラブルシュート履歴23番を参照。
+
+**2キャラクター同時スナップとリファレンス画像の教訓（2026-07-06〜07-10）:** 「IZANAとAcielとスナップ」のように2人同時にスナップできる機能を実装。相互作用の欠如・スケール感の破綻・T-poseという3つの課題に遭遇したが、最終的な原因は**リファレンス画像の作り方**にあると判明した（3Dキャラクターシートの「正面ターンアラウンド」を使うと、腕を浮かせた基本姿勢がモデルに刷り込まれる）。今後キャラクターを追加する際は、1枚1ポーズ・腕を体から離さない・全身を入れる、という基準を踏襲する。詳細は同資料のトラブルシュート履歴24番を参照。
 
 **一般公開向けプレゼン資料:** `presentation.html`（スタンドアロンHTML）を2026-06-30に作成。AIやWeb3に興味があるビジネス層向けに「AIキャラクターを育てて、プロンプト資産にする」というコンセプトを訴求する内容。ブラウザで直接開くだけで使える（依存ファイルなし）。
 
