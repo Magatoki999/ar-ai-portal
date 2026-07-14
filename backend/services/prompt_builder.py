@@ -159,9 +159,11 @@ async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
     raw_text = response.content
     prompt_ja, prompt_en = _parse_llm_output(raw_text)
 
-    # 00_builder.mdの更新ログ日付を version として記録（先頭の更新ログ日付を拾う簡易実装）
-    version_match = re.search(r"\|\s*(\d{4}-\d{2}-\d{2})\s*\|", builder_rules)
-    builder_version = version_match.group(1) if version_match else None
+    # 00_builder.mdの更新ログ日付を version として記録。
+    # 更新ログテーブルは日付順に行が並ぶ想定なので、最初にヒットした日付ではなく
+    # 最後にヒットした日付（＝最新の更新）を拾う。
+    version_matches = re.findall(r"\|\s*(\d{4}-\d{2}-\d{2})\s*\|", builder_rules)
+    builder_version = version_matches[-1] if version_matches else None
 
     saved = await _save_video_prompt(
         scene_reference_id=scene_id,

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ルキルキ プロンプトビルダー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #f3ece0;
+    --paper-deep: #ece3d3;
+    --ink: #262019;
+    --ink-soft: #6b6154;
+    --teal: #3f6e64;
+    --teal-deep: #2c4e47;
+    --amber: #bd8a3f;
+    --red: #7c3a34;
+    --line: #d9cdb6;
+    --card: #faf6ec;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(63,110,100,0.06), transparent 40%),
+      radial-gradient(circle at 90% 85%, rgba(189,138,63,0.08), transparent 45%),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:28px 18px 80px;}
+
+  header{margin-bottom:28px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:.14em;
+    color:var(--teal-deep);text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  }
+  .eyebrow::before{content:"";width:14px;height:1px;background:var(--teal-deep);display:inline-block;}
+  h1{
+    font-family:'Shippori Mincho',serif;
+    font-weight:700;font-size:28px;margin:0;color:var(--ink);
+    letter-spacing:.02em;
+  }
+  h1 span{color:var(--teal);}
+  .sub{font-size:12.5px;color:var(--ink-soft);margin-top:6px;line-height:1.6;}
+
+  section{margin-bottom:22px;}
+  .section-head{
+    display:flex;align-items:baseline;gap:10px;margin-bottom:10px;
+    padding-bottom:6px;border-bottom:1px solid var(--line);
+  }
+  .section-head .no{
+    font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--amber);
+  }
+  .section-head h2{
+    font-family:'Shippori Mincho',serif;font-size:15px;margin:0;font-weight:700;
+  }
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:3px;
+    padding:14px 16px;
+    margin-bottom:10px;
+    box-shadow:0 1px 0 rgba(38,32,25,0.03);
+  }
+
+  label{display:block;font-size:11px;color:var(--ink-soft);margin-bottom:5px;letter-spacing:.03em;}
+  input[type=text], select, textarea{
+    width:100%;
+    font-family:'Zen Kaku Gothic New',sans-serif;
+    font-size:14px;
+    padding:9px 10px;
+    border:1px solid var(--line);
+    border-radius:2px;
+    background:#fff;
+    color:var(--ink);
+    margin-bottom:12px;
+  }
+  textarea{resize:vertical;min-height:60px;line-height:1.6;}
+  input:focus, select:focus, textarea:focus{outline:2px solid var(--teal);outline-offset:1px;}
+
+  button{
+    font-family:'Zen Kaku Gothic New',sans-serif;
+    font-weight:700;font-size:13px;
+    padding:10px 16px;
+    border:none;border-radius:2px;
+    background:var(--teal);color:#fff;
+    cursor:pointer;letter-spacing:.03em;
+  }
+  button:hover{background:var(--teal-deep);}
+  button:disabled{background:#c9c2b3;cursor:not-allowed;}
+  button.ghost{
+    background:transparent;color:var(--teal-deep);
+    border:1px solid var(--teal-deep);
+  }
+  button.ghost:hover{background:rgba(63,110,100,0.08);}
+  button.small{padding:6px 11px;font-size:12px;}
+
+  .scene-item{
+    display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+    padding:11px 0;border-bottom:1px dashed var(--line);
+  }
+  .scene-item:last-child{border-bottom:none;}
+  .scene-item .pose{font-size:13px;line-height:1.5;color:var(--ink);}
+  .scene-item .meta{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-soft);margin-top:4px;}
+  .scene-item.selected{background:rgba(63,110,100,0.06);border-radius:3px;padding-left:8px;padding-right:8px;}
+
+  .stamp{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:24px;height:24px;border-radius:50%;
+    border:1.5px solid var(--red);color:var(--red);
+    font-size:9px;font-weight:700;letter-spacing:0;
+    font-family:'Shippori Mincho',serif;
+    flex-shrink:0;transform:rotate(-6deg);
+    opacity:0.85;
+  }
+  .stamp.generated{border-color:var(--ink-soft);color:var(--ink-soft);}
+  .stamp.tested{border-color:var(--amber);color:var(--amber);}
+  .stamp.adopted{border-color:var(--red);color:var(--red);}
+  .stamp.rejected{border-color:var(--ink-soft);color:var(--ink-soft);opacity:.4;}
+
+  .prompt-block{
+    background:#fff;border:1px solid var(--line);border-radius:2px;
+    padding:12px 13px;font-size:13px;line-height:1.7;margin-bottom:8px;
+    white-space:pre-wrap;position:relative;
+  }
+  .prompt-label{
+    font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-soft);
+    text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;display:block;
+  }
+  .copy-btn{
+    position:absolute;top:8px;right:8px;
+    font-size:10.5px;padding:4px 9px;
+  }
+
+  .status-msg{font-size:12.5px;padding:10px 12px;border-radius:2px;margin-bottom:12px;}
+  .status-msg.error{background:rgba(124,58,52,0.09);color:var(--red);}
+  .status-msg.loading{background:rgba(107,97,84,0.08);color:var(--ink-soft);}
+
+  .row{display:flex;gap:10px;}
+  .row > *{flex:1;}
+
+  details{margin-top:4px;}
+  summary{cursor:pointer;font-size:12px;color:var(--teal-deep);list-style:none;}
+  summary::-webkit-details-marker{display:none;}
+  summary::before{content:"› "; font-family:'JetBrains Mono',monospace;}
+  details[open] summary::before{content:"⌄ ";}
+
+  .empty{font-size:12.5px;color:var(--ink-soft);padding:16px 0;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ArtAR / ルキルキ</div>
+    <h1>プロンプト<span>ビルダー</span></h1>
+    <div class="sub">scene_references から動画生成プロンプトを組み立て、蓄積する。</div>
+  </header>
+
+  <section>
+    <div class="section-head"><span class="no">01</span><h2>接続先</h2></div>
+    <div class="card">
+      <label for="baseUrl">バックエンドURL（Render）</label>
+      <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com">
+      <div class="row">
+        <button id="saveUrlBtn">保存して読み込む</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="sceneSection" style="display:none;">
+    <div class="section-head"><span class="no">02</span><h2>シーンを選ぶ</h2></div>
+    <div class="card">
+      <div id="sceneStatus" class="empty">読み込み中…</div>
+      <div id="sceneList"></div>
+      <button class="ghost small" id="refreshScenesBtn" style="margin-top:8px;">一覧を更新</button>
+    </div>
+  </section>
+
+  <section id="generateSection" style="display:none;">
+    <div class="section-head"><span class="no">03</span><h2>プロンプトを生成</h2></div>
+    <div class="card">
+      <label>選択中のシーン</label>
+      <div id="selectedScenePreview" class="prompt-block" style="font-size:12.5px;color:var(--ink-soft);">未選択</div>
+      <label for="genreSelect">ジャンル</label>
+      <select id="genreSelect">
+        <option value="日常">日常観測</option>
+        <option value="会話交流">会話交流</option>
+        <option value="独白">独白・内省</option>
+      </select>
+      <button id="generateBtn" disabled>プロンプトを生成する</button>
+      <div id="generateStatus"></div>
+    </div>
+  </section>
+
+  <section id="resultSection" style="display:none;">
+    <div class="section-head"><span class="no">04</span><h2>生成結果</h2></div>
+    <div class="card" id="resultCard"></div>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="no">05</span><h2>蓄積したプロンプト</h2></div>
+    <div class="card">
+      <div id="historyStatus" class="empty">接続先を保存すると読み込まれます</div>
+      <div id="historyList"></div>
+      <button class="ghost small" id="refreshHistoryBtn" style="margin-top:8px;display:none;">履歴を更新</button>
+    </div>
+  </section>
+
+</div>
+
+<script>
+let baseUrl = "";
+let scenes = [];
+let selectedSceneId = null;
+let currentPromptId = null;
+
+const $ = id => document.getElementById(id);
+
+async function loadSavedUrl(){
+  try{
+    const res = await window.storage.get('backend_base_url');
+    if(res && res.value){
+      baseUrl = res.value;
+      $('baseUrl').value = baseUrl;
+      await initAfterUrl();
+    }
+  }catch(e){ /* 未保存なら何もしない */ }
+}
+
+$('saveUrlBtn').addEventListener('click', async ()=>{
+  const val = $('baseUrl').value.trim().replace(/\/$/, '');
+  if(!val){ return; }
+  baseUrl = val;
+  try{
+    await window.storage.set('backend_base_url', val);
+  }catch(e){ console.error('storage save failed', e); }
+  await initAfterUrl();
+});
+
+async function initAfterUrl(){
+  $('sceneSection').style.display = 'block';
+  $('refreshHistoryBtn').style.display = 'inline-block';
+  await fetchScenes();
+  await fetchHistory();
+}
+
+async function apiGet(path, params={}){
+  const url = new URL(baseUrl + path);
+  Object.entries(params).forEach(([k,v])=>{
+    if(v !== null && v !== undefined && v !== '') url.searchParams.set(k, v);
+  });
+  const resp = await fetch(url.toString(), { method: 'GET' });
+  if(!resp.ok){
+    throw new Error('HTTP ' + resp.status);
+  }
+  return await resp.json();
+}
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// ── シーン一覧 ─────────────────────────
+async function fetchScenes(){
+  $('sceneStatus').textContent = '読み込み中…';
+  $('sceneStatus').className = 'status-msg loading';
+  $('sceneList').innerHTML = '';
+  try{
+    const data = await apiGet('/api/internal/list_scene_references', {limit: 20});
+    scenes = data.scene_references || [];
+    if(scenes.length === 0){
+      $('sceneStatus').textContent = 'scene_referencesがまだありません';
+      $('sceneStatus').className = 'empty';
+      return;
+    }
+    $('sceneStatus').style.display = 'none';
+    renderScenes();
+  }catch(e){
+    $('sceneStatus').textContent = '読み込み失敗: ' + e.message + '（CORS設定 or URLを確認してください）';
+    $('sceneStatus').className = 'status-msg error';
+  }
+}
+
+function renderScenes(){
+  const list = $('sceneList');
+  list.innerHTML = '';
+  scenes.forEach(s=>{
+    const div = document.createElement('div');
+    div.className = 'scene-item' + (s.id === selectedSceneId ? ' selected' : '');
+    const date = s.created_at ? new Date(s.created_at).toLocaleString('ja-JP') : '';
+    div.innerHTML = `
+      <div style="flex:1;">
+        <div class="pose">${escapeHtml(s.pose)}</div>
+        <div class="meta">${date}${s.is_duo ? ' ・ 2人' : ''}</div>
+      </div>
+      <button class="ghost small" data-id="${s.id}">選ぶ</button>
+    `;
+    div.querySelector('button').addEventListener('click', ()=> selectScene(s));
+    list.appendChild(div);
+  });
+}
+
+function selectScene(scene){
+  selectedSceneId = scene.id;
+  renderScenes();
+  $('generateSection').style.display = 'block';
+  $('selectedScenePreview').textContent = scene.pose;
+  $('generateBtn').disabled = false;
+  $('resultSection').style.display = 'none';
+}
+
+$('refreshScenesBtn').addEventListener('click', fetchScenes);
+
+// ── プロンプト生成 ─────────────────────────
+$('generateBtn').addEventListener('click', async ()=>{
+  if(!selectedSceneId) return;
+  const genre = $('genreSelect').value;
+  $('generateBtn').disabled = true;
+  $('generateStatus').innerHTML = '<div class="status-msg loading">生成中…（数秒〜十数秒かかります）</div>';
+  try{
+    const data = await apiGet('/api/internal/generate_video_prompt', {scene_id: selectedSceneId, genre});
+    if(data.status !== 'ok'){
+      throw new Error(data.message || '生成に失敗しました');
+    }
+    $('generateStatus').innerHTML = '';
+    renderResult(data.video_prompt);
+    await fetchHistory();
+  }catch(e){
+    $('generateStatus').innerHTML = `<div class="status-msg error">失敗: ${e.message}</div>`;
+  }finally{
+    $('generateBtn').disabled = false;
+  }
+});
+
+function renderResult(vp){
+  currentPromptId = vp.id;
+  $('resultSection').style.display = 'block';
+  const card = $('resultCard');
+  card.innerHTML = `
+    <div class="prompt-block">
+      <span class="prompt-label">日本語プロンプト</span>
+      <button class="ghost copy-btn" data-text="${escapeHtml(vp.prompt_ja)}">コピー</button>
+      ${escapeHtml(vp.prompt_ja)}
+    </div>
+    <div class="prompt-block">
+      <span class="prompt-label">English Prompt</span>
+      <button class="ghost copy-btn" data-text="${escapeHtml(vp.prompt_en)}">コピー</button>
+      ${escapeHtml(vp.prompt_en)}
+    </div>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-soft);margin-bottom:14px;">
+      id: ${vp.id} ・ builder v${vp.builder_version || '?'} ・ ${vp.genre}
+    </div>
+    <details>
+      <summary>実際に試した結果を記録する</summary>
+      <div style="margin-top:10px;">
+        <label>使用したモデル</label>
+        <select id="testedModel">
+          <option value="kling">Kling</option>
+          <option value="pollo_ai">Pollo AI</option>
+          <option value="seedance">Seedance</option>
+          <option value="other">その他</option>
+        </select>
+        <label>動画URL（任意）</label>
+        <input type="text" id="resultVideoUrl" placeholder="https://...">
+        <label>所感（任意）</label>
+        <textarea id="resultNotes" placeholder="表情の強度・カメラの安定感など"></textarea>
+        <label>ステータス</label>
+        <select id="resultStatus">
+          <option value="tested">tested（試した）</option>
+          <option value="adopted">adopted（採用）</option>
+          <option value="rejected">rejected（没）</option>
+        </select>
+        <button id="saveResultBtn">記録する</button>
+        <div id="saveResultStatus"></div>
+      </div>
+    </details>
+  `;
+  card.querySelectorAll('.copy-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      navigator.clipboard?.writeText(btn.dataset.text);
+      btn.textContent = 'コピー済';
+      setTimeout(()=> btn.textContent = 'コピー', 1500);
+    });
+  });
+  $('saveResultBtn').addEventListener('click', saveResult);
+}
+
+async function saveResult(){
+  const tested_model = $('testedModel').value;
+  const result_video_url = $('resultVideoUrl').value.trim();
+  const result_notes = $('resultNotes').value.trim();
+  const status = $('resultStatus').value;
+  $('saveResultBtn').disabled = true;
+  $('saveResultStatus').innerHTML = '<div class="status-msg loading">保存中…</div>';
+  try{
+    const data = await apiGet('/api/internal/update_video_prompt_result', {
+      prompt_id: currentPromptId, tested_model, result_video_url, result_notes, status
+    });
+    if(data.status !== 'ok') throw new Error(data.message || '保存に失敗しました');
+    $('saveResultStatus').innerHTML = '<div class="status-msg loading">保存しました</div>';
+    await fetchHistory();
+  }catch(e){
+    $('saveResultStatus').innerHTML = `<div class="status-msg error">失敗: ${e.message}</div>`;
+  }finally{
+    $('saveResultBtn').disabled = false;
+  }
+}
+
+// ── 履歴 ─────────────────────────
+$('refreshHistoryBtn').addEventListener('click', fetchHistory);
+
+async function fetchHistory(){
+  $('historyStatus').textContent = '読み込み中…';
+  $('historyStatus').className = 'status-msg loading';
+  $('historyStatus').style.display = 'block';
+  try{
+    const data = await apiGet('/api/internal/list_video_prompts', {limit: 15});
+    const items = data.video_prompts || [];
+    $('historyList').innerHTML = '';
+    if(items.length === 0){
+      $('historyStatus').textContent = 'まだ生成履歴がありません';
+      $('historyStatus').className = 'empty';
+      return;
+    }
+    $('historyStatus').style.display = 'none';
+    items.forEach(vp=>{
+      const div = document.createElement('div');
+      div.className = 'scene-item';
+      const label = {generated:'生成', tested:'検証', adopted:'採用', rejected:'却下'}[vp.status] || vp.status;
+      const date = vp.created_at ? new Date(vp.created_at).toLocaleDateString('ja-JP') : '';
+      div.innerHTML = `
+        <span class="stamp ${vp.status}">${label}</span>
+        <div style="flex:1;">
+          <div class="pose">${escapeHtml((vp.prompt_ja||'').slice(0,60))}…</div>
+          <div class="meta">#${vp.id} ・ ${vp.genre || ''} ・ ${date}${vp.tested_model ? ' ・ ' + vp.tested_model : ''}</div>
+        </div>
+      `;
+      $('historyList').appendChild(div);
+    });
+  }catch(e){
+    $('historyStatus').textContent = '読み込み失敗: ' + e.message;
+    $('historyStatus').className = 'status-msg error';
+  }
+}
+
+loadSavedUrl();
+</script>
+</body>
+</html>
