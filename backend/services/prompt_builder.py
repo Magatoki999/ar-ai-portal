@@ -15,11 +15,13 @@ scene_references + ruki_mind（マインドプロファイル）+ _PromptBuilder
 import os
 import glob
 import re
+import base64
 from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
 
 import httpx
+from langchain_core.messages import HumanMessage
 
 from services.resilient_llm import build_fast_llm  # 既存のResilientLLMファクトリを再利用
 from services.character_bible import _RUKI_MIND_DIR  # ruki_mind/のパスを一元管理箇所から流用
@@ -63,7 +65,7 @@ async def list_recent_scene_references(limit: int = 20) -> list[dict]:
     """直近のscene_referencesを新しい順で返す（スマホから選ぶ一覧表示用）。"""
     url = f"{SUPABASE_URL}/rest/v1/scene_references"
     params = {
-        "select": "id,member_names,pose,is_duo,created_at",
+        "select": "id,member_names,pose,is_duo,created_at,image_url",
         "order": "created_at.desc",
         "limit": str(limit),
     }
@@ -90,12 +92,32 @@ def _load_builder_rules() -> str:
     return BUILDER_RULES_PATH.read_text(encoding="utf-8")
 
 
+async def _fetch_image_as_data_url(image_url: str) -> str | None:
+    """
+    scene_referencesのimage_url（実際のスナップ写真）を取得し、
+    LLMへ渡せるdata URL形式（base64）に変換する。取得失敗時はNoneを返す
+    （呼び出し側は画像無しの従来フローにフォールバックする）。
+    """
+    if not image_url:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(image_url, timeout=15)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0]
+            b64 = base64.b64encode(resp.content).decode("utf-8")
+            return f"data:{content_type};base64,{b64}"
+    except Exception:
+        # 写真取得に失敗しても致命的にせず、テキストのみのフローへ落とす
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # プロンプト生成
 # ─────────────────────────────────────────────────────────────────────────
 
 _GENERATION_SYSTEM_PROMPT = """あなたはAI動画生成プロンプトの専門家です。
-以下の3つの情報を踏まえて、指定されたシーンをAI動画生成（Seedance 2.0 / Kling / Wan 等）
+以下の情報を踏まえて、指定されたシーンをAI動画生成（Seedance 2.0 / Kling / Wan 等）
 向けの具体的なプロンプトに変換してください。
 
 【ルキルキの現在の人格プロファイル】
@@ -107,6 +129,7 @@ _GENERATION_SYSTEM_PROMPT = """あなたはAI動画生成プロンプトの専�
 【変換対象のシーン】
 - 動作の記述: {pose_text}
 - ジャンル: {genre}
+{image_instruction}
 
 出力条件:
 - まず日本語プロンプト、次に英語プロンプトの順で出力する
@@ -117,8 +140,21 @@ _GENERATION_SYSTEM_PROMPT = """あなたはAI動画生成プロンプトの専�
 - 動作（pose_text）自体は変更せず、表情・感情表現のみ人格ルール側の抑制基準に合わせる
 - 否定命令だけに依存せず、望ましい状態を具体的に書く
 - 必要以上に長くしない（目安: 日本語200字以内）
-- 場所・背景がシーン記述に含まれない場合は、人格プロファイルの「空間・背景の傾向」から選ぶ
+- 「夜」「路地裏」「薄暗い」「一人きり」が同時に重なる背景にしない
+  （人けのある描写を1つ加えるか、十分な明るさの描写にする）
+- 英語プロンプトの主語に"a girl"を使わない（性別を明示しないか"a boy"を使う）
 """
+
+_IMAGE_PRESENT_INSTRUCTION = (
+    "- 添付された実際のスナップ写真を背景・場所の**最優先の情報源**として使うこと。\n"
+    "  写真に写っている実際の場所・物・光の状態を具体的に記述する。\n"
+    "  ruki_mindの「空間・背景の傾向」やシーンテンプレートの例文にある場所\n"
+    "  （図書館・神社参道・夜の繁華街の路地 等）は、写真の内容と矛盾する場合は使わない。\n"
+    "  それらはあくまで写真が無い場合の補完用であり、デフォルトの選択肢ではない。"
+)
+_IMAGE_ABSENT_INSTRUCTION = (
+    "- 場所・背景がシーン記述に含まれないため、人格プロファイルの「空間・背景の傾向」から選ぶ。"
+)
 
 
 def _parse_llm_output(raw_text: str) -> tuple[str, str]:
@@ -134,6 +170,10 @@ async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
     """
     scene_id を指定して、00_builder.mdのルールに沿ったプロンプトを生成し、
     video_prompts テーブルへ保存する。戻り値は保存したレコード。
+
+    scene_referencesにimage_url（実際のスナップ写真）がある場合は、
+    それをLLMへ画像として渡し、背景描写の最優先の情報源として使わせる。
+    取得できない場合はテキストのみのフロー（ruki_mindの傾向から推測）にフォールバックする。
     """
     scene = await _fetch_scene_reference(scene_id)
     if scene is None:
@@ -148,14 +188,26 @@ async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
     mind_profile = _load_latest_mind_profile()
 
     pose_text = scene.get("pose", "")
+    image_url = scene.get("image_url")
+    image_data_url = await _fetch_image_as_data_url(image_url) if image_url else None
+
     prompt_text = _GENERATION_SYSTEM_PROMPT.format(
         mind_profile=mind_profile or "（プロファイル未生成）",
         builder_rules=builder_rules,
         pose_text=pose_text,
         genre=genre,
+        image_instruction=_IMAGE_PRESENT_INSTRUCTION if image_data_url else _IMAGE_ABSENT_INSTRUCTION,
     )
 
-    response = await llm_fast.ainvoke(prompt_text)
+    if image_data_url:
+        message = HumanMessage(content=[
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": image_data_url},
+        ])
+        response = await llm_fast.ainvoke([message])
+    else:
+        response = await llm_fast.ainvoke(prompt_text)
+
     raw_text = response.content
     prompt_ja, prompt_en = _parse_llm_output(raw_text)
 
