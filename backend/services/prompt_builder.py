@@ -361,12 +361,18 @@ async def get_video_prompt_memories(query: str = "") -> str:
     if query.strip():
         rows = await _find_video_prompts_by_keyword(query.strip())
         if not rows:
+            print(f"[DEBUG get_video_prompt_memories] query='{query}' ヒット0件")
             return f"「{query}」に該当する動画プロンプトの記録は見当たりません。"
         lines = [_format_video_prompt_line(row) for row in rows[:5]]
-        return "見つかった動画プロンプトの記録:\n" + "\n".join(lines)
+        result_text = "見つかった動画プロンプトの記録:\n" + "\n".join(lines)
+        print(f"[DEBUG get_video_prompt_memories] query='{query}'\n{result_text}")
+        return result_text
 
     rows = await list_video_prompts(status="adopted", limit=5)
     if not rows:
+        print("[DEBUG get_video_prompt_memories] query='' adopted 0件")
         return "まだ採用済みの動画プロンプトはありません。"
     lines = [_format_video_prompt_line(row) for row in rows]
-    return "採用済みの動画プロンプト:\n" + "\n".join(lines)
+    result_text = "採用済みの動画プロンプト:\n" + "\n".join(lines)
+    print(f"[DEBUG get_video_prompt_memories] query=''\n{result_text}")
+    return result_text
