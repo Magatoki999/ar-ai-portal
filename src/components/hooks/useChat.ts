@@ -102,6 +102,7 @@ export function useChat({
   onSpatialEffect,
   onEngraveToast,
   onShowImage,
+  onShowVideo,
   onSpotProposal,
   onSnapResult,
   onFacialEmotionChange,
@@ -193,7 +194,7 @@ export function useChat({
     playReply(data.audio_data, data.audio_mime, () => {
       isBusyRef.current = false;
     });
-  }, [onSpatialEffect, onSpotProposal, onEngraveToast, onShowImage, onFacialEmotionChange,
+  }, [onSpatialEffect, onSpotProposal, onEngraveToast, onShowImage, onShowVideo, onFacialEmotionChange,
       onSubtitleChange, playReply, currentEffectRef]);
 
   // ── ENGRAVE 処理 ──

@@ -680,7 +680,8 @@ async def chat_endpoint(payload: ChatMessage):
         print(
             f"[DEBUG] engrave_triggered={_engrave} "
             f"arweave_tx_id={bool(arweave_tx_id)} "
-            f"show_image_url={bool(_show_image)}"
+            f"show_image_url={bool(_show_image)} "
+            f"show_video_url={bool(_show_video)}"
         )
 
         # NAME タグ処理
