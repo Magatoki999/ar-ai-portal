@@ -325,7 +325,11 @@ def _format_video_prompt_line(row: dict) -> str:
     model = row.get("tested_model")
     model_part = f"・{model}で検証" if model else ""
     excerpt = (row.get("prompt_ja") or "")[:40]
-    return f"- {date_str} [{genre}/{status_label}]{model_part} {excerpt}…"
+    line = f"- {date_str} [{genre}/{status_label}]{model_part} {excerpt}…"
+    video_url = row.get("result_video_url")
+    if video_url:
+        line += f"\n  動画: {video_url}"
+    return line
 
 
 async def _find_video_prompts_by_keyword(query: str, limit: int = 5) -> list[dict]:
