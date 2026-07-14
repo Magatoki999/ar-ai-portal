@@ -17,6 +17,7 @@ import { useChat }       from "./hooks/useChat";
 import { RukiHUD }       from "./components/RukiHUD";
 import { HistoryPanel }  from "./components/HistoryPanel";
 import { SnapViewer }    from "./components/SnapViewer";
+import { VideoViewer }   from "./components/VideoViewer";
 import { BookScanModal } from "./components/BookScanModal";
 
 interface MindARViewerProps {
@@ -46,6 +47,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   const [showHistory,      setShowHistory]      = useState<boolean>(false);
   const [snapImageUrl,     setSnapImageUrl]     = useState<string | null>(null);
   const [showImageUrl,     setShowImageUrl]     = useState<string | null>(null);
+  const [showVideoUrl,     setShowVideoUrl]     = useState<string | null>(null);
   const [engraveToastTxId, setEngraveToastTxId] = useState<string | null>(null);
   const [spotProposal,     setSpotProposal]     = useState<string | null>(null);
 
@@ -158,6 +160,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     },
     onEngraveToast:  handleEngraveToast,
     onShowImage:     (url) => setShowImageUrl(url),
+    onShowVideo:     (url) => setShowVideoUrl(url),
     onSpotProposal:  handleSpotProposal,
     onSnapResult:    (url) => setSnapImageUrl(url),
     onFacialEmotionChange: setFacialEmotion,
@@ -326,6 +329,14 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         <SnapViewer
           imageUrl={(snapImageUrl || showImageUrl)!}
           onClose={() => { setSnapImageUrl(null); setShowImageUrl(null); }}
+        />
+      )}
+
+      {/* AI動画生成結果ビューア */}
+      {showVideoUrl && (
+        <VideoViewer
+          videoUrl={showVideoUrl}
+          onClose={() => setShowVideoUrl(null)}
         />
       )}
 

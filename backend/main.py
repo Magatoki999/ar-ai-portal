@@ -639,6 +639,7 @@ async def chat_endpoint(payload: ChatMessage):
             "spot_proposal":             "",
             "engrave_triggered":         False,
             "show_image_url":            "",
+            "show_video_url":            "",
             "calendar_context":          calendar_context,
             "growth_context":            growth_context,
             "episode_context":           episode_context,
@@ -675,6 +676,7 @@ async def chat_endpoint(payload: ChatMessage):
             _engrave = True
 
         _show_image = result.get("show_image_url", "")
+        _show_video = result.get("show_video_url", "")
         print(
             f"[DEBUG] engrave_triggered={_engrave} "
             f"arweave_tx_id={bool(arweave_tx_id)} "
@@ -850,6 +852,7 @@ async def chat_endpoint(payload: ChatMessage):
         "spot_proposal":    result.get("spot_proposal", ""),
         "arweave_tx_id":    result.get("arweave_tx_id", ""),
         "show_image_url":   _show_image,
+        "show_video_url":   _show_video,
         "engrave_triggered": result.get("engrave_triggered", False),
         "audio_mime":       audio_mime,
         "facial_emotion":   facial_emotion,

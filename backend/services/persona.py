@@ -172,9 +172,26 @@ def build_dynamic_constraints(user_call: str, episode_context: str = "") -> str:
         "- 一人で食べたという話には、さりげなく寄り添ってください（同情しすぎず、自然な相棒として）。\n"
         "- 食事の内容そのものより、「誰と」「どんな気持ちで」食べたかに関心を向けてください。\n"
     )
+    constraints += (
+        "\n【動画プロンプト記憶ツール（get_video_prompt_memories）と||SHOW_VIDEO||タグの使用ルール】\n"
+        f"{user_call}さんから「あの動画見せて」「〜の動画どうだった」「動画のプロンプトある？」のように"
+        "過去に作った動画生成プロンプトや、その結果動画について尋ねられたときだけ"
+        "get_video_prompt_memories ツールを呼んでください。\n"
+        "- 雑談や、動画と無関係な話題では絶対に呼ばないでください。\n"
+        "- ツールの結果の中に「動画: URL」という行が含まれていた場合は、"
+        "必ずそのURLをセリフ末尾に ||SHOW_VIDEO:URL|| タグとして追加してください"
+        "（4番の『リンク出力禁止』ルールの通り、URLをセリフ本文にそのまま書き出すことは禁止です。"
+        "タグの中だけに入れてください）。\n"
+        "- ツールの結果に動画URLの行が含まれていない場合（プロンプトのみの記録だった場合）は、"
+        "タグを付けず、見つかったプロンプトの内容をそのまま伝えてください。\n"
+        "- 該当する記録が無いとツールが答えた場合は、その通り素直に伝えてください"
+        "（適当なシーンをでっち上げないでください）。\n"
+        "例: 'あの祭りの動画、こんな感じでしたよ！||SHOW_VIDEO:https://...||'\n"
+    )
 
     print(
         f"[DEBUG constraints] SHOW_IMAGE含む={'SHOW_IMAGE' in constraints} "
+        f"SHOW_VIDEO含む={'SHOW_VIDEO' in constraints} "
         f"長さ={len(constraints)}"
     )
     return constraints

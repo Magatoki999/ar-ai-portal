@@ -28,6 +28,7 @@ interface UseChatOptions {
   onSpatialEffect:     (effect: string) => void;
   onEngraveToast:      (txId: string) => void;
   onShowImage:         (url: string) => void;
+  onShowVideo:         (url: string) => void;
   onSpotProposal:      (name: string) => void;
   onSnapResult:        (url: string) => void;
   // RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替用。2026-06-26追加。
@@ -182,6 +183,7 @@ export function useChat({
     if (data.spot_proposal)  onSpotProposal(data.spot_proposal);
     if (data.arweave_tx_id)  onEngraveToast(data.arweave_tx_id);
     if (data.show_image_url) onShowImage(data.show_image_url);
+    if (data.show_video_url) onShowVideo(data.show_video_url);
     // RukiFaceIcon の表情切替（talking 中のみ反映される。idle/thinking 中は無視されるため、
     // 値が来ても安全に渡せる）。
     if (data.facial_emotion) onFacialEmotionChange?.(data.facial_emotion);

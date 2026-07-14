@@ -429,6 +429,13 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             show_image_url = image_match.group(1).strip()
             ai_reply = re.sub(r"\|\|SHOW_IMAGE:.*?\|\|", "", ai_reply).strip()
 
+        # SHOW_VIDEOタグ抽出（動画プロンプトの結果動画をフロントに表示）
+        show_video_url = ""
+        video_match = re.search(r"\|\|SHOW_VIDEO:(.*?)\|\|", ai_reply)
+        if video_match:
+            show_video_url = video_match.group(1).strip()
+            ai_reply = re.sub(r"\|\|SHOW_VIDEO:.*?\|\|", "", ai_reply).strip()
+
         # ENGRAVEタグ検出（記憶を永遠に刻む）
         engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))
         ai_reply = re.sub(r"\|\|ENGRAVE\|\|", "", ai_reply).strip()
@@ -455,6 +462,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             "spot_proposal": spot_proposal,
             "engrave_triggered": engrave_triggered,
             "show_image_url": show_image_url,
+            "show_video_url": show_video_url,
         }
 
     except Exception as e:
