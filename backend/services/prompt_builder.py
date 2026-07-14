@@ -12,7 +12,6 @@ scene_references + ruki_mind（マインドプロファイル）+ _PromptBuilder
 - 日付・自由文字列をcrudeにcrクエリへ埋め込まない（quote()で必ずエンコード）
 """
 
-import os
 import glob
 import re
 import base64
@@ -22,15 +21,14 @@ from pathlib import Path
 
 import httpx
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
 
 from services.resilient_llm import build_fast_llm  # 既存のResilientLLMファクトリを再利用
 from services.character_bible import _RUKI_MIND_DIR  # ruki_mind/のパスを一元管理箇所から流用
+from services.memory import _sb  # books.pyと同じ接続情報ヘルパーを再利用
 
 # Router/Evaluator等と同じ考え方：コスト最小のfastモデルで十分（構造化出力ではないため素直な生成）
 llm_fast = build_fast_llm(temperature=0.7, name="PROMPT-BUILDER-LLM")
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
 
 # ruki_mind/ の実際の配置場所は character_bible.py の _RUKI_MIND_DIR と同一のものを使う
 # （二重管理を避けるため、独自のパス解決ロジックは持たない）
@@ -40,8 +38,9 @@ BUILDER_RULES_PATH = RUKI_MIND_DIR / "_PromptBuilder" / "00_builder.md"
 
 def _pb_headers() -> dict:
     """books.pyの_books_headers()と同じ考え方：apikeyのみを送る（sb_secret_形式に対応）。"""
+    _, key = _sb()
     return {
-        "apikey": SUPABASE_KEY,
+        "apikey": key,
         "Content-Type": "application/json",
     }
 
@@ -52,7 +51,8 @@ def _pb_headers() -> dict:
 
 async def _fetch_scene_reference(scene_id: str) -> dict | None:
     """scene_references から1件取得する。"""
-    url = f"{SUPABASE_URL}/rest/v1/scene_references"
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/scene_references"
     params = {"id": f"eq.{scene_id}", "select": "*"}
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, headers=_pb_headers(), params=params, timeout=15)
@@ -63,7 +63,8 @@ async def _fetch_scene_reference(scene_id: str) -> dict | None:
 
 async def list_recent_scene_references(limit: int = 20) -> list[dict]:
     """直近のscene_referencesを新しい順で返す（スマホから選ぶ一覧表示用）。"""
-    url = f"{SUPABASE_URL}/rest/v1/scene_references"
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/scene_references"
     params = {
         "select": "id,member_names,pose,is_duo,created_at,image_url",
         "order": "created_at.desc",
@@ -234,7 +235,8 @@ async def _save_video_prompt(
     prompt_en: str,
     builder_version: str | None,
 ) -> dict:
-    url = f"{SUPABASE_URL}/rest/v1/video_prompts"
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/video_prompts"
     payload = {
         "scene_reference_id": scene_reference_id,
         "genre": genre,
@@ -258,7 +260,8 @@ async def _save_video_prompt(
 
 async def list_video_prompts(status: str | None = None, limit: int = 20) -> list[dict]:
     """蓄積されたvideo_promptsを新しい順で返す。statusで絞り込み可能。"""
-    url = f"{SUPABASE_URL}/rest/v1/video_prompts"
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/video_prompts"
     params = {
         "select": "*",
         "order": "created_at.desc",
@@ -283,7 +286,8 @@ async def update_video_prompt_result(
     実際にKling/Pollo AI等で試した後、結果を書き戻す。
     これにより「プロンプト→実際の結果」のペアがvideo_promptsに蓄積されていく。
     """
-    url = f"{SUPABASE_URL}/rest/v1/video_prompts"
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/video_prompts"
     params = {"id": f"eq.{prompt_id}"}
     now_iso = datetime.now(timezone.utc).isoformat()
     payload = {
@@ -300,3 +304,69 @@ async def update_video_prompt_result(
         resp.raise_for_status()
         rows = resp.json()
     return rows[0] if rows else payload
+
+
+# ═══════════════════════════════════════════════════════
+# 会話中の質問応答用Tool（get_book_history と同型）
+# ═══════════════════════════════════════════════════════
+
+_STATUS_LABEL = {
+    "generated": "生成のみ",
+    "tested": "検証済み",
+    "adopted": "採用",
+    "rejected": "却下",
+}
+
+
+def _format_video_prompt_line(row: dict) -> str:
+    date_str = (row.get("created_at") or "")[:10]
+    genre = row.get("genre") or ""
+    status_label = _STATUS_LABEL.get(row.get("status"), row.get("status") or "")
+    model = row.get("tested_model")
+    model_part = f"・{model}で検証" if model else ""
+    excerpt = (row.get("prompt_ja") or "")[:40]
+    return f"- {date_str} [{genre}/{status_label}]{model_part} {excerpt}…"
+
+
+async def _find_video_prompts_by_keyword(query: str, limit: int = 5) -> list[dict]:
+    """
+    日本語プロンプト本文の部分一致（ilike）でvideo_promptsを検索する。
+    「あの祭りの動画のプロンプトどんなだった？」のように内容を指す質問に使う。
+    """
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/video_prompts"
+    encoded_query = query.replace(" ", "%20")
+    params = {
+        "select": "*",
+        "prompt_ja": f"ilike.*{encoded_query}*",
+        "order": "created_at.desc",
+        "limit": str(limit),
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=_pb_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+
+@tool
+async def get_video_prompt_memories(query: str = "") -> str:
+    """
+    ユーザーから過去に作った動画生成プロンプトについて聞かれたときに呼ぶツール。
+    「あの祭りの動画のプロンプトどんなだった？」のように特定のシーンを指す
+    キーワードがあればqueryに入れて呼ぶ（日本語プロンプト本文に対する部分一致で検索する）。
+    「今まで採用したプロンプトある？」「最近作った動画プロンプト教えて」のような
+    一覧・確認系の質問にはqueryを空のまま呼ぶ（採用済みのものを新しい順で返す）。
+    該当する記録が無い場合は「記録にはないみたい」という旨の文字列を返す。
+    """
+    if query.strip():
+        rows = await _find_video_prompts_by_keyword(query.strip())
+        if not rows:
+            return f"「{query}」に該当する動画プロンプトの記録は見当たりません。"
+        lines = [_format_video_prompt_line(row) for row in rows[:5]]
+        return "見つかった動画プロンプトの記録:\n" + "\n".join(lines)
+
+    rows = await list_video_prompts(status="adopted", limit=5)
+    if not rows:
+        return "まだ採用済みの動画プロンプトはありません。"
+    lines = [_format_video_prompt_line(row) for row in rows]
+    return "採用済みの動画プロンプト:\n" + "\n".join(lines)
