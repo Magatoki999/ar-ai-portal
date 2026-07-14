@@ -167,7 +167,7 @@
     <div class="section-head"><span class="no">01</span><h2>接続先</h2></div>
     <div class="card">
       <label for="baseUrl">バックエンドURL（Render）</label>
-      <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com">
+      <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com" value="https://magatoki-ai-backend.onrender.com">
       <div class="row">
         <button id="saveUrlBtn">保存して読み込む</button>
       </div>
@@ -230,8 +230,15 @@ async function loadSavedUrl(){
       baseUrl = res.value;
       $('baseUrl').value = baseUrl;
       await initAfterUrl();
+      return;
     }
   }catch(e){ /* 未保存なら何もしない */ }
+  // 保存済みの値が無い場合、入力欄のデフォルト値でそのまま初期化する
+  const defaultVal = $('baseUrl').value.trim();
+  if(defaultVal){
+    baseUrl = defaultVal;
+    await initAfterUrl();
+  }
 }
 
 $('saveUrlBtn').addEventListener('click', async ()=>{
