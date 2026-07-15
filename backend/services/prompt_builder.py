@@ -113,6 +113,25 @@ async def _fetch_image_as_data_url(image_url: str) -> str | None:
         return None
 
 
+def _load_ruki_reference_image_as_data_url(filename: str = "ruki_bust_neutral.png") -> str | None:
+    """
+    ruki_mind/reference_images/ からルキルキ本人の外見リファレンス画像を
+    ローカルファイルとして読み込み、data URL化する。
+    他キャラのシーンにルキルキを主演させたい場合（写真の人物とは別人を描写したい場合）に、
+    背景写真とは別にこの画像を渡すことで、外見の取り違えを防ぐ。
+    """
+    path = RUKI_MIND_DIR / "reference_images" / filename
+    if not path.exists():
+        return None
+    try:
+        ext = path.suffix.lstrip(".").lower()
+        mime = "image/png" if ext == "png" else "image/jpeg"
+        b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # プロンプト生成
 # ─────────────────────────────────────────────────────────────────────────
@@ -156,6 +175,15 @@ _IMAGE_PRESENT_INSTRUCTION = (
 _IMAGE_ABSENT_INSTRUCTION = (
     "- 場所・背景がシーン記述に含まれないため、人格プロファイルの「空間・背景の傾向」から選ぶ。"
 )
+_CHARACTER_SWAP_INSTRUCTION = (
+    "- 添付された1枚目の写真は**元々ルキルキ以外のキャラクターが写っている**シーンである。\n"
+    "  この写真は背景・場所・光・時間帯・周囲の状況の情報源としてのみ使うこと。\n"
+    "  **写真に写っている人物の顔・髪型・体型・衣装は完全に無視し、一切描写に含めないこと。**\n"
+    "  人物の外見は、必ず2枚目に添付されたルキルキ本人の外見リファレンス画像と、"
+    "上記の人格プロファイル・固定情報の記述に従うこと。\n"
+    "  つまり「元のキャラクターがいた場所に、代わりにルキルキが立っている」という"
+    "シーンを描写すること。"
+)
 
 
 def _parse_llm_output(raw_text: str) -> tuple[str, str]:
@@ -167,7 +195,11 @@ def _parse_llm_output(raw_text: str) -> tuple[str, str]:
     return prompt_ja, prompt_en
 
 
-async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
+async def generate_video_prompt(
+    scene_id: str,
+    genre: str = "日常",
+    feature_rukiruki: bool = False,
+) -> dict:
     """
     scene_id を指定して、00_builder.mdのルールに沿ったプロンプトを生成し、
     video_prompts テーブルへ保存する。戻り値は保存したレコード。
@@ -175,6 +207,14 @@ async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
     scene_referencesにimage_url（実際のスナップ写真）がある場合は、
     それをLLMへ画像として渡し、背景描写の最優先の情報源として使わせる。
     取得できない場合はテキストのみのフロー（ruki_mindの傾向から推測）にフォールバックする。
+
+    feature_rukiruki:
+        Falseの場合、scene_referencesのmember_namesにRUKIRUKIが含まれるかで自動判定する。
+        Trueを明示すると、たとえ写真が別キャラ（DrOhma等）のシーンであっても、
+        その状況・背景だけを流用し、必ずルキルキ本人が写っているていで描写する
+        （＝「あのシチュエーション、ルキルキも経験させたい」というユースケース向け）。
+        この場合、ルキルキ本人の外見リファレンス画像も合わせてLLMへ渡し、
+        写真に写っている元のキャラクターの外見は無視させる。
     """
     scene = await _fetch_scene_reference(scene_id)
     if scene is None:
@@ -192,15 +232,42 @@ async def generate_video_prompt(scene_id: str, genre: str = "日常") -> dict:
     image_url = scene.get("image_url")
     image_data_url = await _fetch_image_as_data_url(image_url) if image_url else None
 
+    member_names = scene.get("member_names") or []
+    scene_is_rukiruki = "RUKIRUKI" in member_names
+    # 明示的にfeature_rukiruki=Trueが渡された場合、写真の主役がルキルキかどうかに
+    # かかわらずルキルキを主演させる（＝他キャラのシチュエーションの流用）。
+    do_character_swap = image_data_url is not None and not scene_is_rukiruki
+
+    ruki_ref_data_url = None
+    if do_character_swap or feature_rukiruki:
+        ruki_ref_data_url = _load_ruki_reference_image_as_data_url()
+        # 参照画像が用意できなければスワップ指示だけ出しても外見の担保にならないため、
+        # 通常の画像指示にフォールバックする（人格プロファイルの文章記述のみに頼る）。
+        do_character_swap = do_character_swap and ruki_ref_data_url is not None
+
+    if do_character_swap:
+        image_instruction = _CHARACTER_SWAP_INSTRUCTION
+    elif image_data_url:
+        image_instruction = _IMAGE_PRESENT_INSTRUCTION
+    else:
+        image_instruction = _IMAGE_ABSENT_INSTRUCTION
+
     prompt_text = _GENERATION_SYSTEM_PROMPT.format(
         mind_profile=mind_profile or "（プロファイル未生成）",
         builder_rules=builder_rules,
         pose_text=pose_text,
         genre=genre,
-        image_instruction=_IMAGE_PRESENT_INSTRUCTION if image_data_url else _IMAGE_ABSENT_INSTRUCTION,
+        image_instruction=image_instruction,
     )
 
-    if image_data_url:
+    if do_character_swap:
+        message = HumanMessage(content=[
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": image_data_url},
+            {"type": "image_url", "image_url": ruki_ref_data_url},
+        ])
+        response = await llm_fast.ainvoke([message])
+    elif image_data_url:
         message = HumanMessage(content=[
             {"type": "text", "text": prompt_text},
             {"type": "image_url", "image_url": image_data_url},
