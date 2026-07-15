@@ -47,7 +47,7 @@ from services.location import locate_current_position
 from services.calendar import get_my_schedule
 from services.memory import get_today_ai_news
 from services.books import get_book_history
-from services.prompt_builder import get_video_prompt_memories
+from services.prompt_builder import get_video_prompt_memories, get_video_url_by_id
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -430,11 +430,18 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             ai_reply = re.sub(r"\|\|SHOW_IMAGE:.*?\|\|", "", ai_reply).strip()
 
         # SHOW_VIDEOタグ抽出（動画プロンプトの結果動画をフロントに表示）
+        # タグの中身はGPT-4o自身のURL出力抑制傾向を避けるため、URLではなく
+        # video_promptsのid（数字）を入れさせている。実URLへの解決はここで行う。
         show_video_url = ""
         video_match = re.search(r"\|\|SHOW_VIDEO:(.*?)\|\|", ai_reply)
         if video_match:
-            show_video_url = video_match.group(1).strip()
+            video_id_raw = video_match.group(1).strip()
             ai_reply = re.sub(r"\|\|SHOW_VIDEO:.*?\|\|", "", ai_reply).strip()
+            try:
+                resolved_url = await get_video_url_by_id(video_id_raw)
+                show_video_url = resolved_url or ""
+            except Exception as e:
+                print(f"[SHOW_VIDEO解決エラー] id={video_id_raw} err={e}")
 
         # ENGRAVEタグ検出（記憶を永遠に刻む）
         engrave_triggered = bool(re.search(r"\|\|ENGRAVE\|\|", ai_reply))

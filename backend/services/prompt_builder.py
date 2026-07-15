@@ -393,10 +393,29 @@ def _format_video_prompt_line(row: dict) -> str:
     model_part = f"・{model}で検証" if model else ""
     excerpt = (row.get("prompt_ja") or "")[:40]
     line = f"- {date_str} [{genre}/{status_label}]{model_part} {excerpt}…"
-    video_url = row.get("result_video_url")
-    if video_url:
-        line += f"\n  動画: {video_url}"
+    # 生URLをそのままLLMに渡すと、モデル自身のURL出力抑制学習によりタグ化を
+    # 拒まれる傾向が実機で確認された（2026-07-14）。そのため生URLではなく
+    # 短いIDだけを渡し、実際のURL解決はPython側（get_video_url_by_id）で行う。
+    if row.get("result_video_url"):
+        line += f"\n  動画ID: {row.get('id')}"
     return line
+
+
+async def get_video_url_by_id(prompt_id: str) -> str | None:
+    """
+    video_promptsのidから実際のresult_video_urlを取得する。
+    ||SHOW_VIDEO:id|| タグの解決に使う（nodes.py側から呼ばれる）。
+    """
+    base_url, _ = _sb()
+    url = f"{base_url}/rest/v1/video_prompts"
+    params = {"id": f"eq.{prompt_id}", "select": "result_video_url"}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=_pb_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        rows = resp.json()
+    if rows and rows[0].get("result_video_url"):
+        return rows[0]["result_video_url"]
+    return None
 
 
 async def _find_video_prompts_by_keyword(query: str, limit: int = 5) -> list[dict]:
