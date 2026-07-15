@@ -407,6 +407,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             response = await llm_with_tools.ainvoke(messages)
 
         ai_reply = response.content
+        print(f"[DEBUG raw ai_reply（タグ処理前）] {ai_reply!r}")
 
         # エフェクトタグ抽出
         spatial_effect = "cyber"
