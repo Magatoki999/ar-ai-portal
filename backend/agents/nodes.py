@@ -440,6 +440,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             ai_reply = re.sub(r"\|\|SHOW_VIDEO:.*?\|\|", "", ai_reply).strip()
             try:
                 resolved_url = await get_video_url_by_id(video_id_raw)
+                print(f"[DEBUG get_video_url_by_id] id={video_id_raw!r} resolved={resolved_url!r}")
                 show_video_url = resolved_url or ""
             except Exception as e:
                 print(f"[SHOW_VIDEO解決エラー] id={video_id_raw} err={e}")
