@@ -63,6 +63,9 @@ class RukirukiState(TypedDict):
     # ─── 記憶写真 ───
     show_image_url: str                # SHOW_IMAGEタグで表示する画像URL
 
+    # ─── 動画プロンプト記憶 ───
+    show_video_url: str                # SHOW_VIDEOタグで表示する動画URL（2026-07-14追加）
+
     # ─── オンチェーン記憶 ───
     arweave_tx_id: str                 # 保存されたArweaveトランザクションID（保存なしは空文字）
 
