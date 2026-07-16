@@ -119,9 +119,13 @@ async def get_recent_episodes(limit: int = 8) -> str:
                     time_str  = ep_dt.strftime("%m月%d日 %H時%M分")
                     image_note = " 📷写真あり" if ep.get("image_url") else ""
                     image_tag  = f" [image:{ep['image_url']}]" if ep.get("image_url") else ""
+                    # visual_descriptionは元々「将来の動画生成素材専用」でDB保存のみだったが、
+                    # 画面を見ずに会話する場面（スマートグラス展開を見据えて）では、
+                    # ルキルキ自身が写真の中身を言葉で説明できる必要があるため会話コンテキストにも含める（2026-07-14）。
+                    visual_note = f"（映像: {ep['visual_description']}）" if ep.get("visual_description") else ""
                     entry = (
                         f"・{time_str} ─ {ep.get('summary','')}（気分: {ep.get('mood_at_time','')}）"
-                        f"{image_note}{image_tag}"
+                        f"{visual_note}{image_note}{image_tag}"
                     )
                     if diff_days == 7:
                         milestones.append(f"📅 ちょうど1週間前（{time_str}）─ {ep.get('summary','')}")
