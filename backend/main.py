@@ -72,6 +72,7 @@ from services.memory import (
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.books import fetch_book_by_isbn, save_reading_log
 from services.character_bible import generate_mind_profile
+from services import timeline
 from services import prompt_builder
 from services.scheduler import (
     auto_research_job,
@@ -1125,3 +1126,19 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         state.manager.disconnect(websocket)
         print("[WebSocket] 切断されました。")
+
+# ─────────────────────────────────────────────────────────────────────────
+# アルバム（タイムライン）用エンドポイント
+# ─────────────────────────────────────────────────────────────────────────
+
+@app.api_route("/api/internal/list_timeline", methods=["GET", "POST"])
+async def list_timeline_endpoint(limit: int = 40):
+    """
+    写真・動画・成長の節目を時系列で統合したタイムラインを返す（アルバムUI用）。
+    例: /api/internal/list_timeline?limit=60
+    """
+    try:
+        items = await timeline.get_timeline(limit=limit)
+        return {"status": "ok", "count": len(items), "timeline": items}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

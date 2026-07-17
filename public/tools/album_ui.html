@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ルキルキとの記録</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #f3ece0;
+    --ink: #262019;
+    --ink-soft: #6b6154;
+    --teal: #3f6e64;
+    --teal-deep: #2c4e47;
+    --amber: #bd8a3f;
+    --red: #7c3a34;
+    --line: #d9cdb6;
+    --card: #faf6ec;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(63,110,100,0.06), transparent 40%),
+      radial-gradient(circle at 90% 85%, rgba(189,138,63,0.08), transparent 45%),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:28px 18px 80px;}
+
+  header{margin-bottom:22px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:.14em;
+    color:var(--teal-deep);text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  }
+  .eyebrow::before{content:"";width:14px;height:1px;background:var(--teal-deep);display:inline-block;}
+  h1{
+    font-family:'Shippori Mincho',serif;
+    font-weight:700;font-size:28px;margin:0;color:var(--ink);
+    letter-spacing:.02em;
+  }
+  h1 span{color:var(--teal);}
+  .sub{font-size:12.5px;color:var(--ink-soft);margin-top:6px;line-height:1.6;}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:3px;
+    padding:14px 16px;
+    margin-bottom:16px;
+  }
+  label{display:block;font-size:11px;color:var(--ink-soft);margin-bottom:5px;}
+  input[type=text]{
+    width:100%;font-size:14px;padding:9px 10px;
+    border:1px solid var(--line);border-radius:2px;background:#fff;color:var(--ink);
+    margin-bottom:10px;font-family:'Zen Kaku Gothic New',sans-serif;
+  }
+  button{
+    font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:13px;
+    padding:9px 15px;border:none;border-radius:2px;
+    background:var(--teal);color:#fff;cursor:pointer;
+  }
+  button:hover{background:var(--teal-deep);}
+
+  .status-msg{font-size:12.5px;padding:10px 12px;border-radius:2px;margin-bottom:12px;}
+  .status-msg.error{background:rgba(124,58,52,0.09);color:var(--red);}
+  .status-msg.loading{background:rgba(107,97,84,0.08);color:var(--ink-soft);}
+  .empty{font-size:12.5px;color:var(--ink-soft);padding:20px 0;text-align:center;}
+
+  /* ── タイムライン ── */
+  .month-header{
+    font-family:'Shippori Mincho',serif;font-weight:700;font-size:15px;
+    color:var(--teal-deep);margin:28px 0 12px;
+    display:flex;align-items:center;gap:10px;
+  }
+  .month-header::after{content:"";flex:1;height:1px;background:var(--line);}
+
+  .timeline-item{
+    display:flex;gap:12px;
+    border-left:2px solid var(--line);
+    padding:0 0 20px 16px;
+    margin-left:6px;
+    position:relative;
+  }
+  .timeline-item::before{
+    content:"";position:absolute;left:-7px;top:2px;
+    width:12px;height:12px;border-radius:50%;
+    background:var(--card);border:2px solid var(--teal);
+  }
+  .timeline-item.type-video::before{border-color:var(--amber);}
+  .timeline-item.type-growth::before{border-color:var(--red);background:var(--red);}
+
+  .item-media{
+    flex-shrink:0;width:84px;height:84px;border-radius:4px;overflow:hidden;
+    background:#e8e0d0;border:1px solid var(--line);
+  }
+  .item-media img, .item-media video{width:100%;height:100%;object-fit:cover;}
+
+  .item-body{flex:1;min-width:0;}
+  .item-date{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
+  .item-title{font-size:13.5px;line-height:1.5;margin:3px 0;color:var(--ink);}
+  .item-detail{font-size:12px;line-height:1.6;color:var(--ink-soft);}
+  .mood-badge{
+    display:inline-block;font-size:10px;padding:2px 7px;border-radius:10px;
+    background:rgba(63,110,100,0.1);color:var(--teal-deep);margin-top:4px;
+  }
+
+  .growth-marker{
+    display:flex;align-items:center;gap:10px;
+    padding:8px 0;
+  }
+  .growth-marker .torii{
+    font-family:'Shippori Mincho',serif;font-size:16px;color:var(--red);
+  }
+  .growth-marker .item-title{color:var(--red);font-weight:700;margin:0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ArtAR / ルキルキ</div>
+    <h1>一緒に過ごした<span>時間</span></h1>
+    <div class="sub">写真・動画・ルキルキの成長を時系列でふりかえる。</div>
+  </header>
+
+  <div class="card">
+    <label for="baseUrl">バックエンドURL（Render）</label>
+    <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com" value="https://magatoki-ai-backend.onrender.com">
+    <button id="loadBtn">読み込む</button>
+  </div>
+
+  <div id="status" class="empty">接続先を読み込むとタイムラインが表示されます</div>
+  <div id="timeline"></div>
+
+</div>
+
+<script>
+let baseUrl = "";
+const $ = id => document.getElementById(id);
+
+async function loadSavedUrl(){
+  try{
+    const res = await window.storage.get('backend_base_url'); // prompt_builder_ui.htmlと共通のキー
+    if(res && res.value){
+      baseUrl = res.value;
+      $('baseUrl').value = baseUrl;
+      await fetchTimeline();
+      return;
+    }
+  }catch(e){ /* 未保存なら何もしない */ }
+  const defaultVal = $('baseUrl').value.trim();
+  if(defaultVal){
+    baseUrl = defaultVal;
+    await fetchTimeline();
+  }
+}
+
+$('loadBtn').addEventListener('click', async ()=>{
+  const val = $('baseUrl').value.trim().replace(/\/$/, '');
+  if(!val) return;
+  baseUrl = val;
+  try{ await window.storage.set('backend_base_url', val); }catch(e){}
+  await fetchTimeline();
+});
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+function monthLabel(dateStr){
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}年${d.getMonth()+1}月`;
+}
+
+function renderItem(item){
+  const div = document.createElement('div');
+  div.className = `timeline-item type-${item.type}`;
+  const dateStr = item.date ? new Date(item.date).toLocaleDateString('ja-JP', {month:'numeric', day:'numeric'}) : '';
+
+  if(item.type === 'growth'){
+    div.innerHTML = `
+      <div class="item-body">
+        <div class="growth-marker">
+          <span class="torii">⛩</span>
+          <div>
+            <div class="item-date">${dateStr}</div>
+            <div class="item-title">${escapeHtml(item.title)}</div>
+            <div class="item-detail">${escapeHtml(item.detail)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    return div;
+  }
+
+  let mediaHtml = '';
+  if(item.media_url){
+    if(item.type === 'video'){
+      mediaHtml = `<div class="item-media"><video src="${item.media_url}" muted loop playsinline onmouseover="this.play()" onmouseout="this.pause()"></video></div>`;
+    }else{
+      mediaHtml = `<div class="item-media"><img src="${item.media_url}" loading="lazy" alt=""></div>`;
+    }
+  }
+
+  const moodHtml = item.mood ? `<span class="mood-badge">${escapeHtml(item.mood)}</span>` : '';
+
+  div.innerHTML = `
+    ${mediaHtml}
+    <div class="item-body">
+      <div class="item-date">${dateStr}${item.type === 'video' ? ' ・ 動画' : ''}</div>
+      <div class="item-title">${escapeHtml(item.title)}</div>
+      <div class="item-detail">${escapeHtml(item.detail)}</div>
+      ${moodHtml}
+    </div>
+  `;
+  return div;
+}
+
+async function fetchTimeline(){
+  $('status').textContent = '読み込み中…';
+  $('status').className = 'status-msg loading';
+  $('timeline').innerHTML = '';
+  try{
+    const url = new URL(baseUrl + '/api/internal/list_timeline');
+    url.searchParams.set('limit', '60');
+    const resp = await fetch(url.toString());
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if(data.status !== 'ok') throw new Error(data.message || '取得に失敗しました');
+
+    const items = data.timeline || [];
+    if(items.length === 0){
+      $('status').textContent = 'まだ記録がありません';
+      $('status').className = 'empty';
+      return;
+    }
+    $('status').style.display = 'none';
+
+    const container = $('timeline');
+    let currentMonth = '';
+    items.forEach(item=>{
+      const label = item.date ? monthLabel(item.date) : '';
+      if(label && label !== currentMonth){
+        currentMonth = label;
+        const h = document.createElement('div');
+        h.className = 'month-header';
+        h.textContent = label;
+        container.appendChild(h);
+      }
+      container.appendChild(renderItem(item));
+    });
+  }catch(e){
+    $('status').textContent = '読み込み失敗: ' + e.message;
+    $('status').className = 'status-msg error';
+  }
+}
+
+loadSavedUrl();
+</script>
+</body>
+</html>
