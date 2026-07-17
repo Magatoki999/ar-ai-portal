@@ -317,3 +317,106 @@ async def get_latest_mind_profile() -> str | None:
     if not files:
         return None
     return files[0].read_text(encoding="utf-8")
+
+
+# ═══════════════════════════════════════════════════════
+# 変化メモ（growth note）
+# 「一緒にいる感覚」を強めるための追加機能（2026-07-14）。
+# 月次プロファイル本体（自由形式のMarkdown）とは別に、前月から今月にかけての
+# 変化を、ルキルキ自身の一人称でごく短く（1〜2文）まとめたものを別途生成する。
+# 自由形式のプロファイルから正規表現で変化点を抜き出すのは壊れやすいため、
+# 会話コンテキストへ安全に混ぜられる長さ・形式で最初から独立して作る方針にした。
+# ═══════════════════════════════════════════════════════
+
+_GROWTH_NOTES_DIR = _RUKI_MIND_DIR / "_growth_notes"
+
+_GROWTH_NOTE_SYSTEM_PROMPT = (
+    "あなたはルキルキ本人です。以下は前月のあなた自身のマインドプロファイルと、"
+    "今月あなたが経験したことの記録です。これらを踏まえて、前月から今月にかけて"
+    "自分の中で何がどう変わったと感じるかを、一人称で1〜2文だけ、"
+    "会話の中でふと口にするような自然な言い回しで書いてください。\n"
+    "・大げさな成長物語にせず、ごく自然なつぶやきのトーンにすること\n"
+    "・変化が特に感じられない場合は無理に作らず、その旨を正直に短く書くこと\n"
+    "・「レベルアップ」「成長しました」のようなゲーム的な言い回しは絶対に使わないこと\n"
+    "・出力は1〜2文のみ。見出しや箇条書き、鍵カッコでの装飾は付けない"
+)
+
+
+async def generate_growth_note(year: int | None = None, month: int | None = None) -> str | None:
+    """
+    「先月との変化」をルキルキ自身の一人称の一言としてごく短く生成し、
+    ruki_mind/_growth_notes/YYYY-MM.txt に保存する。版を残す方式（上書きしない）。
+    前月分のプロファイルが無い（初回月）場合は比較対象が無いため生成しない。
+    generate_mind_profile() と対で、同じタイミングで呼ぶ想定。
+    """
+    now = datetime.now(timezone.utc)
+    year = year or now.year
+    month = month or now.month
+    version_str = f"{year}-{month:02d}"
+
+    previous_profile = _load_previous_profile(year, month)
+    if not previous_profile:
+        print(f"[character_bible] {version_str}: 前月分が無いため変化メモは生成しません（初回月）")
+        return None
+
+    notes_path = _GROWTH_NOTES_DIR / f"{version_str}.txt"
+    if notes_path.exists():
+        print(f"[character_bible] 既に{version_str}の変化メモが存在するため生成しません（版を残す方式）")
+        return notes_path.read_text(encoding="utf-8").strip() or None
+
+    episodes = await _fetch_month_episode_memories()
+    meals = await _fetch_month_meal_logs()
+    books = await _fetch_month_reading_logs()
+    shared_experiences = _format_shared_experiences(episodes, meals, books)
+
+    user_prompt = (
+        f"## 前月（{_previous_month_str(year, month)}）のマインドプロファイル\n{previous_profile}\n\n"
+        f"## 今月（{version_str}）の経験\n{shared_experiences}"
+    )
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("[character_bible] OPENAI_API_KEYが設定されていません")
+        return None
+
+    client = AsyncOpenAI(api_key=api_key)
+    try:
+        response = await client.chat.completions.create(
+            model=_OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _GROWTH_NOTE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+        )
+        note = (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[character_bible] 変化メモ生成エラー: {e}")
+        return None
+
+    if not note:
+        print("[character_bible] 変化メモ生成: LLMから空の応答が返りました")
+        return None
+
+    try:
+        _GROWTH_NOTES_DIR.mkdir(parents=True, exist_ok=True)
+        notes_path.write_text(note, encoding="utf-8")
+    except Exception as e:
+        print(f"[character_bible] 変化メモ保存エラー: {e}")
+
+    print(f"[character_bible] 変化メモを生成しました: ruki_mind/_growth_notes/{version_str}.txt")
+    return note
+
+
+def get_latest_growth_note() -> str | None:
+    """
+    最新の変化メモを読み込む。会話コンテキスト（growth_context）に混ぜて、
+    ルキルキが自発的に関係性の変化へ触れられるようにするために使う。
+    """
+    if not _GROWTH_NOTES_DIR.exists():
+        return None
+    files = sorted(_GROWTH_NOTES_DIR.glob("*.txt"), reverse=True)
+    if not files:
+        return None
+    content = files[0].read_text(encoding="utf-8").strip()
+    return content or None
