@@ -12,6 +12,7 @@ import httpx
 
 from services.state import emotional_state, weather_cache
 from services.location import fetch_street_address
+from services.character_bible import get_latest_growth_note
 
 
 # ─── 京都行事カレンダー ───
@@ -234,7 +235,7 @@ def get_calendar_context() -> str:
 
 
 def get_growth_context() -> str:
-    """ルキルキとまがときさんが一緒に過ごした日数を返す。"""
+    """ルキルキとまがときさんが一緒に過ごした日数と、月ごとの変化メモを返す。"""
     JST = timezone(timedelta(hours=+9))
     now_jst = datetime.now(JST)
     days_together = (
@@ -251,10 +252,16 @@ def get_growth_context() -> str:
             milestone_msg = f"今日でちょうど{m}日目という節目です。特別に感慨深く触れてください。"
             break
 
+    # 2026-07-14追加：character_bible.pyが月次で生成する「先月との変化」の一言。
+    # 前月分の比較対象が無い月（初回月）はNoneが返るため、その場合は何も足さない。
+    growth_note = get_latest_growth_note()
+    growth_note_block = f"最近、自分の中で感じている変化: {growth_note}\n" if growth_note else ""
+
     return (
         f"【ルキルキとまがときさんの歩み】\n"
         f"一緒に過ごした日数: {days_together}日\n"
         f"{milestone_msg}\n"
-        "この日数を自然に会話に織り交ぜてもよいですが、毎回言う必要はありません。"
+        f"{growth_note_block}"
+        "この日数や変化を自然に会話に織り交ぜてもよいですが、毎回言う必要はありません。"
         "節目のときや話の流れで自然に触れてください。\n\n"
     )

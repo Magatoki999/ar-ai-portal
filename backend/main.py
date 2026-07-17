@@ -71,7 +71,7 @@ from services.memory import (
 )
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.books import fetch_book_by_isbn, save_reading_log
-from services.character_bible import generate_mind_profile
+from services.character_bible import generate_mind_profile, generate_growth_note
 from services import timeline
 from services import prompt_builder
 from services.scheduler import (
@@ -935,11 +935,15 @@ async def generate_mind_profile_endpoint(year: int | None = None, month: int | N
     手動でマインドプロファイルを生成するための診断用エンドポイント。
     year/monthを省略すると今月分を生成する。
     既に同名ファイル（ruki_mind/YYYY-MM.md）が存在する場合は上書きしない。
+
+    マインドプロファイル本体に加え、「先月との変化」の一言（growth note）も
+    同時に生成する（2026-07-14追加。前月分が無い初回月はNoneのままスキップされる）。
     """
     markdown = await generate_mind_profile(year=year, month=month)
+    growth_note = await generate_growth_note(year=year, month=month)
     if markdown is None:
         return {"status": "error", "message": "生成に失敗、または既に同月分が存在します"}
-    return {"status": "ok", "markdown": markdown}
+    return {"status": "ok", "markdown": markdown, "growth_note": growth_note}
 
 
 @app.get("/api/internal/view_mind_profile", response_class=PlainTextResponse)
