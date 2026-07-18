@@ -72,6 +72,20 @@
   .status-msg.loading{background:rgba(107,97,84,0.08);color:var(--ink-soft);}
   .empty{font-size:12.5px;color:var(--ink-soft);padding:20px 0;text-align:center;}
 
+  /* ── フィルターチップ ── */
+  .filter-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;}
+  .chip{
+    font-family:'Zen Kaku Gothic New',sans-serif;font-size:12.5px;
+    padding:7px 13px;border-radius:16px;
+    border:1px solid var(--line);background:var(--card);color:var(--ink-soft);
+    cursor:pointer;user-select:none;transition:background .15s,color .15s,border-color .15s;
+  }
+  .chip.active{
+    background:var(--teal);border-color:var(--teal);color:#fff;
+  }
+  .chip.active.chip-book{background:var(--amber);border-color:var(--amber);}
+  .chip.active.chip-movie{background:var(--red);border-color:var(--red);}
+
   /* ── タイムライン ── */
   .month-header{
     font-family:'Shippori Mincho',serif;font-weight:700;font-size:15px;
@@ -94,6 +108,8 @@
   }
   .timeline-item.type-video::before{border-color:var(--amber);}
   .timeline-item.type-growth::before{border-color:var(--red);background:var(--red);}
+  .timeline-item.type-book::before{border-color:var(--amber);background:var(--amber);}
+  .timeline-item.type-movie::before{border-color:var(--red);}
 
   .item-media{
     flex-shrink:0;width:84px;height:84px;border-radius:4px;overflow:hidden;
@@ -126,7 +142,7 @@
   <header>
     <div class="eyebrow">ArtAR / ルキルキ</div>
     <h1>一緒に過ごした<span>時間</span></h1>
-    <div class="sub">写真・動画・ルキルキの成長を時系列でふりかえる。</div>
+    <div class="sub">写真・動画・ルキルキの成長を時系列でふりかえる。読書・映画はチップで表示切り替え。</div>
   </header>
 
   <div class="card">
@@ -136,12 +152,21 @@
   </div>
 
   <div id="status" class="empty">接続先を読み込むとタイムラインが表示されます</div>
+  <div class="filter-row" id="filterRow" style="display:none;">
+    <div class="chip active" data-type="photo">📷 写真</div>
+    <div class="chip active" data-type="video">🎬 動画</div>
+    <div class="chip active" data-type="growth">⛩ 成長</div>
+    <div class="chip chip-book" data-type="book">📚 読書</div>
+    <div class="chip chip-movie" data-type="movie">🍿 映画</div>
+  </div>
   <div id="timeline"></div>
 
 </div>
 
 <script>
 let baseUrl = "";
+let allItems = [];
+let activeTypes = new Set(['photo', 'video', 'growth']); // 読書・映画はデフォルトOFF
 const $ = id => document.getElementById(id);
 
 async function loadSavedUrl(){
@@ -169,6 +194,21 @@ $('loadBtn').addEventListener('click', async ()=>{
   await fetchTimeline();
 });
 
+// フィルターチップ：クリックでON/OFF切り替え。再取得はせず、手元のデータを再描画するだけ。
+document.querySelectorAll('.chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    const type = chip.dataset.type;
+    if(activeTypes.has(type)){
+      activeTypes.delete(type);
+      chip.classList.remove('active');
+    }else{
+      activeTypes.add(type);
+      chip.classList.add('active');
+    }
+    renderTimeline();
+  });
+});
+
 function escapeHtml(str){
   const d = document.createElement('div');
   d.textContent = str || '';
@@ -179,6 +219,8 @@ function monthLabel(dateStr){
   const d = new Date(dateStr);
   return `${d.getFullYear()}年${d.getMonth()+1}月`;
 }
+
+const TYPE_LABEL = { video: '動画', book: '読書', movie: '映画' };
 
 function renderItem(item){
   const div = document.createElement('div');
@@ -206,16 +248,18 @@ function renderItem(item){
     if(item.type === 'video'){
       mediaHtml = `<div class="item-media"><video src="${item.media_url}" muted loop playsinline onmouseover="this.play()" onmouseout="this.pause()"></video></div>`;
     }else{
+      // photo / book（表紙）/ movie（ポスター）はすべて画像表示
       mediaHtml = `<div class="item-media"><img src="${item.media_url}" loading="lazy" alt=""></div>`;
     }
   }
 
   const moodHtml = item.mood ? `<span class="mood-badge">${escapeHtml(item.mood)}</span>` : '';
+  const typeLabel = TYPE_LABEL[item.type] ? ` ・ ${TYPE_LABEL[item.type]}` : '';
 
   div.innerHTML = `
     ${mediaHtml}
     <div class="item-body">
-      <div class="item-date">${dateStr}${item.type === 'video' ? ' ・ 動画' : ''}</div>
+      <div class="item-date">${dateStr}${typeLabel}</div>
       <div class="item-title">${escapeHtml(item.title)}</div>
       <div class="item-detail">${escapeHtml(item.detail)}</div>
       ${moodHtml}
@@ -224,39 +268,57 @@ function renderItem(item){
   return div;
 }
 
+function renderTimeline(){
+  const items = allItems.filter(item => activeTypes.has(item.type));
+  const container = $('timeline');
+  container.innerHTML = '';
+
+  if(items.length === 0){
+    $('status').textContent = '表示できる記録がありません（チップの選択を見直してみてください）';
+    $('status').className = 'empty';
+    $('status').style.display = 'block';
+    return;
+  }
+  $('status').style.display = 'none';
+
+  let currentMonth = '';
+  items.forEach(item=>{
+    const label = item.date ? monthLabel(item.date) : '';
+    if(label && label !== currentMonth){
+      currentMonth = label;
+      const h = document.createElement('div');
+      h.className = 'month-header';
+      h.textContent = label;
+      container.appendChild(h);
+    }
+    container.appendChild(renderItem(item));
+  });
+}
+
 async function fetchTimeline(){
   $('status').textContent = '読み込み中…';
   $('status').className = 'status-msg loading';
+  $('filterRow').style.display = 'none';
   $('timeline').innerHTML = '';
   try{
     const url = new URL(baseUrl + '/api/internal/list_timeline');
-    url.searchParams.set('limit', '60');
+    url.searchParams.set('limit', '80');
+    // 読書・映画も含めて一括取得し、表示の絞り込みはチップ側（クライアント）で行う
+    url.searchParams.set('include_reading', 'true');
+    url.searchParams.set('include_movies', 'true');
     const resp = await fetch(url.toString());
     if(!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     if(data.status !== 'ok') throw new Error(data.message || '取得に失敗しました');
 
-    const items = data.timeline || [];
-    if(items.length === 0){
+    allItems = data.timeline || [];
+    if(allItems.length === 0){
       $('status').textContent = 'まだ記録がありません';
       $('status').className = 'empty';
       return;
     }
-    $('status').style.display = 'none';
-
-    const container = $('timeline');
-    let currentMonth = '';
-    items.forEach(item=>{
-      const label = item.date ? monthLabel(item.date) : '';
-      if(label && label !== currentMonth){
-        currentMonth = label;
-        const h = document.createElement('div');
-        h.className = 'month-header';
-        h.textContent = label;
-        container.appendChild(h);
-      }
-      container.appendChild(renderItem(item));
-    });
+    $('filterRow').style.display = 'flex';
+    renderTimeline();
   }catch(e){
     $('status').textContent = '読み込み失敗: ' + e.message;
     $('status').className = 'status-msg error';

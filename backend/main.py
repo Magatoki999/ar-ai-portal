@@ -1136,13 +1136,19 @@ async def websocket_endpoint(websocket: WebSocket):
 # ─────────────────────────────────────────────────────────────────────────
 
 @app.api_route("/api/internal/list_timeline", methods=["GET", "POST"])
-async def list_timeline_endpoint(limit: int = 40):
+async def list_timeline_endpoint(
+    limit: int = 40,
+    include_reading: bool = False,
+    include_movies: bool = False,
+):
     """
     写真・動画・成長の節目を時系列で統合したタイムラインを返す（アルバムUI用）。
-    例: /api/internal/list_timeline?limit=60
+    例: /api/internal/list_timeline?limit=60&include_reading=true&include_movies=true
     """
     try:
-        items = await timeline.get_timeline(limit=limit)
+        items = await timeline.get_timeline(
+            limit=limit, include_reading=include_reading, include_movies=include_movies
+        )
         return {"status": "ok", "count": len(items), "timeline": items}
     except Exception as e:
         return {"status": "error", "message": str(e)}

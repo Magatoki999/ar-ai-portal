@@ -13,6 +13,8 @@ import httpx
 
 from services.memory import _sb, _sb_headers
 from services.character_bible import _RUKI_MIND_DIR
+from services.books import get_recent_reading_logs
+from services.movies import get_recent_movie_logs
 
 
 async def _fetch_episode_photos(limit: int = 30) -> list[dict]:
@@ -97,15 +99,75 @@ def _fetch_mind_profile_milestones() -> list[dict]:
     return items
 
 
-async def get_timeline(limit: int = 40) -> list[dict]:
+async def _fetch_reading_logs_for_timeline(limit: int = 30) -> list[dict]:
+    """
+    読書通帳（books.py）の記録をタイムライン形式に変換する。
+    DBアクセス自体はbooks.pyの既存関数をそのまま再利用し、二重実装を避ける。
+    デフォルトのアルバム表示には含めない（「一緒にいた瞬間」の密度を保つため、
+    フィルターチップで明示的にONにした時だけ表示する想定）。
+    """
+    logs = await get_recent_reading_logs(limit=limit)
+    items = []
+    for r in logs:
+        author = r.get("author")
+        author_part = f"（{author}）" if author else ""
+        items.append({
+            "type": "book",
+            "date": r.get("borrowed_at") or r.get("created_at"),
+            "title": f"{r.get('title', '')}{author_part}",
+            "detail": r.get("genre") or "",
+            "mood": "",
+            "media_url": r.get("cover_url"),
+        })
+    return items
+
+
+async def _fetch_movie_logs_for_timeline(limit: int = 30) -> list[dict]:
+    """
+    映画通帳（movies.py）の記録をタイムライン形式に変換する。
+    読書と同じ理由で、デフォルト表示には含めない。
+    """
+    logs = await get_recent_movie_logs(limit=limit)
+    items = []
+    for r in logs:
+        director = r.get("director")
+        director_part = f"（{director}）" if director else ""
+        items.append({
+            "type": "movie",
+            "date": r.get("watched_at") or r.get("created_at"),
+            "title": f"{r.get('title', '')}{director_part}",
+            "detail": r.get("genre") or "",
+            "mood": "",
+            "media_url": r.get("poster_url"),
+        })
+    return items
+
+
+async def get_timeline(
+    limit: int = 40,
+    include_reading: bool = False,
+    include_movies: bool = False,
+) -> list[dict]:
     """
     写真・動画・成長の節目を時系列（新しい順）で統合したタイムラインを返す。
     アルバムUIはこれを1回呼ぶだけで全種類の「思い出」を時系列表示できる。
+
+    include_reading / include_movies をTrueにすると、読書通帳・映画通帳の記録も
+    統合する（2026-07-17追加）。デフォルトはFalseのまま
+    （「一緒にいた瞬間」＝写真・動画・成長だけの従来通りの挙動を維持するため）。
+    アルバムUI側は基本的に両方Trueで1回だけ取得し、表示の絞り込みは
+    フロントエンド側（フィルターチップ）で行う設計にしている。
     """
     photos = await _fetch_episode_photos(limit)
     videos = await _fetch_adopted_videos(limit)
     growth = _fetch_mind_profile_milestones()
 
     merged = photos + videos + growth
+
+    if include_reading:
+        merged += await _fetch_reading_logs_for_timeline(limit)
+    if include_movies:
+        merged += await _fetch_movie_logs_for_timeline(limit)
+
     merged.sort(key=lambda x: x.get("date") or "", reverse=True)
     return merged[:limit]
