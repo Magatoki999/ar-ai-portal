@@ -52,6 +52,7 @@ export function useAR({
   const spawnProgressRef = useRef<number>(0);
   const isSpawningRef   = useRef<boolean>(false);
   const avatarSceneRef  = useRef<any>(null);
+  const onVisibilityChangeRef = useRef<(() => void) | null>(null);
 
   // ── AIステータス変化時のアニメーションクロスフェード ──
   const fadeToAction = (status: AIStatus, duration: number = 0.5) => {
@@ -289,6 +290,29 @@ export function useAR({
           });
         }
 
+        // ── タブ非表示→再表示時のカメラストリーム再開処理（2026-07-18追加） ──
+        // モバイルブラウザは、タブがバックグラウンドになるとカメラの<video>ストリームを
+        // 一時停止することがある（省電力・プライバシー保護のため）。屋外での利用では
+        // 画面ロックや他アプリへの切り替えが頻発するため、この状態のまま
+        // captureFrame() を呼ぶと videoWidth が読めず image_base64 が null になり、
+        // 「この場所を記憶して」等の写真保存が静かに失敗する原因になっていた。
+        // 復帰時に一時停止中のvideoがあれば明示的に再生し直す。
+        const resumeVideoIfPaused = () => {
+          if (document.visibilityState !== "visible") return;
+          const c = containerRef.current;
+          if (!c) return;
+          c.querySelectorAll("video").forEach((v) => {
+            const videoEl = v as HTMLVideoElement;
+            if (videoEl.paused) {
+              videoEl.play().catch((err) => {
+                console.log("[useAR] タブ復帰時のvideo再開に失敗:", err);
+              });
+            }
+          });
+        };
+        document.addEventListener("visibilitychange", resumeVideoIfPaused);
+        onVisibilityChangeRef.current = resumeVideoIfPaused;
+
         renderer.setAnimationLoop(() => {
           const delta       = clock.getDelta();
           const elapsedTime = clock.getElapsedTime();
@@ -409,6 +433,9 @@ export function useAR({
       try { localRenderer?.setAnimationLoop(null); } catch (_) {}
       try { mindarThreeInstance?.stop(); }            catch (_) {}
       if (onResize) window.removeEventListener("resize", onResize);
+      if (onVisibilityChangeRef.current) {
+        document.removeEventListener("visibilitychange", onVisibilityChangeRef.current);
+      }
     };
   }, []);
 
