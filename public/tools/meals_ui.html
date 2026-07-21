@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>食事の記録</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #f3ece0;
+    --ink: #262019;
+    --ink-soft: #6b6154;
+    --teal: #3f6e64;
+    --teal-deep: #2c4e47;
+    --amber: #bd8a3f;
+    --red: #7c3a34;
+    --line: #d9cdb6;
+    --card: #faf6ec;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(63,110,100,0.06), transparent 40%),
+      radial-gradient(circle at 90% 85%, rgba(189,138,63,0.08), transparent 45%),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:28px 18px 80px;}
+
+  header{margin-bottom:16px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:.14em;
+    color:var(--teal-deep);text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  }
+  .eyebrow::before{content:"";width:14px;height:1px;background:var(--teal-deep);display:inline-block;}
+  h1{
+    font-family:'Shippori Mincho',serif;
+    font-weight:700;font-size:28px;margin:0;color:var(--ink);
+    letter-spacing:.02em;
+  }
+  h1 span{color:var(--teal);}
+  .sub{font-size:12.5px;color:var(--ink-soft);margin-top:6px;line-height:1.7;}
+
+  .intro-note{
+    background:var(--card);border:1px solid var(--line);border-radius:3px;
+    padding:12px 14px;margin:18px 0 24px;font-size:12px;line-height:1.8;color:var(--ink-soft);
+  }
+  .intro-note strong{color:var(--teal-deep);}
+
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:3px;
+    padding:14px 16px;margin-bottom:20px;
+  }
+  label{display:block;font-size:11px;color:var(--ink-soft);margin-bottom:5px;}
+  input[type=text]{
+    width:100%;font-size:14px;padding:9px 10px;
+    border:1px solid var(--line);border-radius:2px;background:#fff;color:var(--ink);
+    margin-bottom:10px;font-family:'Zen Kaku Gothic New',sans-serif;
+  }
+  button{
+    font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:13px;
+    padding:9px 15px;border:none;border-radius:2px;
+    background:var(--teal);color:#fff;cursor:pointer;
+  }
+  button:hover{background:var(--teal-deep);}
+
+  .status-msg{font-size:12.5px;padding:10px 12px;border-radius:2px;margin-bottom:12px;}
+  .status-msg.error{background:rgba(124,58,52,0.09);color:var(--red);}
+  .status-msg.loading{background:rgba(107,97,84,0.08);color:var(--ink-soft);}
+  .empty{font-size:12.5px;color:var(--ink-soft);padding:20px 0;text-align:center;}
+
+  .month-header{
+    font-family:'Shippori Mincho',serif;font-weight:700;font-size:15px;
+    color:var(--teal-deep);margin:24px 0 12px;
+    display:flex;align-items:center;gap:10px;
+  }
+  .month-header::after{content:"";flex:1;height:1px;background:var(--line);}
+
+  .meal-item{
+    display:flex;gap:12px;
+    padding:12px 0;border-bottom:1px dashed var(--line);
+  }
+  .meal-item:last-child{border-bottom:none;}
+  .meal-thumb{
+    flex-shrink:0;width:64px;height:64px;border-radius:4px;overflow:hidden;
+    background:#e8e0d0;border:1px solid var(--line);
+  }
+  .meal-thumb img{width:100%;height:100%;object-fit:cover;}
+  .meal-thumb.placeholder{display:flex;align-items:center;justify-content:center;font-size:22px;}
+
+  .meal-body{flex:1;min-width:0;}
+  .meal-date{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
+  .meal-desc{font-size:13.5px;line-height:1.6;margin:3px 0;color:var(--ink);}
+  .meal-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+  .meal-tag{
+    font-size:10.5px;padding:2px 8px;border-radius:10px;
+    background:rgba(63,110,100,0.1);color:var(--teal-deep);
+  }
+  .meal-tag.alone{background:rgba(189,138,63,0.12);color:var(--amber);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ArtAR / ルキルキ</div>
+    <h1>食事の<span>記録</span></h1>
+    <div class="sub">「誰と」「どんな気持ちで」食べたか。ルキルキが一緒に過ごした食事の時間。</div>
+  </header>
+
+  <div class="intro-note">
+    <strong>このページについて：</strong>これは栄養管理やダイエット記録ではありません。
+    ルキルキは食事の内容を評価したり指導したりしないという方針で会話しているので、
+    ここにも品目やカロリーの分析は表示していません。単に「その時どんな時間だったか」を
+    ふりかえるための、ゆるい記録です。
+  </div>
+
+  <div class="card">
+    <label for="baseUrl">バックエンドURL（Render）</label>
+    <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com" value="https://magatoki-ai-backend.onrender.com">
+    <button id="loadBtn">読み込む</button>
+  </div>
+
+  <div id="status" class="empty">接続先を読み込むと記録が表示されます</div>
+  <div id="mealList"></div>
+
+</div>
+
+<script>
+let baseUrl = "";
+const $ = id => document.getElementById(id);
+
+async function loadSavedUrl(){
+  try{
+    const res = await window.storage.get('backend_base_url'); // 他のツールページと共通のキー
+    if(res && res.value){
+      baseUrl = res.value;
+      $('baseUrl').value = baseUrl;
+      await fetchMeals();
+      return;
+    }
+  }catch(e){ /* 未保存なら何もしない */ }
+  const defaultVal = $('baseUrl').value.trim();
+  if(defaultVal){
+    baseUrl = defaultVal;
+    await fetchMeals();
+  }
+}
+
+$('loadBtn').addEventListener('click', async ()=>{
+  const val = $('baseUrl').value.trim().replace(/\/$/, '');
+  if(!val) return;
+  baseUrl = val;
+  try{ await window.storage.set('backend_base_url', val); }catch(e){}
+  await fetchMeals();
+});
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+function monthLabel(dateStr){
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}年${d.getMonth()+1}月`;
+}
+
+const MEAL_TYPE_ICON = { "朝食": "🌅", "昼食": "☀️", "夕食": "🌙" };
+
+function renderMealItem(log){
+  const div = document.createElement('div');
+  div.className = 'meal-item';
+  const dateStr = log.created_at ? new Date(log.created_at).toLocaleDateString('ja-JP', {month:'numeric', day:'numeric'}) : '';
+  const icon = MEAL_TYPE_ICON[log.meal_type] || '🍚';
+
+  const thumbHtml = log.image_url
+    ? `<div class="meal-thumb"><img src="${log.image_url}" loading="lazy" alt=""></div>`
+    : `<div class="meal-thumb placeholder">${icon}</div>`;
+
+  const tags = [];
+  if(log.meal_type) tags.push(`<span class="meal-tag">${escapeHtml(log.meal_type)}</span>`);
+  if(log.is_alone === true) tags.push(`<span class="meal-tag alone">一人で</span>`);
+  if(log.is_alone === false) tags.push(`<span class="meal-tag">誰かと</span>`);
+  // healthiness（食事の健康度合い）はあえて表示しない（栄養評価のような見た目を避けるため）
+
+  div.innerHTML = `
+    ${thumbHtml}
+    <div class="meal-body">
+      <div class="meal-date">${dateStr}</div>
+      <div class="meal-desc">${escapeHtml(log.description || '')}</div>
+      <div class="meal-tags">${tags.join('')}</div>
+    </div>
+  `;
+  return div;
+}
+
+async function fetchMeals(){
+  $('status').textContent = '読み込み中…';
+  $('status').className = 'status-msg loading';
+  $('mealList').innerHTML = '';
+  try{
+    const url = new URL(baseUrl + '/api/internal/list_meal_logs');
+    url.searchParams.set('limit', '60');
+    const resp = await fetch(url.toString());
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if(data.status !== 'ok') throw new Error(data.message || '取得に失敗しました');
+
+    const logs = data.meal_logs || [];
+    if(logs.length === 0){
+      $('status').textContent = 'まだ記録がありません';
+      $('status').className = 'empty';
+      return;
+    }
+    $('status').style.display = 'none';
+
+    const container = $('mealList');
+    let currentMonth = '';
+    logs.forEach(log=>{
+      const label = log.created_at ? monthLabel(log.created_at) : '';
+      if(label && label !== currentMonth){
+        currentMonth = label;
+        const h = document.createElement('div');
+        h.className = 'month-header';
+        h.textContent = label;
+        container.appendChild(h);
+      }
+      container.appendChild(renderMealItem(log));
+    });
+  }catch(e){
+    $('status').textContent = '読み込み失敗: ' + e.message;
+    $('status').className = 'status-msg error';
+  }
+}
+
+loadSavedUrl();
+</script>
+</body>
+</html>

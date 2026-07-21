@@ -1152,3 +1152,21 @@ async def list_timeline_endpoint(
         return {"status": "ok", "count": len(items), "timeline": items}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# ─────────────────────────────────────────────────────────────────────────
+# 食事の記録（孤食ロボット機能）閲覧用エンドポイント
+# ─────────────────────────────────────────────────────────────────────────
+ 
+
+@app.api_route("/api/internal/list_meal_logs", methods=["GET", "POST"])
+async def list_meal_logs_endpoint(limit: int = 30):
+    """
+    食事の記録を新しい順に返す（食事ページ専用。アルバムのタイムラインには含めない）。
+    例: /api/internal/list_meal_logs?limit=30
+    """
+    try:
+        logs = await get_recent_meal_logs(limit=limit)
+        return {"status": "ok", "count": len(logs), "meal_logs": logs}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+ 
