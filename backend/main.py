@@ -334,8 +334,7 @@ async def _extract_and_save_meal_log_with_photo(
         await save_meal_log(
             description=description,
             healthiness=data.get("healthiness"),
-            # 写真付きの食事記録だとわかるよう、image_url相当の情報をdescriptionに含めておく。
-            # meal_logsテーブル自体にimage_url列は無いため、説明文に軽く触れる形にする。
+            image_url=image_url,
         )
         print(f"[食事記録(写真)] 保存しました: {description}")
     except json.JSONDecodeError:
