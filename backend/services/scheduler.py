@@ -42,6 +42,7 @@ from services.calendar import (
     should_run_calendar_check,
     mark_calendar_checked,
 )
+from services.reminders import get_due_soon_unnotified, mark_reminder_notified
 
 
 search_tool = TavilySearch(max_results=2)  # type: ignore
@@ -397,6 +398,67 @@ async def calendar_prep_job(llm) -> None:
 
         # 1回のジョブ実行で複数件まとめて喋らせると不自然なので、1件だけ提案して終了
         break
+
+
+# ─── 軽量リマインダー（タスク）の期限通知ジョブ ───
+# calendar_prep_job（Googleカレンダーの実際の予定）とは別データソース。
+# こちらはユーザーが会話中に登録した単発タスク（services/reminders.py）が対象。
+# calendar_prep_jobと違い「6時間おきの再チェック」ではなく「一生に一度だけ通知」の設計
+# （通知後はnotified_atが立つため二度と対象にならない。should_run_calendar_checkに相当する
+# 間隔制御は不要）。
+
+async def reminder_prep_job(llm) -> None:
+    """
+    期限が24時間以内に迫っていて、まだ通知していないリマインダーがあれば、
+    ルキルキが自発的に一言お知らせする。
+    calendar_prep_jobと違い「通知すべきか」をLLMに判断させる必要が無い
+    （期限が近ければ常に知らせるべきタスクのため）ので、追加のLLM呼び出しは発生しない
+    （メッセージ自体は固定テンプレートで組み立てる）。
+    """
+    if not state.manager.active_connections:
+        return
+
+    due_soon = await get_due_soon_unnotified(hours_ahead=24)
+    if not due_soon:
+        return
+
+    reminder = due_soon[0]  # 1回のジョブ実行で複数件まとめて喋らせると不自然なので1件だけ
+    title = reminder.get("title", "")
+    due_at_raw = reminder.get("due_at", "")
+
+    JST = timezone(timedelta(hours=9))
+    try:
+        due_dt = datetime.fromisoformat(due_at_raw).astimezone(JST)
+        now_jst = datetime.now(JST)
+        if due_dt.date() == now_jst.date():
+            due_label = f"今日の{due_dt.strftime('%H:%M')}"
+        else:
+            due_label = due_dt.strftime("%m/%d %H:%M")
+    except (ValueError, TypeError):
+        due_label = due_at_raw
+
+    message = f"「{title}」、そろそろ期限（{due_label}）ですよ！忘れてないですよね？"
+    spatial_effect = "cyber"
+    audio_base64 = await generate_tts(message)
+    audio_mime = (
+        "audio/wav"
+        if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+        else "audio/mpeg"
+    )
+
+    await state.manager.broadcast(
+        {
+            "type":           "proactive_speech",
+            "reply":          message,
+            "audio_data":     audio_base64,
+            "audio_mime":     audio_mime,
+            "spatial_effect": spatial_effect,
+        }
+    )
+    print(f"[リマインダー通知] 配信しました: {title} → {due_label}")
+
+    await mark_reminder_notified(reminder["id"])
+    state.last_user_interaction = datetime.now(timezone.utc)
 
 
 # ─── 食事リマインダー・ゆるい健康アドバイス（孤食ロボット機能） ───

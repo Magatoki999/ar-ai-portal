@@ -49,6 +49,8 @@ from services.memory import get_today_ai_news
 from services.books import get_book_history
 from services.movies import log_watched_movie, get_movie_history
 from services.prompt_builder import get_video_prompt_memories, get_video_url_by_id
+from services.places import find_nearby_places
+from services.reminders import set_reminder, get_my_reminders, complete_reminder
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -262,7 +264,8 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     main_search_tool   = search_tool
     llm_with_tools     = llm_synth.bind_tools(
         [search_tool, locate_current_position, get_my_schedule, get_today_ai_news,
-         get_book_history, get_video_prompt_memories, log_watched_movie, get_movie_history]
+         get_book_history, get_video_prompt_memories, log_watched_movie, get_movie_history,
+         find_nearby_places, set_reminder, get_my_reminders, complete_reminder]
     )
 
     base_persona = load_rukiruki_persona(user_call)
@@ -416,6 +419,36 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                     movie_history_result = await get_movie_history.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(
                         content=str(movie_history_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "find_nearby_places":
+                    # locate_current_position と同様、LLMが引数を省略した場合はstateの生座標にフォールバックする
+                    t_lat = tool_call["args"].get("lat", lat)
+                    t_lng = tool_call["args"].get("lng", lng)
+                    places_query = tool_call["args"].get("query", "")
+                    nearby_places_result = await find_nearby_places.ainvoke(
+                        {"lat": t_lat, "lng": t_lng, "query": places_query}
+                    )
+                    messages.append(ToolMessage(
+                        content=str(nearby_places_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "set_reminder":
+                    set_reminder_result = await set_reminder.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(set_reminder_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "get_my_reminders":
+                    reminders_result = await get_my_reminders.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(reminders_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "complete_reminder":
+                    complete_reminder_result = await complete_reminder.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(complete_reminder_result),
                         tool_call_id=str(tool_call["id"])
                     ))
             response = await llm_with_tools.ainvoke(messages)

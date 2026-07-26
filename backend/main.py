@@ -81,7 +81,10 @@ from services.scheduler import (
     calendar_prep_job,
     daily_ai_news_job,
     meal_reminder_job,
+    reminder_prep_job,
 )
+from services.reminders import get_upcoming_reminders
+from services.profile import build_memory_base
 from services.persona import (
     load_rukiruki_persona,
     load_magatoki_context,
@@ -482,6 +485,14 @@ async def chat_endpoint(payload: ChatMessage):
             await asyncio.sleep(22)
             await meal_reminder_job(llm)
         asyncio.create_task(_delayed_meal_check())
+
+        # 軽量リマインダーの期限通知チェック（fire-and-forget）。
+        # calendar_prep_job(8秒) / daily_ai_news_job(15秒) / meal_reminder_job(22秒)
+        # よりさらに後ろ（29秒後）にずらす。
+        async def _delayed_reminder_check():
+            await asyncio.sleep(29)
+            await reminder_prep_job(llm)
+        asyncio.create_task(_delayed_reminder_check())
 
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))
@@ -1166,6 +1177,41 @@ async def list_meal_logs_endpoint(limit: int = 30):
     try:
         logs = await get_recent_meal_logs(limit=limit)
         return {"status": "ok", "count": len(logs), "meal_logs": logs}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 軽量リマインダー（タスク）一覧取得用エンドポイント
+# ─────────────────────────────────────────────────────────────────────────
+
+@app.api_route("/api/internal/list_reminders", methods=["GET", "POST"])
+async def list_reminders_endpoint(limit: int = 20, include_done: bool = False):
+    """
+    登録済みのリマインダーを期限が近い順に返す（将来のUI用。会話Toolとは別経路）。
+    例: /api/internal/list_reminders?limit=20&include_done=false
+    """
+    try:
+        reminders = await get_upcoming_reminders(limit=limit, include_done=include_done)
+        return {"status": "ok", "count": len(reminders), "reminders": reminders}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 記憶ベース（ユーザー向けマイプロフィール）取得用エンドポイント
+# ─────────────────────────────────────────────────────────────────────────
+
+@app.api_route("/api/internal/get_memory_base", methods=["GET", "POST"])
+async def get_memory_base_endpoint(meal_days: int = 30):
+    """
+    よく行く場所・最近の出来事・読書/映画の記録・食事の傾向・ルキルキから見た変化の一言を
+    横断集計して返す（memory_base_ui.html 専用。会話フローとは完全に別経路）。
+    例: /api/internal/get_memory_base?meal_days=30
+    """
+    try:
+        data = await build_memory_base(meal_days=meal_days)
+        return {"status": "ok", "memory_base": data}
     except Exception as e:
         return {"status": "error", "message": str(e)}
  

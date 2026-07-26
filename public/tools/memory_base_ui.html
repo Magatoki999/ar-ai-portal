@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>まがときさんの記憶ベース</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── album_ui.html と同じ和紙調パレット・フォント構成を踏襲 ── */
+  :root{
+    --paper: #f3ece0;
+    --ink: #262019;
+    --ink-soft: #6b6154;
+    --teal: #3f6e64;
+    --teal-deep: #2c4e47;
+    --amber: #bd8a3f;
+    --red: #7c3a34;
+    --line: #d9cdb6;
+    --card: #faf6ec;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(63,110,100,0.06), transparent 40%),
+      radial-gradient(circle at 90% 85%, rgba(189,138,63,0.08), transparent 45%),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:28px 18px 80px;}
+
+  header{margin-bottom:22px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:.14em;
+    color:var(--teal-deep);text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  }
+  .eyebrow::before{content:"";width:14px;height:1px;background:var(--teal-deep);display:inline-block;}
+  h1{
+    font-family:'Shippori Mincho',serif;
+    font-weight:700;font-size:28px;margin:0;color:var(--ink);
+    letter-spacing:.02em;
+  }
+  h1 span{color:var(--teal);}
+  .sub{font-size:12.5px;color:var(--ink-soft);margin-top:6px;line-height:1.6;}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:3px;
+    padding:14px 16px;
+    margin-bottom:16px;
+  }
+  label{display:block;font-size:11px;color:var(--ink-soft);margin-bottom:5px;}
+  input[type=text]{
+    width:100%;font-size:14px;padding:9px 10px;
+    border:1px solid var(--line);border-radius:2px;background:#fff;color:var(--ink);
+    margin-bottom:10px;font-family:'Zen Kaku Gothic New',sans-serif;
+  }
+  button{
+    font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:13px;
+    padding:9px 15px;border:none;border-radius:2px;
+    background:var(--teal);color:#fff;cursor:pointer;
+  }
+  button:hover{background:var(--teal-deep);}
+
+  .status-msg{font-size:12.5px;padding:10px 12px;border-radius:2px;margin-bottom:12px;}
+  .status-msg.error{background:rgba(124,58,52,0.09);color:var(--red);}
+  .status-msg.loading{background:rgba(107,97,84,0.08);color:var(--ink-soft);}
+  .empty{font-size:12.5px;color:var(--ink-soft);padding:20px 0;text-align:center;}
+
+  /* ── フィルターチップ（album_ui.htmlと同型。セクションの表示/非表示切り替え用） ── */
+  .filter-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;}
+  .chip{
+    font-family:'Zen Kaku Gothic New',sans-serif;font-size:12.5px;
+    padding:7px 13px;border-radius:16px;
+    border:1px solid var(--line);background:var(--card);color:var(--ink-soft);
+    cursor:pointer;user-select:none;transition:background .15s,color .15s,border-color .15s;
+  }
+  .chip.active{background:var(--teal);border-color:var(--teal);color:#fff;}
+  .chip.active.chip-book{background:var(--amber);border-color:var(--amber);}
+  .chip.active.chip-movie{background:var(--red);border-color:var(--red);}
+
+  /* ── セクション見出し ── */
+  .section{display:none;margin-bottom:28px;}
+  .section.visible{display:block;}
+  .section-title{
+    font-family:'Shippori Mincho',serif;font-weight:700;font-size:15px;
+    color:var(--teal-deep);margin:0 0 12px;
+    display:flex;align-items:center;gap:10px;
+  }
+  .section-title::after{content:"";flex:1;height:1px;background:var(--line);}
+  .section-empty{font-size:12px;color:var(--ink-soft);padding:4px 0 2px;}
+
+  /* ── よく行く場所：チップ風タグの並び ── */
+  .spot-row{display:flex;flex-wrap:wrap;gap:8px;}
+  .spot-tag{
+    font-size:12.5px;padding:6px 12px;border-radius:14px;
+    background:rgba(63,110,100,0.08);color:var(--teal-deep);
+    border:1px solid rgba(63,110,100,0.2);
+  }
+  .spot-tag .reading{font-size:10.5px;color:var(--ink-soft);margin-left:4px;}
+
+  /* ── 最近の出来事：シンプルなリスト ── */
+  .event-item{
+    border-left:2px solid var(--line);
+    padding:0 0 14px 14px;margin-left:4px;position:relative;
+  }
+  .event-item::before{
+    content:"";position:absolute;left:-6px;top:2px;
+    width:10px;height:10px;border-radius:50%;
+    background:var(--card);border:2px solid var(--teal);
+  }
+  .event-date{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
+  .event-summary{font-size:13px;line-height:1.6;margin-top:3px;color:var(--ink);}
+  .event-keywords{font-size:11px;color:var(--ink-soft);margin-top:3px;}
+
+  /* ── 読書・映画：統計 + 直近リスト ── */
+  .stat-row{display:flex;gap:18px;margin-bottom:12px;}
+  .stat-box{flex:1;text-align:center;background:rgba(0,0,0,0.02);border-radius:3px;padding:10px 6px;}
+  .stat-num{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:500;color:var(--teal-deep);}
+  .stat-label{font-size:10.5px;color:var(--ink-soft);margin-top:2px;}
+  .mini-list-item{font-size:12.5px;line-height:1.7;color:var(--ink);}
+  .mini-list-item .meta{color:var(--ink-soft);font-size:11px;}
+
+  /* ── 食事の傾向：数値のみ淡く表示。説教にならないよう一言添える形にする ── */
+  .meal-note{font-size:12px;color:var(--ink-soft);line-height:1.7;margin-top:6px;}
+
+  /* ── ルキルキから見た変化（成長メモ） ── */
+  .growth-card{
+    display:flex;gap:10px;align-items:flex-start;
+    background:rgba(124,58,52,0.05);border:1px solid rgba(124,58,52,0.15);
+    border-radius:3px;padding:12px 14px;
+  }
+  .growth-card .torii{font-family:'Shippori Mincho',serif;font-size:18px;color:var(--red);}
+  .growth-card .growth-text{font-size:12.5px;line-height:1.7;color:var(--ink);white-space:pre-wrap;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">ArtAR / ルキルキ</div>
+    <h1>まがときさんの<span>記憶ベース</span></h1>
+    <div class="sub">ルキルキが覚えている、まがときさんの日々。データベースに残っている記録から集計しています。</div>
+  </header>
+
+  <div class="card">
+    <label for="baseUrl">バックエンドURL（Render）</label>
+    <input type="text" id="baseUrl" placeholder="https://xxxx.onrender.com" value="https://magatoki-ai-backend.onrender.com">
+    <button id="loadBtn">読み込む</button>
+  </div>
+
+  <div id="status" class="empty">接続先を読み込むと記憶ベースが表示されます</div>
+
+  <div class="filter-row" id="filterRow" style="display:none;">
+    <div class="chip active" data-section="spots">📍 場所</div>
+    <div class="chip active" data-section="events">🕰 出来事</div>
+    <div class="chip chip-book" data-section="reading">📚 読書</div>
+    <div class="chip chip-movie" data-section="movies">🍿 映画</div>
+    <div class="chip active" data-section="meals">🍚 食事</div>
+    <div class="chip active" data-section="growth">⛩ 変化</div>
+  </div>
+
+  <div id="sections"></div>
+
+</div>
+
+<script>
+let baseUrl = "";
+let memoryBase = null;
+// 読書・映画は album_ui.html と同じくデフォルトOFF（記憶ベースでも「一緒にいた記録」を優先表示）
+let activeSections = new Set(['spots', 'events', 'meals', 'growth']);
+const $ = id => document.getElementById(id);
+
+async function loadSavedUrl(){
+  try{
+    const res = await window.storage.get('backend_base_url'); // album_ui.html / prompt_builder_ui.htmlと共通のキー
+    if(res && res.value){
+      baseUrl = res.value;
+      $('baseUrl').value = baseUrl;
+      await fetchMemoryBase();
+      return;
+    }
+  }catch(e){ /* 未保存なら何もしない */ }
+  const defaultVal = $('baseUrl').value.trim();
+  if(defaultVal){
+    baseUrl = defaultVal;
+    await fetchMemoryBase();
+  }
+}
+
+$('loadBtn').addEventListener('click', async ()=>{
+  const val = $('baseUrl').value.trim().replace(/\/$/, '');
+  if(!val) return;
+  baseUrl = val;
+  try{ await window.storage.set('backend_base_url', val); }catch(e){}
+  await fetchMemoryBase();
+});
+
+document.querySelectorAll('.chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    const section = chip.dataset.section;
+    if(activeSections.has(section)){
+      activeSections.delete(section);
+      chip.classList.remove('active');
+    }else{
+      activeSections.add(section);
+      chip.classList.add('active');
+    }
+    renderSections();
+  });
+});
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+function formatDate(dateStr){
+  if(!dateStr) return '';
+  const d = new Date(dateStr);
+  if(isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('ja-JP', {year:'numeric', month:'numeric', day:'numeric'});
+}
+
+function renderSpots(spots){
+  if(!spots || spots.length === 0){
+    return '<div class="section-empty">まだ登録された場所はありません（「ここを登録して」で追加できます）</div>';
+  }
+  const tags = spots.map(s => `
+    <div class="spot-tag">${escapeHtml(s.name)}${s.name_reading && s.name_reading !== s.name ? `<span class="reading">（${escapeHtml(s.name_reading)}）</span>` : ''}</div>
+  `).join('');
+  return `<div class="spot-row">${tags}</div>`;
+}
+
+function renderEvents(events){
+  if(!events || events.length === 0){
+    return '<div class="section-empty">まだ記録された出来事はありません</div>';
+  }
+  return events.map(e => `
+    <div class="event-item">
+      <div class="event-date">${formatDate(e.created_at)}</div>
+      <div class="event-summary">${escapeHtml(e.summary)}</div>
+      ${e.keywords && e.keywords.length ? `<div class="event-keywords">${e.keywords.map(escapeHtml).join(' / ')}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderReading(reading){
+  const recentHtml = (reading.recent && reading.recent.length)
+    ? reading.recent.map(b => `
+        <div class="mini-list-item">・${escapeHtml(b.title)}${b.author ? `<span class="meta">（${escapeHtml(b.author)}）</span>` : ''}</div>
+      `).join('')
+    : '<div class="section-empty">まだ読書記録はありません</div>';
+  return `
+    <div class="stat-row">
+      <div class="stat-box"><div class="stat-num">${reading.total_count ?? 0}</div><div class="stat-label">累計冊数</div></div>
+    </div>
+    ${recentHtml}
+  `;
+}
+
+function renderMovies(movies){
+  const recentHtml = (movies.recent && movies.recent.length)
+    ? movies.recent.map(m => `
+        <div class="mini-list-item">・${escapeHtml(m.title)}${m.director ? `<span class="meta">（${escapeHtml(m.director)}）</span>` : ''}</div>
+      `).join('')
+    : '<div class="section-empty">まだ映画の記録はありません</div>';
+  return `
+    <div class="stat-row">
+      <div class="stat-box"><div class="stat-num">${movies.total_count ?? 0}</div><div class="stat-label">累計本数</div></div>
+    </div>
+    ${recentHtml}
+  `;
+}
+
+function renderMeals(mealTrend){
+  if(!mealTrend || mealTrend.total_logged === 0){
+    return '<div class="section-empty">まだ食事の記録はありません</div>';
+  }
+  const recentHtml = (mealTrend.recent && mealTrend.recent.length)
+    ? mealTrend.recent.map(m => `<div class="mini-list-item">・${escapeHtml(m.description)}</div>`).join('')
+    : '';
+  // 「ちゃんと食べて」のような指摘トーンにならないよう、数字は淡く出すだけにとどめる
+  return `
+    <div class="stat-row">
+      <div class="stat-box"><div class="stat-num">${mealTrend.total_logged}</div><div class="stat-label">直近の記録件数</div></div>
+    </div>
+    ${recentHtml}
+    <div class="meal-note">一緒に過ごした食事の時間を、ルキルキがゆるく覚えています。</div>
+  `;
+}
+
+function renderGrowth(growthNote){
+  if(!growthNote){
+    return '<div class="section-empty">まだルキルキからの変化メモはありません（月が変わると生成されます）</div>';
+  }
+  return `
+    <div class="growth-card">
+      <span class="torii">⛩</span>
+      <div class="growth-text">${escapeHtml(growthNote)}</div>
+    </div>
+  `;
+}
+
+const SECTION_RENDERERS = {
+  spots:   d => renderSpots(d.favorite_spots),
+  events:  d => renderEvents(d.recent_events),
+  reading: d => renderReading(d.reading || {}),
+  movies:  d => renderMovies(d.movies || {}),
+  meals:   d => renderMeals(d.meal_trend),
+  growth:  d => renderGrowth(d.growth_note),
+};
+const SECTION_TITLES = {
+  spots: '📍 よく行く場所',
+  events: '🕰 最近の出来事',
+  reading: '📚 読書の記録',
+  movies: '🍿 映画の記録',
+  meals: '🍚 食事の時間',
+  growth: '⛩ ルキルキから見た変化',
+};
+
+function renderSections(){
+  if(!memoryBase) return;
+  const container = $('sections');
+  container.innerHTML = '';
+  Object.keys(SECTION_RENDERERS).forEach(key=>{
+    const section = document.createElement('div');
+    section.className = 'section' + (activeSections.has(key) ? ' visible' : '');
+    section.innerHTML = `
+      <div class="section-title">${SECTION_TITLES[key]}</div>
+      <div class="card">${SECTION_RENDERERS[key](memoryBase)}</div>
+    `;
+    container.appendChild(section);
+  });
+}
+
+async function fetchMemoryBase(){
+  $('status').textContent = '読み込み中…';
+  $('status').className = 'status-msg loading';
+  $('filterRow').style.display = 'none';
+  $('sections').innerHTML = '';
+  try{
+    const url = new URL(baseUrl + '/api/internal/get_memory_base');
+    const resp = await fetch(url.toString());
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if(data.status !== 'ok') throw new Error(data.message || '取得に失敗しました');
+
+    memoryBase = data.memory_base;
+    $('status').style.display = 'none';
+    $('filterRow').style.display = 'flex';
+    renderSections();
+  }catch(e){
+    $('status').textContent = '読み込み失敗: ' + e.message;
+    $('status').className = 'status-msg error';
+  }
+}
+
+loadSavedUrl();
+</script>
+</body>
+</html>
