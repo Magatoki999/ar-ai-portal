@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArtAR チャットAPI テストツール</title>
+<style>
+  :root{
+    --paper: #f3ece0; --ink: #262019; --ink-soft: #6b6154;
+    --teal: #3f6e64; --teal-deep: #2c4e47; --line: #d9cdb6; --card: #faf6ec;
+    --red: #7c3a34;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:-apple-system,'Hiragino Sans','Yu Gothic',sans-serif;padding:20px;}
+  .wrap{max-width:600px;margin:0 auto;}
+  h1{font-size:18px;margin:0 0 4px;}
+  .sub{font-size:12px;color:var(--ink-soft);margin-bottom:18px;}
+  label{display:block;font-size:11px;color:var(--ink-soft);margin:12px 0 4px;}
+  input,textarea{
+    width:100%;font-size:14px;padding:9px 10px;border:1px solid var(--line);
+    border-radius:4px;background:#fff;color:var(--ink);font-family:inherit;
+  }
+  textarea{resize:vertical;min-height:60px;}
+  .row{display:flex;gap:10px;}
+  .row > div{flex:1;}
+  button{
+    margin-top:14px;width:100%;font-weight:700;font-size:14px;padding:12px;
+    border:none;border-radius:4px;background:var(--teal);color:#fff;cursor:pointer;
+  }
+  button:disabled{background:#999;}
+  .presets{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+  .preset{
+    font-size:11.5px;padding:6px 10px;border-radius:12px;border:1px solid var(--line);
+    background:var(--card);cursor:pointer;color:var(--ink-soft);
+  }
+  #result{margin-top:20px;}
+  .result-card{
+    background:var(--card);border:1px solid var(--line);border-radius:4px;
+    padding:14px;margin-bottom:10px;
+  }
+  .result-label{font-size:10.5px;color:var(--ink-soft);margin-bottom:4px;text-transform:uppercase;}
+  .reply-text{font-size:15px;line-height:1.7;white-space:pre-wrap;}
+  .raw-json{font-size:11px;white-space:pre-wrap;word-break:break-all;color:var(--ink-soft);
+    max-height:240px;overflow:auto;font-family:monospace;}
+  .error{color:var(--red);font-size:13px;}
+  .loading{color:var(--ink-soft);font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ArtAR チャットAPI テストツール</h1>
+  <div class="sub">PowerShellを経由せず、ブラウザから直接 /api/chat を叩けます（PC・スマホどちらでもOK）。</div>
+
+  <label>バックエンドURL</label>
+  <input type="text" id="baseUrl" value="https://magatoki-ai-backend.onrender.com">
+
+  <label>送るメッセージ</label>
+  <textarea id="message">この近くにおすすめのカフェある？</textarea>
+  <div class="presets">
+    <div class="preset" data-msg="Hello, are you working?">英語テスト</div>
+    <div class="preset" data-msg="この近くにおすすめのカフェある？">①カフェ検索</div>
+    <div class="preset" data-msg="レポート提出を明日までにリマインドして">②リマインダー登録</div>
+    <div class="preset" data-msg="他にやることある？">②リマインダー確認</div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>緯度（任意）</label>
+      <input type="text" id="lat" value="35.0116">
+    </div>
+    <div>
+      <label>経度（任意）</label>
+      <input type="text" id="lng" value="135.7681">
+    </div>
+  </div>
+
+  <button id="sendBtn">送信する</button>
+
+  <div id="result"></div>
+</div>
+
+<script>
+document.querySelectorAll('.preset').forEach(p => {
+  p.addEventListener('click', () => { document.getElementById('message').value = p.dataset.msg; });
+});
+
+document.getElementById('sendBtn').addEventListener('click', async () => {
+  const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
+  const message = document.getElementById('message').value.trim();
+  const lat = document.getElementById('lat').value.trim();
+  const lng = document.getElementById('lng').value.trim();
+  const resultDiv = document.getElementById('result');
+  const btn = document.getElementById('sendBtn');
+
+  if (!baseUrl || !message) return;
+
+  const body = { message };
+  if (lat) body.latitude = parseFloat(lat);
+  if (lng) body.longitude = parseFloat(lng);
+
+  btn.disabled = true;
+  resultDiv.innerHTML = '<div class="loading">送信中…（Renderがスリープしていると初回は20秒ほどかかります）</div>';
+
+  try {
+    const res = await fetch(baseUrl + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch(e) { throw new Error('JSONとして解析できませんでした: ' + text.slice(0,200)); }
+
+    resultDiv.innerHTML = `
+      <div class="result-card">
+        <div class="result-label">ルキルキの返答（reply）</div>
+        <div class="reply-text">${(data.reply || '（replyフィールドが空です）').replace(/</g,'&lt;')}</div>
+      </div>
+      <div class="result-card">
+        <div class="result-label">レスポンス全体（生JSON）</div>
+        <div class="raw-json">${JSON.stringify(data, null, 2).replace(/</g,'&lt;')}</div>
+      </div>
+    `;
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="error">エラー: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
