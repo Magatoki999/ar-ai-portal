@@ -51,6 +51,7 @@ from services.movies import log_watched_movie, get_movie_history
 from services.prompt_builder import get_video_prompt_memories, get_video_url_by_id
 from services.places import find_nearby_places
 from services.reminders import set_reminder, get_my_reminders, complete_reminder
+from services.user_growth import log_user_growth, get_user_growth_notes
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -265,7 +266,8 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     llm_with_tools     = llm_synth.bind_tools(
         [search_tool, locate_current_position, get_my_schedule, get_today_ai_news,
          get_book_history, get_video_prompt_memories, log_watched_movie, get_movie_history,
-         find_nearby_places, set_reminder, get_my_reminders, complete_reminder]
+         find_nearby_places, set_reminder, get_my_reminders, complete_reminder,
+         log_user_growth, get_user_growth_notes]
     )
 
     base_persona = load_rukiruki_persona(user_call)
@@ -449,6 +451,18 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                     complete_reminder_result = await complete_reminder.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(
                         content=str(complete_reminder_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "log_user_growth":
+                    log_growth_result = await log_user_growth.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(log_growth_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+                elif tool_call["name"] == "get_user_growth_notes":
+                    growth_notes_result = await get_user_growth_notes.ainvoke(tool_call["args"])
+                    messages.append(ToolMessage(
+                        content=str(growth_notes_result),
                         tool_call_id=str(tool_call["id"])
                     ))
             response = await llm_with_tools.ainvoke(messages)

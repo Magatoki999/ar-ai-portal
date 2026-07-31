@@ -19,6 +19,7 @@ from services.memory import _sb, _sb_headers, get_memory_spots, get_recent_meal_
 from services.books import get_reading_stats, get_recent_reading_logs
 from services.movies import get_movie_stats, get_recent_movie_logs
 from services.character_bible import get_latest_growth_note
+from services.user_growth import get_recent_growth_notes
 
 JST = timezone(timedelta(hours=9))
 
@@ -114,6 +115,7 @@ async def build_memory_base(meal_days: int = 30) -> dict:
     meal_logs_in_range = [log for log in meal_logs if (log.get("created_at") or "") >= cutoff]
 
     growth_note = get_latest_growth_note()
+    user_growth_notes = await get_recent_growth_notes(limit=5)
 
     return {
         "favorite_spots": [_format_spot(s) for s in spots[:8]],
@@ -135,5 +137,9 @@ async def build_memory_base(meal_days: int = 30) -> dict:
         },
         "meal_trend": _summarize_meal_trend(meal_logs_in_range),
         "growth_note": growth_note,  # ルキルキ視点の「先月との変化」一言（無ければNone）
+        "user_growth_notes": [
+            {"note": n.get("note", ""), "created_at": n.get("created_at")}
+            for n in user_growth_notes
+        ],  # まがときさんが自分から語った成長・自慢（AIが推測したものは含まない）
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

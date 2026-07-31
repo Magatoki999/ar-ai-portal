@@ -86,6 +86,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.profile import build_memory_base
+from services.user_growth import get_recent_growth_notes
 from services.persona import (
     load_rukiruki_persona,
     load_magatoki_context,
@@ -1214,13 +1215,26 @@ async def list_reminders_endpoint(limit: int = 20, include_done: bool = False):
 @app.api_route("/api/internal/get_memory_base", methods=["GET", "POST"])
 async def get_memory_base_endpoint(meal_days: int = 30):
     """
-    よく行く場所・最近の出来事・読書/映画の記録・食事の傾向・ルキルキから見た変化の一言を
-    横断集計して返す（memory_base_ui.html 専用。会話フローとは完全に別経路）。
+    よく行く場所・最近の出来事・読書/映画の記録・食事の傾向・ルキルキから見た変化の一言・
+    ユーザー自身の成長記録を横断集計して返す（memory_base_ui.html 専用。会話フローとは完全に別経路）。
     例: /api/internal/get_memory_base?meal_days=30
     """
     try:
         data = await build_memory_base(meal_days=meal_days)
         return {"status": "ok", "memory_base": data}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.api_route("/api/internal/list_growth_notes", methods=["GET", "POST"])
+async def list_growth_notes_endpoint(limit: int = 20):
+    """
+    まがときさんが自分から語った成長・自慢の記録を新しい順に返す（将来のUI用。会話Toolとは別経路）。
+    例: /api/internal/list_growth_notes?limit=20
+    """
+    try:
+        notes = await get_recent_growth_notes(limit=limit)
+        return {"status": "ok", "count": len(notes), "growth_notes": notes}
     except Exception as e:
         return {"status": "error", "message": str(e)}
  

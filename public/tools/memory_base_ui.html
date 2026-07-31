@@ -163,6 +163,7 @@
     <div class="chip chip-book" data-section="reading">📚 読書</div>
     <div class="chip chip-movie" data-section="movies">🍿 映画</div>
     <div class="chip active" data-section="meals">🍚 食事</div>
+    <div class="chip active" data-section="user_growth">🌱 自慢</div>
     <div class="chip active" data-section="growth">⛩ 変化</div>
   </div>
 
@@ -174,7 +175,7 @@
 let baseUrl = "";
 let memoryBase = null;
 // 読書・映画は album_ui.html と同じくデフォルトOFF（記憶ベースでも「一緒にいた記録」を優先表示）
-let activeSections = new Set(['spots', 'events', 'meals', 'growth']);
+let activeSections = new Set(['spots', 'events', 'meals', 'user_growth', 'growth']);
 const $ = id => document.getElementById(id);
 
 async function loadSavedUrl(){
@@ -297,6 +298,15 @@ function renderMeals(mealTrend){
   `;
 }
 
+function renderUserGrowth(notes){
+  if(!notes || notes.length === 0){
+    return '<div class="section-empty">まだ記録されている成長の話はありません（会話の中で自分から話すと記録されます）</div>';
+  }
+  return notes.map(n => `
+    <div class="mini-list-item" style="margin-bottom:8px;">・${escapeHtml(n.note)} <span class="meta">${formatDate(n.created_at)}</span></div>
+  `).join('');
+}
+
 function renderGrowth(growthNote){
   if(!growthNote){
     return '<div class="section-empty">まだルキルキからの変化メモはありません（月が変わると生成されます）</div>';
@@ -315,6 +325,7 @@ const SECTION_RENDERERS = {
   reading: d => renderReading(d.reading || {}),
   movies:  d => renderMovies(d.movies || {}),
   meals:   d => renderMeals(d.meal_trend),
+  user_growth: d => renderUserGrowth(d.user_growth_notes),
   growth:  d => renderGrowth(d.growth_note),
 };
 const SECTION_TITLES = {
@@ -323,6 +334,7 @@ const SECTION_TITLES = {
   reading: '📚 読書の記録',
   movies: '🍿 映画の記録',
   meals: '🍚 食事の時間',
+  user_growth: '🌱 自分で語った成長・自慢',
   growth: '⛩ ルキルキから見た変化',
 };
 
