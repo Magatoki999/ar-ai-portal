@@ -43,6 +43,11 @@ from services.calendar import (
     mark_calendar_checked,
 )
 from services.reminders import get_due_soon_unnotified, mark_reminder_notified
+from services.weather_advisor import (
+    get_rain_forecast_message,
+    should_run_weather_check,
+    mark_weather_checked,
+)
 
 
 search_tool = TavilySearch(max_results=2)  # type: ignore
@@ -458,6 +463,54 @@ async def reminder_prep_job(llm) -> None:
     print(f"[リマインダー通知] 配信しました: {title} → {due_label}")
 
     await mark_reminder_notified(reminder["id"])
+    state.last_user_interaction = datetime.now(timezone.utc)
+
+
+# ─── 天気ベースの自発提案ジョブ ───
+# calendar_prep_job・reminder_prep_jobと同じ「[INITIAL_GREETING]から遅延実行」方式。
+# こちらは12時間おきの間隔制御（should_run_weather_check）で、同じ日に何度も
+# 「傘持ってね」を繰り返さないようにしている。
+
+async def weather_prep_job(llm) -> None:
+    """
+    直近30時間以内の天気予報を確認し、雨（または雪）が予想されるタイミングがあれば、
+    ルキルキが自発的に「傘を持っていくの忘れないでね」のように一言提案する。
+    reminder_prep_jobと同様、提案すべきかどうかの判定は天気コードによる機械的な
+    判定で完結するため、追加のLLM呼び出しは発生しない。
+    """
+    if not state.manager.active_connections:
+        return
+
+    if not await should_run_weather_check(min_interval_hours=12):
+        print("[天気先回り] スキップ：前回チェックから12時間未経過")
+        return
+
+    # チェックを実行することが決まったら、まず最終チェック日時を更新する
+    # （提案の有無に関わらず「チェックした」事実を記録し、12時間ごとの間隔を守る）
+    await mark_weather_checked()
+
+    message = await get_rain_forecast_message(hours_ahead=30)
+    if not message:
+        return
+
+    spatial_effect = "cyber"
+    audio_base64 = await generate_tts(message)
+    audio_mime = (
+        "audio/wav"
+        if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+        else "audio/mpeg"
+    )
+
+    await state.manager.broadcast(
+        {
+            "type":           "proactive_speech",
+            "reply":          message,
+            "audio_data":     audio_base64,
+            "audio_mime":     audio_mime,
+            "spatial_effect": spatial_effect,
+        }
+    )
+    print(f"[天気先回り] 配信しました: {message}")
     state.last_user_interaction = datetime.now(timezone.utc)
 
 

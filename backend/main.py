@@ -82,6 +82,7 @@ from services.scheduler import (
     daily_ai_news_job,
     meal_reminder_job,
     reminder_prep_job,
+    weather_prep_job,
 )
 from services.reminders import get_upcoming_reminders
 from services.profile import build_memory_base
@@ -493,6 +494,14 @@ async def chat_endpoint(payload: ChatMessage):
             await asyncio.sleep(29)
             await reminder_prep_job(llm)
         asyncio.create_task(_delayed_reminder_check())
+
+        # 天気ベースの自発提案チェック（fire-and-forget）。
+        # calendar_prep_job(8秒) / daily_ai_news_job(15秒) / meal_reminder_job(22秒) /
+        # reminder_prep_job(29秒) よりさらに後ろ（36秒後）にずらす。
+        async def _delayed_weather_check():
+            await asyncio.sleep(36)
+            await weather_prep_job(llm)
+        asyncio.create_task(_delayed_weather_check())
 
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))

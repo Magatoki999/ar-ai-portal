@@ -50,6 +50,10 @@ weather_cache: dict = {
     "weather_id": None,
     "city": "",
     "fetched_at": None,
+    # weather_prep_job（天気ベースの自発提案）が定期実行時に予報を取得する際、
+    # 会話時のような lat/lng を持たないため、最後に観測できた座標をここに保持しておく。
+    "lat": None,
+    "lng": None,
 }
 
 # ─── 最後にユーザーと会話した時刻 ───

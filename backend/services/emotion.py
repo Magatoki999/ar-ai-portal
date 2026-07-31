@@ -63,6 +63,9 @@ async def fetch_weather_by_location(lat: float, lng: float) -> None:
                 weather_cache["temp_c"]      = round(data["main"]["temp"], 1)
                 weather_cache["weather_id"]  = data["weather"][0]["id"]
                 weather_cache["fetched_at"]  = datetime.now(timezone.utc)
+                # weather_prep_job が定期実行時に予報を取れるよう、最後に分かった座標も保持しておく
+                weather_cache["lat"] = lat
+                weather_cache["lng"] = lng
                 # 日本語住所を優先して都市名を解決
                 try:
                     loop = asyncio.get_event_loop()
