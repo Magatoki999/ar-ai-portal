@@ -304,7 +304,6 @@ async def _extract_and_save_meal_log(
         print(f"[食事記録] 抽出エラー: {e}")
 
 
-
 async def _extract_and_save_meal_log_with_photo(
     user_text: str, image_url: str, llm
 ) -> None:
