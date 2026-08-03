@@ -57,3 +57,6 @@ backend/token.json
 token.json
 .pytest_cache/
 .poetry/
+
+# ARスマートグラス コンセプト動画（企画用、デプロイ非対象）
+concept-videos/**/*.mp4

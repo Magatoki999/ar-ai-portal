@@ -179,6 +179,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─── グラス連携ルーター登録（2026-08-03追加） ───
+# 既存の /api/chat, /ws/avatar には一切手を加えず、
+# services/glasses/voice_stream.py 側から遅延importで /api/chat を呼び出す
+# 独立したエンドポイント（/ws/glasses/voice）を追加するだけ。
+from services.glasses.voice_stream import router as glasses_router
+app.include_router(glasses_router)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic モデル

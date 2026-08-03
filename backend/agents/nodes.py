@@ -336,6 +336,22 @@ async def synthesizer_node(state: RukirukiState) -> dict:
 
     has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
 
+    # 「覚えてる？」等の直近会話を問う発話に対し、DB検索ツールより会話履歴を
+    # 優先させるための注記。システムプロンプト冒頭のルールだけでは埋もれてしまい
+    # 効果が弱かったため、質問文そのものに直接付与する（LLMは質問に近い位置の
+    # 指示ほど強く従う傾向があるため）。
+    recall_keywords = ["覚えてる", "覚えている", "覚えてます", "さっき言った", "さっき話した", "前に言った"]
+    has_recall_intent = any(kw in user_text for kw in recall_keywords) if user_text else False
+    has_prior_turns = len(state["messages"]) > 1
+
+    final_user_text = user_text or ""
+    if has_recall_intent and has_prior_turns and not is_initial:
+        final_user_text += (
+            "\n\n(※システム注記: この質問の答えが直前のやり取りに既に含まれている場合は、"
+            "get_movie_history等のDB検索ツールを使わず、会話履歴からそのまま直接答えてください。"
+            "会話履歴に含まれていない、もっと前の記録を聞かれた場合のみツールを使ってください。)"
+        )
+
     if image_base64 and (has_vision_intent or is_initial or not user_text):
         if not image_base64.startswith("data:image/"):
             image_base64 = f"data:image/jpeg;base64,{image_base64}"
@@ -347,7 +363,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
         ]))
     else:
-        messages.append(HumanMessage(content=user_text or ""))
+        messages.append(HumanMessage(content=final_user_text))
 
     # LLM呼び出し（Tool Call対応）
     lat = state.get("_lat")

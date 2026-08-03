@@ -23,7 +23,8 @@
 | **画像生成** | Gemini `gemini-2.5-flash-image`（Nano Banana、メイン） / OpenAI `gpt-image-1`（フォールバック） | 「○○とスナップ」コマンドによる記念写真合成。2026-07-05にOpenAIから移行、失敗時はOpenAIへ自動フォールバック。2026-07-06、2キャラクター同時スナップに対応。 |
 | **SNSシェア** | Web Share API / Web Intent（`lib/share.ts`） | 会話テキスト・スナップ写真をXにシェア。X公式APIは2026年2月に無料枠が実質廃止されたため不使用。2026-07-06追加。 |
 | **外部検索** | Tavily Search | 雑談や手持ち知識で解決できない場合のみ限定的に使用。 |
-| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶（映像的描写`visual_description`を2026-07-06追加）、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、キャラクター参照画像ライブラリ(`character_references`)、シーン参照ライブラリ(`scene_references`、2026-07-10追加)、画像。 |
+| **データベース / ストレージ** | Supabase（PostgREST + Storage） | エピソード記憶（映像的描写`visual_description`を2026-07-06追加）、メモリースポット、ユーザープロフィール、汎用キーバリュー(`app_state`)、AI情報ダイジェスト(`ai_news_digest`)、食事記録(`meal_logs`)、読書記録(`reading_logs`)、映画記録(`movie_logs`、2026-07-17追加)、キャラクター参照画像ライブラリ(`character_references`)、シーン参照ライブラリ(`scene_references`、2026-07-10追加)、軽量リマインダー(`reminders`、2026-07-31追加)、ユーザー成長記録(`user_growth_notes`、2026-07-31追加)、画像。 |
+| **近隣スポット推薦** | Google Places API (New) | `searchNearby`エンドポイントで現在地周辺のカフェ・観光地・レストランを検索。2026-07-31追加。 |
 | **カレンダー連携** | Google Calendar API（OAuth2リフレッシュトークン） | 直近48時間の予定を確認し、準備提案を自発的に配信。 |
 | **永久保存** | Arweave | `||ENGRAVE||` タグ発火、または高品質×特定感情の条件で会話を永続化。 |
 | **位置情報** | geopy (Nominatim) | 逆ジオコーディング・GPSセクター判定。 |
@@ -52,6 +53,11 @@ ar-ai-portal/  (ルート階層。package.json はここに存在する)
 │   │   ├── prompt_builder.py   # 動画プロンプトビルダー（写真グラウンディング・会話Tool。2026-07-13〜14追加）
 │   │   ├── timeline.py         # アルバム機能（写真・動画・成長の節目を時系列統合。2026-07-14追加、2026-07-17読書/映画を追加統合可能に）
 │   │   ├── movies.py           # 映画通帳（TMDb v4 Bearer認証・会話Tool。2026-07-17追加）
+│   │   ├── places.py           # 近隣スポット推薦（Google Places API・会話Tool。2026-07-31追加）
+│   │   ├── reminders.py        # 軽量リマインダー（会話Tool・自発通知ジョブ。2026-07-31追加）
+│   │   ├── profile.py          # 記憶ベース集計（既存テーブル横断・新規テーブル無し。2026-07-31追加）
+│   │   ├── weather_advisor.py  # 天気ベース自発提案（雨予報判定。2026-07-31追加・実機未検証）
+│   │   ├── user_growth.py      # ユーザー成長記録（自己申告ログ・会話Tool。2026-07-31追加）
 │   │   └── resilient_llm.py    # Gemini⇄OpenAI自動フォールバックの共通LLMラッパー（2026-07-05追加）
 │   ├── agents/                # LangGraph ノード・グラフ定義
 │   └── context/               # load_magatoki_context() が読む知識ベース（*.md）
@@ -80,7 +86,8 @@ ar-ai-portal/  (ルート階層。package.json はここに存在する)
 │   └── tools/
 │       ├── prompt_builder_ui.html  # 動画プロンプトビルダー管理UI（スタンドアロンHTML。2026-07-13追加）
 │       ├── album_ui.html           # アルバムUI（写真・動画・成長の節目を時系列表示。2026-07-14追加。2026-07-17読書/映画のフィルターチップ追加）
-│       └── meals_ui.html           # 食事の記録ページ（アルバムとは意図的に分離。2026-07-17追加）
+│       ├── meals_ui.html           # 食事の記録ページ（アルバムとは意図的に分離。2026-07-17追加）
+│       └── memory_base_ui.html     # 記憶ベース（マイプロフィール）UI。album_ui.htmlのデザインを踏襲。2026-07-31追加
 ├── ruki_mind/                  # ⚠️ ルート直下（backend/の外）。Curatorの出力先（2026-06-29追加）
 │   ├── YYYY-MM.md               # 月次マインドプロファイル（版を残す方式・上書きしない）
 │   ├── _PromptBuilder/
@@ -153,8 +160,11 @@ GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 GOOGLE_REFRESH_TOKEN=your_google_refresh_token
 
-# 天気取得（任意）
+# 天気取得（任意。2026-07-31、傘の提案機能でも共用開始）
 OPENWEATHERMAP_API_KEY=your_openweathermap_api_key
+
+# 近隣スポット推薦（任意。2026-07-31追加）
+GOOGLE_PLACES_API_KEY=your_google_places_api_key
 
 # Arweave永続保存（任意）
 ARWEAVE_JWK={"kty":"RSA", ...}
@@ -262,6 +272,11 @@ npm run dev
   - **バグ修正：** 写真付きの食事記録（`_extract_and_save_meal_log_with_photo`）が、Visionで実際に画像を解析していたにもかかわらず、`save_meal_log()`呼び出し時に`image_url`を渡し忘れており、写真がDBに保存されていなかった不具合を修正（2026-07-17）。
 - **カメラストリームのバックグラウンド復帰対応（`hooks/useAR.ts`。2026-07-17追加）:** 外出先で「この場所を記憶して」を試すと、写真保存が`image_base64が無いためスキップ`という理由で繰り返し失敗する不具合が発覚。原因はモバイルブラウザが、タブがバックグラウンド化（画面ロック・他アプリへの切り替え等）した際にカメラの`<video>`ストリームを一時停止することがあり、`useAR.ts`にはタブ再表示時の再開処理が無かったこと。`visibilitychange`イベントを監視し、タブ復帰時に一時停止中の`<video>`があれば`.play()`し直す処理を追加した。iOS等でカメラトラック自体が完全に切断されるケースには未対応（軽い方の修正で様子見中）。
 - **既知の紛らわしさ：「登録して」と「記憶して」は別機能（2026-07-17に切り分け）:** `main.py`の`register_keywords`（`memory_spots`テーブルへの名前付きスポット登録。名前→読み方を聞く2ターンの会話フローが起動する）は「登録して」「刻んで」等の限定的なキーワード一致でのみ発火する。一方`persona.py`の`||SAVE_PHOTO||`ルール（今のカメラ映像を1枚だけ写真保存する）は「記憶して」「覚えておいて」という言い回しで発火する。「この場所を**記録**して」のように似た言葉を使うと、`register_keywords`にはヒットせず`SAVE_PHOTO`側が発火してしまい、名前付きスポットとしては登録されない。両者はコード上バグなく設計通りに動いているが、言葉の選び方次第で挙動が変わるため、名前付きスポットとして残したい時は必ず「**登録して**」と言う必要がある。
+- **近隣スポット推薦（`services/places.py`。2026-07-31追加）:** Google Places API (New) の`searchNearby`エンドポイントで、現在地周辺のカフェ・観光地・レストラン等を案内する。`services/location.py`（今どこにいるか＝逆ジオコーディング）とは責務を分離し、こちらは「周辺に何があるか」専任。`find_nearby_places`はLangChain Toolとして実装し、`locate_current_position`と同じくシステムプロンプトに提示された現在座標をLLMが引数に渡す（省略時はサーバー側でstateの生座標にフォールバック）。要環境変数`GOOGLE_PLACES_API_KEY`。
+- **軽量リマインダー（`services/reminders.py`。2026-07-31追加）:** Googleカレンダーに乗せるほどではない「レポート提出」レベルの単発タスクを会話ベースで登録・確認・完了できる機能。`set_reminder`/`get_my_reminders`/`complete_reminder`の3Tool（`log_watched_movie`に続く本システム2例目の書き込み系Tool群）。自発通知（`reminder_prep_job`）は`calendar_prep_job`と違い「期限が近ければ常に知らせるべき」という前提のもと、LLM判定を挟まず`notified_at`列で一生に一度だけ通知する設計。`[INITIAL_GREETING]`から29秒遅延で発火。
+- **記憶ベース画面（`services/profile.py` + `public/tools/memory_base_ui.html`。2026-07-31追加）:** ユーザー向けの「マイプロフィール」集計画面。`ruki_mind`がルキルキ自身の人格を記録するのに対し、こちらは既存の`memory_spots`/`episode_memories`/`reading_logs`/`movie_logs`/`meal_logs`/`user_growth_notes`を横断集計するだけで、新規テーブルは`user_growth_notes`以外不要（`timeline.py`と同じ設計思想）。UIは`album_ui.html`のデザイン言語（和紙調パレット・フィルターチップ・`window.storage`でのURL保存）を踏襲。表示専用。
+- **天気ベース自発提案（`services/weather_advisor.py`。2026-07-31追加、実機未検証）:** OpenWeatherMapの5日間/3時間ごと予報から、直近30時間以内の雨・雪を検知し「傘を持っていくの忘れないでね」のように自発的に一言提案する。`services/state.py`の`weather_cache`に`lat`/`lng`を追加し、会話時に最後にキャッシュされた座標を定期ジョブから流用する設計（そのため、アプリ起動後まだ一度も位置情報付きの会話が発生していない場合は発火しない）。判定は天気コードの機械的な照合のみで完結し追加のLLM呼び出しは発生しない。`app_state`で12時間間隔制御（`calendar.py`と同じ作法）。`[INITIAL_GREETING]`から36秒遅延で発火。
+- **ユーザー成長記録（`services/user_growth.py`。2026-07-31追加）:** `character_bible.py`の`generate_growth_note()`（ルキルキ自身の変化をAIが過去ログから自動推測して生成）と向きが逆の機能。**ユーザーが自分から語った成長・自慢だけ**を記録し、行動ログからAIが推測して記録することは`persona.py`の使用ルールで明示的に禁止している（本人が言っていないことを言い当てる形になり的外れになりやすいため）。`log_user_growth`/`get_user_growth_notes`の2Tool。`profile.py`の記憶ベースにも統合され、ルキルキ視点の変化メモとは別枠（🌱「自慢」）で表示される。
 - **フォールバック使用時のキャラクター内言及（2026-07-05追加）:** 上記のフォールバックが発生した回だけ、ルキルキの返答の末尾に「無料枠を使い切っちゃった」旨のセリフをランダムに1つ追加する。Chronicle/Keeper/Pulse/Evaluatorのいずれかでフォールバックが起きたことを`state`経由で検知しており、Supabaseへのエピソード記憶保存はこのセリフを追加する前の文章で行うため、会話履歴にノイズは残らない。Router（構造化出力）のフォールバックはこの仕組みでは検知できない技術的制約がある。
 
 ---

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>グラス音声連携 テストツール</title>
+<style>
+  body { font-family: sans-serif; max-width: 480px; margin: 40px auto; }
+  #log { border: 1px solid #ccc; padding: 12px; height: 300px; overflow-y: auto; margin-top: 12px; }
+  .hud { background: #222; color: #0f0; padding: 8px; margin-top: 8px; font-family: monospace; }
+  input { width: 70%; padding: 6px; }
+  button { padding: 6px 12px; }
+</style>
+</head>
+<body>
+  <h2>グラス音声連携 テストツール（device: web）</h2>
+  <p>実機のASR結果を模したテキストを送信し、/ws/glasses/voice の応答を確認します。</p>
+
+  <div>
+    <input id="wsUrl" style="width: 100%;" value="ws://localhost:8000/ws/glasses/voice">
+    <button onclick="connect()">接続</button>
+  </div>
+
+  <div style="margin-top: 12px;">
+    <input id="msgInput" placeholder="発話テキストを入力（例: こんにちは）">
+    <button onclick="sendText()">送信</button>
+  </div>
+
+  <div class="hud" id="hud">HUD: (未受信)</div>
+  <div id="log"></div>
+
+<script>
+let ws = null;
+const sessionId = "test-" + Math.random().toString(36).slice(2, 8);
+
+function log(msg) {
+  const el = document.getElementById("log");
+  el.innerHTML += `<div>${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function connect() {
+  const url = document.getElementById("wsUrl").value;
+  ws = new WebSocket(url);
+  ws.onopen = () => log("✅ 接続しました session_id=" + sessionId);
+  ws.onclose = () => log("⚠️ 切断されました");
+  ws.onerror = (e) => log("❌ エラー: " + e);
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    log("📩 受信: " + JSON.stringify(data, null, 2).slice(0, 300));
+
+    if (data.event_type === "error") {
+      log("❌ サーバーエラー: " + data.error);
+      return;
+    }
+
+    if (data.hud) {
+      document.getElementById("hud").textContent =
+        `HUD: [${data.hud.expression}] ${data.hud.short_text}`;
+    }
+
+    if (data.audio_base64) {
+      const audio = new Audio("data:audio/wav;base64," + data.audio_base64);
+      audio.play().catch(err => log("⚠️ 音声再生に失敗: " + err));
+    }
+  };
+}
+
+function sendText() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log("⚠️ 先に接続してください");
+    return;
+  }
+  const text = document.getElementById("msgInput").value;
+  if (!text.trim()) return;
+
+  ws.send(JSON.stringify({
+    session_id: sessionId,
+    text: text,
+    device: "web",
+  }));
+  log("📤 送信: " + text);
+  document.getElementById("msgInput").value = "";
+}
+</script>
+</body>
+</html>
