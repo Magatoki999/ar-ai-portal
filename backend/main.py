@@ -69,6 +69,9 @@ from services.memory import (
     build_meal_context,
     should_check_meal_reminder,
 )
+
+from services.glasses.hud_status import glasses_hud_manager
+
 from services.snap import generate_snap, upload_to_supabase_storage
 from services.books import fetch_book_by_isbn, save_reading_log
 from services.character_bible import generate_mind_profile, generate_growth_note
@@ -185,6 +188,8 @@ app.add_middleware(
 # 独立したエンドポイント（/ws/glasses/voice）を追加するだけ。
 from services.glasses.voice_stream import router as glasses_router
 app.include_router(glasses_router)
+from services.glasses.hud_status import router as glasses_hud_router
+app.include_router(glasses_hud_router)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic モデル
@@ -860,6 +865,12 @@ async def chat_endpoint(payload: ChatMessage):
             print("[フォールバック通知] 今回はGemini→OpenAIの自動フォールバックが発生しました")
 
         await state.manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
+
+        # Even G2等の表示専用グラスへのHUDミラー配信（2026-08-03追加）
+        # 上のstate.manager.broadcast（AR画面向け）とは別の購読リストへの配信であり、
+        # 既存のAR側の動作には一切影響しない。
+        await glasses_hud_manager.broadcast_hud(facial_emotion, ai_response)
+
         audio_base64 = await generate_tts(ai_response)
 
     except Exception as e:
