@@ -29,6 +29,7 @@ from services.glasses.schemas import (
     VoiceStreamServerEvent,
     HudStatus,
     ExpressionCode,
+    truncate_for_hud,
 )
 
 router = APIRouter()
@@ -72,9 +73,6 @@ async def _process_text_message(msg: VoiceStreamTextMessage) -> VoiceStreamServe
     """
     from main import chat_endpoint, ChatMessage  # 遅延import
 
-    _history_debug = _get_history(msg.session_id)
-    print(f"[Glasses WS DEBUG] session={msg.session_id} history_len={len(_history_debug)} history={_history_debug}")
-
     payload = ChatMessage(
         message=msg.text,
         wallet_address=None,  # グラス用の認証方式は後続Stepで検討
@@ -99,7 +97,7 @@ async def _process_text_message(msg: VoiceStreamTextMessage) -> VoiceStreamServe
 
     hud = HudStatus(
         expression=_to_expression_code(result.get("facial_emotion", "idle")),
-        short_text=reply_text[:40],
+        short_text=truncate_for_hud(reply_text),
     )
 
     return VoiceStreamServerEvent(

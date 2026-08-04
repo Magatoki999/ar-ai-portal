@@ -9,7 +9,7 @@
   この層はあくまで「デバイスとの通信フォーマット」だけを定義する。
 - HUD表示は情報量を極限まで絞る（表情コード＋短文1行のみ）。
   Rokidのモノクロ Micro LED、Meta Ray-Ban Display の20度視野角、
-  どちらでも破綻しない最小構成として設計している。
+  Even G2の単色ディスプレイ、どれでも破綻しない最小構成として設計している。
 """
 
 from datetime import datetime, timezone
@@ -37,7 +37,27 @@ class DeviceType(str, Enum):
     """接続元デバイスの識別子"""
     ROKID = "rokid"
     META_DISPLAY = "meta_display"
+    EVEN_G2 = "even_g2"
     WEB = "web"  # 既存のブラウザ経由での動作確認用
+
+
+def truncate_for_hud(text: str, max_length: int = 220) -> str:
+    """
+    HUD表示用にテキストを短く整形する。
+    単純な文字数カットだと日本語は文の途中で途切れてしまうため、
+    max_length以内にある最後の句読点（。！？）を探し、そこで区切る。
+    句読点が見つからない場合のみ、末尾に「…」を付けて文字数カットする。
+    """
+    if len(text) <= max_length:
+        return text
+
+    window = text[:max_length]
+    last_punct = max(window.rfind("。"), window.rfind("！"), window.rfind("？"))
+
+    if last_punct != -1:
+        return window[: last_punct + 1]
+
+    return window.rstrip() + "…"
 
 
 class HudStatus(BaseModel):
@@ -45,8 +65,8 @@ class HudStatus(BaseModel):
     expression: ExpressionCode = ExpressionCode.IDLE
     short_text: str = Field(
         default="",
-        max_length=40,
-        description="グランス用の短い一言。長文は送らない想定。",
+        max_length=220,
+        description="グランス用の短い一言。句読点で自然に区切ってから渡すこと（truncate_for_hudを使う）。",
     )
     updated_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -66,6 +86,7 @@ class VoiceStreamAudioChunk(BaseModel):
     session_id: str
     audio_base64: str
     is_final: bool = False
+
 
 class VoiceStreamTextMessage(BaseModel):
     """クライアント→サーバー: デバイス側ASRで確定したテキスト（Web Speech API方式を踏襲）"""

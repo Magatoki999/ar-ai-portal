@@ -13,7 +13,7 @@ Even G2は「どの画面で交わした会話か」を意識せず、常に最�
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from services.glasses.schemas import HudStatus, ExpressionCode
+from services.glasses.schemas import HudStatus, ExpressionCode, truncate_for_hud
 
 router = APIRouter()
 
@@ -36,7 +36,10 @@ class HudConnectionManager:
         except ValueError:
             expression = ExpressionCode.IDLE
 
-        payload = HudStatus(expression=expression, short_text=text[:40]).model_dump()
+        payload = HudStatus(
+            expression=expression,
+            short_text=truncate_for_hud(text),
+        ).model_dump()
 
         for connection in self.active_connections:
             try:
