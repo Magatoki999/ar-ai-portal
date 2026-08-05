@@ -374,6 +374,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
 
     try:
         response = await llm_with_tools.ainvoke(messages)
+        print(f"[Cache Debug] usage_metadata={getattr(response, 'usage_metadata', None)}")
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             messages.append(response)
@@ -485,6 +486,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                         tool_call_id=str(tool_call["id"])
                     ))
             response = await llm_with_tools.ainvoke(messages)
+            print(f"[Cache Debug2] usage_metadata={getattr(response, 'usage_metadata', None)}")
 
         ai_reply = response.content
         print(f"[DEBUG raw ai_reply（タグ処理前）] {ai_reply!r}")
