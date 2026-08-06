@@ -33,6 +33,8 @@ interface UseChatOptions {
   onSnapResult:        (url: string) => void;
   // RukiFaceIcon（マーカーロスト中の顔アイコン）の表情切替用。2026-06-26追加。
   onFacialEmotionChange?: (emotion: FacialEmotion) => void;
+  // 割り込み機能用。useWebSocketのsendInterruptを渡す。2026-08-06追加。
+  sendInterrupt?: () => void;
 }
 
 // ── GPS 取得 ──
@@ -106,6 +108,7 @@ export function useChat({
   onSpotProposal,
   onSnapResult,
   onFacialEmotionChange,
+  sendInterrupt,
 }: UseChatOptions) {
   const [chatHistory,       setChatHistory]       = useState<HistoryItem[]>([]);
   const [isUploadingMemory, setIsUploadingMemory] = useState(false);
@@ -263,6 +266,14 @@ export function useChat({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data: ChatApiResponse = await res.json();
+
+      // 割り込みでキャンセルされたレスポンス：
+      // 空の返答が履歴に残ったり、無音を再生しようとしたりしないよう、
+      // ここで処理を打ち切る（isBusyRefは既にinterrupt()側で解除済み）。
+      if (data.status === "cancelled") {
+        console.log("[useChat] 割り込みによりキャンセルされたレスポンスを受信（無視）");
+        return;
+      }
 
       // 履歴にルキルキの返答を追記
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -425,6 +436,19 @@ export function useChat({
     }
   }, [timersRef, audioInstanceRef]);
 
+  // ── 生成中の応答への割り込み ──
+  // マイクボタンが「生成中/再生中」にもう一度押されたときに呼ばれる想定。
+  // ①バックエンドに実行中タスクのキャンセルを要求（sendInterrupt）
+  // ②既存のresetBusy()で再生停止・タイマー解除・busyフラグ解除をまとめて行う。
+  const interrupt = useCallback(() => {
+    if (!isBusyRef.current) return; // 生成中でなければ何もしない
+    console.log("[useChat] 割り込み: 生成中のリクエストをキャンセルします");
+    sendInterrupt?.();
+    resetBusy();
+    onAiStatusChange("idle");
+    onSearchPhaseChange("STABLE");
+  }, [sendInterrupt, resetBusy, onAiStatusChange, onSearchPhaseChange]);
+
   return {
     chatHistory,
     isUploadingMemory,
@@ -432,6 +456,8 @@ export function useChat({
     onTargetFound,
     triggerInitialGreeting,
     resetBusy,
+    interrupt,
+    isBusyRef,
     // 後方互換
     playFixedGreeting: triggerInitialGreeting,
     captureARCameraFrame: () => captureFrame(containerRef.current),

@@ -132,13 +132,30 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     },
   });
 
-  // ── 2. チャットフック ──
+  // ── 2. WebSocket フック ──
+  // 割り込み機能で useChat が sendInterrupt を必要とするため、useChatより先に呼ぶ。
+  const { notifyTargetFound, notifyTargetLost, sendInterrupt } = useWebSocket({
+    audioInstanceRef,
+    audioContextRef,
+    timersRef,
+    initAudioPipeline,
+    onProactiveSpeech: (text, effect) => {
+      updateSubtitle(text);
+      setSpatialEffect(effect);
+      currentEffectRef.current = effect;
+    },
+    onAiStatusChange: setAiStatus,
+  });
+
+  // ── 3. チャットフック ──
   const {
     chatHistory,
     isUploadingMemory,
     handleSendMessage,
     onTargetFound: chatOnTargetFound,
     resetBusy,
+    interrupt,
+    isBusyRef,
     captureARCameraFrame,
   } = useChat({
     containerRef,
@@ -164,21 +181,21 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     onSpotProposal:  handleSpotProposal,
     onSnapResult:    (url) => setSnapImageUrl(url),
     onFacialEmotionChange: setFacialEmotion,
+    sendInterrupt,
   });
 
-  // ── 3. WebSocket フック ──
-  const { notifyTargetFound, notifyTargetLost } = useWebSocket({
-    audioInstanceRef,
-    audioContextRef,
-    timersRef,
-    initAudioPipeline,
-    onProactiveSpeech: (text, effect) => {
-      updateSubtitle(text);
-      setSpatialEffect(effect);
-      currentEffectRef.current = effect;
-    },
-    onAiStatusChange: setAiStatus,
-  });
+  // ── マイクボタン用ラッパー ──
+  // 応答生成中/再生中にもう一度マイクボタンが押された場合は、
+  // 「言い間違えた・もう一回話したい」という割り込みの意思表示として扱い、
+  // 新しい録音を始める前にinterrupt()でバックエンドのタスクをキャンセルする。
+  // （useVoice.ts自体はisBusyRef/interruptを知らないシンプルな作りのままにし、
+  //   ここで吸収することでuseVoice→useChatの循環参照を避けている）
+  const handleToggleListen = useCallback(() => {
+    if (isBusyRef.current) {
+      interrupt();
+    }
+    toggleListening();
+  }, [interrupt, isBusyRef, toggleListening]);
 
   // ── 4. AR フック ──
   const { fadeToAction } = useAR({
@@ -306,7 +323,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
         isUploadingMemory={isUploadingMemory || isCapturing}
         engraveToastTxId={engraveToastTxId}
         spotProposal={spotProposal}
-        onToggleListen={toggleListening}
+        onToggleListen={handleToggleListen}
         onOpenLog={() => setShowHistory(true)}
         onSendMessage={handleSendMessage}
         onCaptureSave={handleCaptureSave}

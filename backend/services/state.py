@@ -62,3 +62,8 @@ last_user_interaction: datetime = datetime.now(timezone.utc)
 # ─── 場所登録ペンディング状態 ───
 # { wallet_address: { 'waiting': True, 'lat': float, 'lng': float } }
 registration_pending: dict = {}
+
+# ─── 実行中のchat_endpointタスク（割り込みキャンセル用） ───
+# /ws/avatar が "interrupt" を受信した際、これを cancel() する。
+# 本システムは単一ユーザー運用のため、セッションごとの辞書ではなく単一の変数で管理する。
+active_chat_task = None

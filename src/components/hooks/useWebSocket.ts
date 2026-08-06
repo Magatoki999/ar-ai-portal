@@ -132,6 +132,9 @@ export function useWebSocket({
   const notifyTargetFound  = () => send({ type: "target_found" });
   const notifyTargetLost   = () => send({ type: "target_lost" });
   const requestProactive   = () => send({ type: "request_proactive" });
+  // 生成中の応答への割り込み。バックエンドの chat_endpoint が実行中の
+  // LangGraph呼び出し（state.active_chat_task）をcancel()する合図。
+  const sendInterrupt      = () => send({ type: "interrupt" });
 
-  return { wsRef, notifyTargetFound, notifyTargetLost, requestProactive };
+  return { wsRef, notifyTargetFound, notifyTargetLost, requestProactive, sendInterrupt };
 }

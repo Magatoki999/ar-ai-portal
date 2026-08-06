@@ -692,7 +692,27 @@ async def chat_endpoint(payload: ChatMessage):
             "_lat":                      lat,
             "_lng":                      lng,
         }
-        result         = await rukiruki_graph.ainvoke(graph_input)
+        # ── 割り込み対応 ──
+        # /ws/avatar 経由で "interrupt" を受信すると、state.active_chat_task を
+        # cancel() する。asyncio.CancelledError は Exception ではなく
+        # BaseException のサブクラスなので、resilient_llm.py の except Exception には
+        # 捕捉されず安全に上まで伝播する。
+        state.active_chat_task = asyncio.ensure_future(rukiruki_graph.ainvoke(graph_input))
+        try:
+            result = await state.active_chat_task
+        except asyncio.CancelledError:
+            print("[Chat] 割り込みにより生成をキャンセルしました")
+            await state.manager.broadcast({"type": "status", "status": "idle"})
+            return {
+                "reply":          "",
+                "audio_data":     None,
+                "spatial_effect": "cyber",
+                "spot_proposal":  "",
+                "arweave_tx_id":  "",
+                "status":         "cancelled",
+            }
+        finally:
+            state.active_chat_task = None
         ai_response    = result.get("ai_reply", ai_response)
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
@@ -1157,6 +1177,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     asyncio.create_task(
                         trigger_proactive_speech(llm, MAGATOKI_KNOWLEDGE)
                     )
+
+                elif msg_type == "interrupt":
+                    task = state.active_chat_task
+                    if task and not task.done():
+                        task.cancel()
+                        print("[WebSocket] 割り込みを受信。生成中のリクエストをキャンセルします。")
+                    else:
+                        print("[WebSocket] 割り込みを受信しましたが、キャンセル対象のタスクはありませんでした。")
 
                 else:
                     await websocket.send_json({"type": "heartbeat", "status": "stable"})
