@@ -385,12 +385,16 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                         address_keywords = await fetch_street_address(lat, lng)
                         if not address_keywords:
                             address_keywords = "（日本の主要都市周辺）"
-                        refine_chain = query_refine_prompt | llm_fast
-                        refined = await refine_chain.ainvoke({
+                        # 注意: llm_fast は ResilientLLM（自前クラス、Runnable非継承）のため
+                        # `prompt | llm_fast` のLCELパイプは
+                        # 「Expected a Runnable, callable or dict」で必ず失敗する。
+                        # プロンプトの構築とLLM呼び出しを2段階に分けて直接ainvoke()する。
+                        prompt_value = await query_refine_prompt.ainvoke({
                             "lat": lat, "lng": lng,
                             "address": address_keywords,
                             "base_query": base_query
                         })
+                        refined = await llm_fast.ainvoke(prompt_value)
                         tool_call["args"]["query"] = refined.content.strip()
                     search_results = await main_search_tool.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(
