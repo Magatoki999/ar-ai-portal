@@ -192,7 +192,11 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   //   ここで吸収することでuseVoice→useChatの循環参照を避けている）
   const handleToggleListen = useCallback(() => {
     if (isBusyRef.current) {
+      // キャンセルしてスタンバイに戻すだけ。録音の再開はここでは行わない
+      // （言い間違えた場合など、いったん考え直す間を与えるため。
+      //   録音を始めたい場合はユーザーがもう一度ボタンを押す）
       interrupt();
+      return;
     }
     toggleListening();
   }, [interrupt, isBusyRef, toggleListening]);
