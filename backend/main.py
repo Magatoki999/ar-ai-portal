@@ -182,6 +182,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ─── グラス連携ルーター登録（2026-08-03追加） ───
 # 既存の /api/chat, /ws/avatar には一切手を加えず、
 # services/glasses/voice_stream.py 側から遅延importで /api/chat を呼び出す
