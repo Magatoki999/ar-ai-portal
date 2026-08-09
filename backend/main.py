@@ -86,6 +86,8 @@ from services.scheduler import (
     meal_reminder_job,
     reminder_prep_job,
     weather_prep_job,
+    spot_proximity_job,
+    calendar_upcoming_job,
 )
 from services.reminders import get_upcoming_reminders
 from services.profile import build_memory_base
@@ -144,9 +146,22 @@ async def lifespan(app: FastAPI):
         lambda: _run(auto_research_job, llm),
         "interval", minutes=15,
     )
+    # 2026-08-08: 「1分間無言だったら雑談で話しかける」proactive_talk_jobの定期実行は廃止。
+    # 意味のある変化（カレンダー予定・リマインダー期限・天気急変など）があった時だけ
+    # 声をかける方針に変更したため。calendar_prep_job/reminder_prep_job/weather_prep_job/
+    # meal_reminder_jobは[INITIAL_GREETING]駆動のまま変更なし（下記参照）。
+    # proactive_talk_job / trigger_proactive_speech 関数自体はscheduler.py・
+    # websocket_endpoint内に残っているが、呼び出し元が無いため実行されない。
+    #
+    # 2026-08-08追加: 「意味のある変化」の新規2種類。どちらもLLM呼び出しなしの
+    # 機械的判定のみなので、他のcron（15分・30分おき）より短い間隔でも問題ない。
     scheduler.add_job(
-        lambda: _run(proactive_talk_job, llm, MAGATOKI_KNOWLEDGE),
-        "interval", minutes=1,
+        lambda: _run(spot_proximity_job),
+        "interval", minutes=2,
+    )
+    scheduler.add_job(
+        lambda: _run(calendar_upcoming_job),
+        "interval", minutes=5,
     )
     # ⚠️ calendar_prep_job と daily_ai_news_job は、いずれもRender無料プランのスリープで
     # cronが時刻通りに動かないため、固定時刻のcron登録は廃止。
@@ -181,7 +196,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ─── グラス連携ルーター登録（2026-08-03追加） ───
 # 既存の /api/chat, /ws/avatar には一切手を加えず、
@@ -1186,6 +1200,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         print("[WebSocket] 割り込みを受信。生成中のリクエストをキャンセルします。")
                     else:
                         print("[WebSocket] 割り込みを受信しましたが、キャンセル対象のタスクはありませんでした。")
+
+                elif msg_type == "location_update":
+                    # フロントが数分おきに送ってくる現在地。会話が発生していない間も
+                    # spot_proximity_job / weather_prep_job が「最後に分かった現在地」として
+                    # 参照できるよう、既存のweather_cacheをそのまま流用して更新する。
+                    lat = msg.get("lat")
+                    lng = msg.get("lng")
+                    if lat is not None and lng is not None:
+                        state.weather_cache["lat"] = lat
+                        state.weather_cache["lng"] = lng
 
                 else:
                     await websocket.send_json({"type": "heartbeat", "status": "stable"})

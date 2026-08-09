@@ -38,7 +38,8 @@ interface UseChatOptions {
 }
 
 // ── GPS 取得 ──
-const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> =>
+// MindARViewer.tsx側の定期位置送信（location_update）でも同じ設定で取得したいため export する。
+export const getGPSLocation = (): Promise<{ lat: number; lng: number } | null> =>
   new Promise((resolve) => {
     if (!navigator.geolocation) { resolve(null); return; }
     navigator.geolocation.getCurrentPosition(

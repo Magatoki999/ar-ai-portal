@@ -34,6 +34,7 @@ from services.memory import (
     should_check_meal_reminder,
     get_recent_meal_logs,
     build_meal_context,
+    check_nearby_spot,
 )
 from services.calendar import (
     get_upcoming_events,
@@ -512,6 +513,126 @@ async def weather_prep_job(llm) -> None:
     )
     print(f"[天気先回り] 配信しました: {message}")
     state.last_user_interaction = datetime.now(timezone.utc)
+
+
+# ─── 登録スポット接近通知ジョブ ───
+# calendar_prep_job等と違い[INITIAL_GREETING]駆動ではなく、main.pyで短間隔
+# （2分おき）のcronとして登録する。歩いている最中に登録スポットへ近づいたことを
+# 会話なしで検知したいため、「アプリを開いた瞬間」だけのチェックでは不十分なため。
+# 現在地はチャット発話時だけでなく、フロントがWebSocket経由で定期送信する
+# location_updateによってstate.weather_cacheに継続的に反映される想定。
+
+async def spot_proximity_job() -> None:
+    """
+    最後に分かっている現在地（state.weather_cache）が登録済みメモリースポットの
+    半径内に「新しく入った」瞬間だけ、自発的に一言声をかける。
+    同じ場所に留まっている間は喋り続けず、圏外に出て再び戻ってきたら再通知する
+    （state.last_near_spot_idによるエッジトリガー）。
+    check_nearby_spotによる機械的な判定のみで、LLM呼び出しは発生しない。
+    """
+    if not state.manager.active_connections:
+        return
+
+    lat, lng = state.weather_cache.get("lat"), state.weather_cache.get("lng")
+    if lat is None or lng is None:
+        return
+
+    nearby = await check_nearby_spot(lat, lng)
+    nearby_id = nearby.get("id") if nearby else None
+
+    if nearby_id == state.last_near_spot_id:
+        return  # 状態変化なし（圏内に留まっている、または圏外のまま）
+
+    state.last_near_spot_id = nearby_id
+    if not nearby:
+        return  # 圏外に出ただけなら何も喋らない（次回の圏内入りに備えて記録だけ更新）
+
+    spot_name = nearby.get("name", "この場所")
+    message = f"あ、「{spot_name}」の近くに来ましたね！"
+    spatial_effect = "cyber"
+    audio_base64 = await generate_tts(message)
+    audio_mime = (
+        "audio/wav"
+        if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+        else "audio/mpeg"
+    )
+
+    await state.manager.broadcast(
+        {
+            "type":           "proactive_speech",
+            "reply":          message,
+            "audio_data":     audio_base64,
+            "audio_mime":     audio_mime,
+            "spatial_effect": spatial_effect,
+        }
+    )
+    print(f"[スポット接近] 配信しました: {spot_name}")
+    state.last_user_interaction = datetime.now(timezone.utc)
+
+
+# ─── 予定30分前ジャストの通知ジョブ ───
+# calendar_prep_job（準備提案、[INITIAL_GREETING]駆動・6時間おき間隔制御・LLM判定あり）
+# とは別物。こちらは main.py で短間隔（5分おき）のcronとして登録し、「開始25〜35分前」
+# という狭いウィンドウに入った予定だけを機械的に検知して知らせる。
+# 同じ予定に対してcalendar_prep_jobと両方が独立して発話することがあるが、
+# 目的（準備提案 vs 直前リマインド）が違うため意図的に許容する。
+
+_notified_30min_titles: set[str] = set()
+
+
+async def calendar_upcoming_job() -> None:
+    """
+    直近1時間以内に始まる予定のうち、開始が25〜35分後のウィンドウに
+    入っているものがあれば「そろそろですよ」と一言知らせる。
+    一度知らせたタイトルは_notified_30min_titlesに記録し、二重通知を防ぐ
+    （プロセス再起動でリセットされるが、実害は小さいため許容）。
+    """
+    if not state.manager.active_connections:
+        return
+
+    events = await get_upcoming_events(hours_ahead=1)
+    if not events:
+        return
+
+    JST = timezone(timedelta(hours=9))
+    now = datetime.now(JST)
+
+    for event in events:
+        title = event.get("title", "")
+        start_raw = event.get("start", "")
+        if not title or title in _notified_30min_titles:
+            continue
+        try:
+            start_dt = datetime.fromisoformat(start_raw).astimezone(JST)
+        except (ValueError, TypeError):
+            continue
+
+        minutes_until = (start_dt - now).total_seconds() / 60
+        if not (25 <= minutes_until <= 35):
+            continue
+
+        message = f"「{title}」、あと{round(minutes_until)}分で始まりますよ！"
+        spatial_effect = "cyber"
+        audio_base64 = await generate_tts(message)
+        audio_mime = (
+            "audio/wav"
+            if os.getenv("TTS_PROVIDER", "gemini").lower() == "gemini"
+            else "audio/mpeg"
+        )
+
+        await state.manager.broadcast(
+            {
+                "type":           "proactive_speech",
+                "reply":          message,
+                "audio_data":     audio_base64,
+                "audio_mime":     audio_mime,
+                "spatial_effect": spatial_effect,
+            }
+        )
+        print(f"[予定30分前] 配信しました: {title}（{round(minutes_until)}分前）")
+        _notified_30min_titles.add(title)
+        state.last_user_interaction = datetime.now(timezone.utc)
+        break  # 1回のジョブ実行では1件だけ知らせる（喋りすぎ防止）
 
 
 # ─── 食事リマインダー・ゆるい健康アドバイス（孤食ロボット機能） ───

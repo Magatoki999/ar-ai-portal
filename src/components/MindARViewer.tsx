@@ -12,7 +12,7 @@ import type { AIStatus, SearchPhase, FacialEmotion } from "./lib/types";
 import { useVoice }      from "./hooks/useVoice";
 import { useWebSocket }  from "./hooks/useWebSocket";
 import { useAR }         from "./hooks/useAR";
-import { useChat }       from "./hooks/useChat";
+import { useChat, getGPSLocation } from "./hooks/useChat";
 
 import { RukiHUD }       from "./components/RukiHUD";
 import { HistoryPanel }  from "./components/HistoryPanel";
@@ -134,7 +134,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
 
   // ── 2. WebSocket フック ──
   // 割り込み機能で useChat が sendInterrupt を必要とするため、useChatより先に呼ぶ。
-  const { notifyTargetFound, notifyTargetLost, sendInterrupt } = useWebSocket({
+  const { notifyTargetFound, notifyTargetLost, sendInterrupt, sendLocationUpdate } = useWebSocket({
     audioInstanceRef,
     audioContextRef,
     timersRef,
@@ -183,6 +183,22 @@ export default function MindARViewer({ address }: MindARViewerProps) {
     onFacialEmotionChange: setFacialEmotion,
     sendInterrupt,
   });
+
+  // ── 現在地の定期送信 ──
+  // spot_proximity_job（登録スポット接近検知）・weather_prep_jobが「最後に分かった
+  // 現在地」として参照できるよう、会話の有無に関わらず1分おきにGPSを送信しておく。
+  // useChat.tsの/api/chat呼び出し時のGPS取得（getGPSLocation）と同じロジックを再利用。
+  useEffect(() => {
+    const ping = async () => {
+      const location = await getGPSLocation();
+      if (location) {
+        sendLocationUpdate(location.lat, location.lng);
+      }
+    };
+    ping(); // 起動直後に1回
+    const intervalId = setInterval(ping, 60_000);
+    return () => clearInterval(intervalId);
+  }, [sendLocationUpdate]);
 
   // ── マイクボタン用ラッパー ──
   // 応答生成中/再生中にもう一度マイクボタンが押された場合は、

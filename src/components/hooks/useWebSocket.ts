@@ -135,6 +135,9 @@ export function useWebSocket({
   // 生成中の応答への割り込み。バックエンドの chat_endpoint が実行中の
   // LangGraph呼び出し（state.active_chat_task）をcancel()する合図。
   const sendInterrupt      = () => send({ type: "interrupt" });
+  // 現在地の定期送信。会話していない間もspot_proximity_jobが「最後に分かった
+  // 現在地」を参照できるよう、MindARViewer.tsx側から数分おきに呼ばれる想定。
+  const sendLocationUpdate = (lat: number, lng: number) => send({ type: "location_update", lat, lng });
 
-  return { wsRef, notifyTargetFound, notifyTargetLost, requestProactive, sendInterrupt };
+  return { wsRef, notifyTargetFound, notifyTargetLost, requestProactive, sendInterrupt, sendLocationUpdate };
 }
