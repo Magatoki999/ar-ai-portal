@@ -90,6 +90,7 @@ from services.scheduler import (
     calendar_upcoming_job,
 )
 from services.reminders import get_upcoming_reminders
+from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
 from services.persona import (
@@ -252,6 +253,14 @@ class SnapRequest(BaseModel):
 # 2026-07-10追加：MetaMask接続が不安定な環境向けのパスワード認証回避策（テスト運用限定）
 class PasswordAuthRequest(BaseModel):
     password: str
+
+
+# 2026-08-09追加：iOSショートカットからの歩数Webhook用。ブラウザ側の認証とは別に、
+# 誰でも叩けるURLにならないよう簡易シークレットで保護する。
+class HealthUpdatePayload(BaseModel):
+    date: str          # "YYYY-MM-DD"
+    steps: int
+    secret: str
 
 
 class BookLogPayload(BaseModel):
@@ -577,6 +586,12 @@ async def chat_endpoint(payload: ChatMessage):
     recent_meal_logs = await get_recent_meal_logs(limit=7)
     meal_context     = build_meal_context(recent_meal_logs)
 
+    # ── 歩数記録（ヘルスケア連携） ──
+    # 0件（iOSショートカット未設定・当日未集計等）の場合は build_step_context() が
+    # 空文字を返すので、プロンプトに何も追加されない（meal_context と同じ設計）。
+    recent_steps = await get_recent_steps(days=7)
+    step_context = build_step_context(recent_steps)
+
     # ── ユーザープロフィール / identity_context ──
     user_profile = await get_user_profile(wallet_address) if wallet_address else None
     user_call    = "まがとき"
@@ -692,6 +707,7 @@ async def chat_endpoint(payload: ChatMessage):
             "episode_context":           episode_context,
             "emotion_context":           emotion_context,
             "meal_context":              meal_context,
+            "step_context":              step_context,
             "identity_context":          identity_context,
             "location_context":          location_context,
             "time_context":              time_context,
@@ -952,6 +968,20 @@ async def save_memory_image_endpoint(payload: MemoryImagePayload):
         )
 
     return {"status": "ok" if ok else "error"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 歩数Webhookエンドポイント（iOSショートカットの個人用オートメーションから叩かれる）
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/health_update")
+async def health_update_endpoint(payload: HealthUpdatePayload):
+    expected_secret = os.getenv("HEALTH_WEBHOOK_SECRET")
+    if not expected_secret or payload.secret != expected_secret:
+        return {"status": "error", "detail": "invalid secret"}
+
+    ok = await save_daily_steps(payload.date, payload.steps)
+    return {"status": "ok" if ok else "error"}
+
 
 
 @app.post("/api/memory/photo")

@@ -53,6 +53,7 @@ class RukirukiState(TypedDict):
     # ─── カレンダー・成長 ───
     calendar_context: str              # 京都行事・誕生日コンテキスト
     growth_context: str                # 成長・日数コンテキスト
+    step_context: str                  # 直近の歩数状況（services/health.py、2026-08-09追加）
 
     # ─── メモリースポット ───
     spot_context: str                  # 近くのメモリースポット情報（プロンプト用）
