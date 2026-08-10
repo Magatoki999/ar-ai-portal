@@ -973,15 +973,9 @@ async def save_memory_image_endpoint(payload: MemoryImagePayload):
 # ─────────────────────────────────────────────────────────────────────────────
 # 歩数Webhookエンドポイント（iOSショートカットの個人用オートメーションから叩かれる）
 # ─────────────────────────────────────────────────────────────────────────────
-# 2026-08-09: Pydanticモデルでの自動バリデーションだと「送られてきた生のバイト列」が
-# 見えないままエラーになってしまい、Shortcuts側の設定ミスなのかこちら側の問題なのか
-# 切り分けができなかったため、Requestを直接受け取って手動でパースする形に変更。
-# 受信した生のボディを必ずログに出すことで、次に問題が起きても即座に原因が分かる。
 @app.post("/api/health_update")
 async def health_update_endpoint(request: Request):
     raw_body = await request.body()
-    print(f"[歩数Webhook] Content-Type={request.headers.get('content-type')} 受信バイト数={len(raw_body)}")
-    print(f"[歩数Webhook] 受信した生のボディ: {raw_body!r}")
 
     try:
         payload = json.loads(raw_body)
@@ -991,6 +985,7 @@ async def health_update_endpoint(request: Request):
 
     expected_secret = os.getenv("HEALTH_WEBHOOK_SECRET")
     if not expected_secret or payload.get("secret") != expected_secret:
+        print("[歩数Webhook] secret不一致のため拒否しました")
         return {"status": "error", "detail": "invalid secret"}
 
     date  = payload.get("date")
@@ -999,6 +994,7 @@ async def health_update_endpoint(request: Request):
         return {"status": "error", "detail": "missing date or steps"}
 
     ok = await save_daily_steps(date, steps)
+    print(f"[歩数Webhook] {date} → {steps}歩 ({'成功' if ok else '失敗'})")
     return {"status": "ok" if ok else "error"}
 
 
