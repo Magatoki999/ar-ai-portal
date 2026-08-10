@@ -131,6 +131,16 @@ async def lifespan(app: FastAPI):
     global rukiruki_graph
     rukiruki_graph = build_rukiruki_graph()
 
+    # Even G2の歩数バッジ用キャッシュを起動時に一度だけDBから初期化する。
+    # これが無いと、Render再起動直後は次にhealth_updateが叩かれる（＝翌日0時）
+    # までバッジが空のままになってしまう。
+    try:
+        recent = await get_recent_steps(days=1)
+        if recent:
+            state.latest_step_count = recent[0].get("steps")
+    except Exception as e:
+        print(f"[起動時] 歩数キャッシュの初期化に失敗しました: {e}")
+
     # FastAPI が動いているイベントループを保持する。
     # APScheduler はスレッドプールから起動するため、
     # asyncio.create_task は使えない。run_coroutine_threadsafe で橋渡しする。

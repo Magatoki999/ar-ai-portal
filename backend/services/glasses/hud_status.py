@@ -14,6 +14,7 @@ Even G2は「どの画面で交わした会話か」を意識せず、常に最�
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services.glasses.schemas import HudStatus, ExpressionCode, truncate_for_hud
+from services import state
 
 router = APIRouter()
 
@@ -21,10 +22,19 @@ router = APIRouter()
 class HudConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        # 直近に配信したpayloadを覚えておき、新規接続時に即座に送る
+        # （broadcast_hudは会話が発生した時にしか呼ばれないため、これが無いと
+        # 新しく繋いだグラスは次の会話まで歩数バッジ等が空のままになってしまう）。
+        self._last_payload: dict | None = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        if self._last_payload is not None:
+            try:
+                await websocket.send_json(self._last_payload)
+            except Exception:
+                pass
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -40,6 +50,15 @@ class HudConnectionManager:
             expression=expression,
             short_text=truncate_for_hud(text),
         ).model_dump()
+
+        # 歩数バッジ（2026-08-10追加）。HudStatusスキーマ自体は変更せず、
+        # model_dump()の結果に後からキーを足す形にしている
+        # （services/glasses/schemas.pyへの変更を避けるため）。
+        # 歩数記録が無い場合は空文字にし、main.ts側で非表示にする。
+        step_badge = f"{state.latest_step_count:,}歩" if state.latest_step_count is not None else ""
+        payload["step_badge"] = step_badge
+
+        self._last_payload = payload
 
         for connection in self.active_connections:
             try:

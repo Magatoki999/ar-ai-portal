@@ -22,6 +22,7 @@ import httpx
 from langchain_core.tools import tool
 
 from services.memory import _sb, _sb_headers  # 既存の接続情報ヘルパーを再利用
+from services import state
 
 JST = timezone(timedelta(hours=+9))
 
@@ -50,6 +51,8 @@ async def save_daily_steps(date: str, steps: int) -> bool:
             print(f"[歩数] 保存失敗: status={res.status_code} body={res.text[:200]}")
             return False
         print(f"[歩数] 保存しました: {date} → {steps}歩")
+        # Even G2の歩数バッジ表示用キャッシュも更新しておく
+        state.latest_step_count = steps
         return True
     except Exception as e:
         print(f"[歩数エラー] {e}")

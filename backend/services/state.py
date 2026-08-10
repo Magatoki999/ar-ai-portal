@@ -74,3 +74,10 @@ active_chat_task = None
 # 圏外→圏内の遷移が起きた時だけ声をかけ、圏内→圏外で自動的にリセットされる
 # （次に同じ場所へ戻ってきたときは再び通知される）。
 last_near_spot_id = None
+
+# ─── 最新の歩数キャッシュ（Even G2の歩数バッジ表示用） ───
+# save_daily_steps()成功時にservices/health.pyから更新される。
+# 「昨日の実績」が常に入る想定（iOSショートカットが毎日0時に前日分を送るため）。
+# アプリ起動直後（Render再起動直後等）は未設定の場合があるので、
+# main.py起動時にDBから最新値を読み込んで初期化する。
+latest_step_count: int | None = None
