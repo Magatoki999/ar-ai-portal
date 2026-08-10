@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()                                    # ← ここに移動（importの直後、他のservices importより前）
 
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -973,13 +973,32 @@ async def save_memory_image_endpoint(payload: MemoryImagePayload):
 # ─────────────────────────────────────────────────────────────────────────────
 # 歩数Webhookエンドポイント（iOSショートカットの個人用オートメーションから叩かれる）
 # ─────────────────────────────────────────────────────────────────────────────
+# 2026-08-09: Pydanticモデルでの自動バリデーションだと「送られてきた生のバイト列」が
+# 見えないままエラーになってしまい、Shortcuts側の設定ミスなのかこちら側の問題なのか
+# 切り分けができなかったため、Requestを直接受け取って手動でパースする形に変更。
+# 受信した生のボディを必ずログに出すことで、次に問題が起きても即座に原因が分かる。
 @app.post("/api/health_update")
-async def health_update_endpoint(payload: HealthUpdatePayload):
+async def health_update_endpoint(request: Request):
+    raw_body = await request.body()
+    print(f"[歩数Webhook] Content-Type={request.headers.get('content-type')} 受信バイト数={len(raw_body)}")
+    print(f"[歩数Webhook] 受信した生のボディ: {raw_body!r}")
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as e:
+        print(f"[歩数Webhook] JSON解析エラー: {e}")
+        return {"status": "error", "detail": f"invalid json: {e}"}
+
     expected_secret = os.getenv("HEALTH_WEBHOOK_SECRET")
-    if not expected_secret or payload.secret != expected_secret:
+    if not expected_secret or payload.get("secret") != expected_secret:
         return {"status": "error", "detail": "invalid secret"}
 
-    ok = await save_daily_steps(payload.date, payload.steps)
+    date  = payload.get("date")
+    steps = payload.get("steps")
+    if not date or steps is None:
+        return {"status": "error", "detail": "missing date or steps"}
+
+    ok = await save_daily_steps(date, steps)
     return {"status": "ok" if ok else "error"}
 
 
