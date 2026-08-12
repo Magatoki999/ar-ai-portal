@@ -548,6 +548,12 @@ async def spot_proximity_job() -> None:
     if not nearby:
         return  # 圏外に出ただけなら何も喋らない（次回の圏内入りに備えて記録だけ更新）
 
+    if nearby.get("is_base_spot"):
+        # Magatoki Laboratoryのような「いつもいるベーススポット」は、
+        # カウントも通知も無意味に膨らむだけなので両方スキップする。
+        # last_near_spot_idの更新（エッジトリガーの状態管理）はスキップせず上で済ませてある。
+        return
+
     # 訪問回数を加算し、加算後の回数（今回で何回目か）をそのままメッセージに使う
     await increment_spot_visit(nearby_id)
     visit_count = nearby.get("visit_count", 0) + 1
