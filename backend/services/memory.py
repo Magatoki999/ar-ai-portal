@@ -415,6 +415,45 @@ async def check_nearby_spot(lat: float, lng: float) -> dict | None:
     return None
 
 
+async def increment_spot_visit(spot_id) -> bool:
+    """
+    指定スポットのvisit_countを1増やす。
+    PostgRESTには「現在値+1」を直接指定するアトミックな加算構文が無いため、
+    先に現在値を取得してから+1した値でPATCHする（読み取り→更新の2段階）。
+    本システムは単一ユーザー運用でスポット到着の同時競合はまず起きないため、
+    厳密な排他制御（race condition対策）はせずシンプルさを優先している。
+    spot_proximity_job（services/scheduler.py）が「新規に圏内へ入った」と
+    判定した瞬間にだけ呼ばれる想定。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    try:
+        async with httpx.AsyncClient() as client:
+            get_endpoint = f"{url}/rest/v1/{MEMORY_SPOTS_TABLE}?id=eq.{spot_id}&select=visit_count"
+            res = await client.get(get_endpoint, headers=_sb_headers(), timeout=5.0)
+            if res.status_code != 200:
+                print(f"[訪問回数] 現在値取得失敗: status={res.status_code} body={res.text[:200]}")
+                return False
+            rows = res.json()
+            current = rows[0].get("visit_count", 0) if rows else 0
+
+            patch_endpoint = f"{url}/rest/v1/{MEMORY_SPOTS_TABLE}?id=eq.{spot_id}"
+            headers = {**_sb_headers(), "Content-Type": "application/json"}
+            res = await client.patch(
+                patch_endpoint, json={"visit_count": current + 1}, headers=headers, timeout=5.0
+            )
+            if res.status_code not in (200, 204):
+                print(f"[訪問回数] 更新失敗: status={res.status_code} body={res.text[:200]}")
+                return False
+            print(f"[訪問回数] spot_id={spot_id} → {current + 1}回目")
+            return True
+    except Exception as e:
+        print(f"[訪問回数エラー] {e}")
+        return False
+
+
 async def find_episode_image_by_proximity(
     lat: float, lng: float, radius_m: float = 150
 ) -> str | None:

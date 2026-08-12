@@ -35,6 +35,7 @@ from services.memory import (
     get_recent_meal_logs,
     build_meal_context,
     check_nearby_spot,
+    increment_spot_visit,
 )
 from services.calendar import (
     get_upcoming_events,
@@ -547,8 +548,13 @@ async def spot_proximity_job() -> None:
     if not nearby:
         return  # 圏外に出ただけなら何も喋らない（次回の圏内入りに備えて記録だけ更新）
 
+    # 訪問回数を加算し、加算後の回数（今回で何回目か）をそのままメッセージに使う
+    await increment_spot_visit(nearby_id)
+    visit_count = nearby.get("visit_count", 0) + 1
+
     spot_name = nearby.get("name", "この場所")
-    message = f"あ、「{spot_name}」の近くに来ましたね！"
+    visit_note = "初めて来ましたね！" if visit_count == 1 else f"これで{visit_count}回目の訪問です。"
+    message = f"あ、「{spot_name}」の近くに来ましたね！{visit_note}"
     spatial_effect = "cyber"
     audio_base64 = await generate_tts(message)
     audio_mime = (
