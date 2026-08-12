@@ -91,6 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
+from services.journey import apply_daily_steps, announce_milestone, get_journey_status
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
 from services.persona import (
@@ -1005,6 +1006,16 @@ async def health_update_endpoint(request: Request):
 
     ok = await save_daily_steps(date, steps)
     print(f"[歩数Webhook] {date} → {steps}歩 ({'成功' if ok else '失敗'})")
+
+    # 東海道の旅シミュレーション：歩数を距離に加算し、新しく宿場を通過していれば報告
+    if ok:
+        try:
+            milestone = await apply_daily_steps(steps)
+            if milestone:
+                await announce_milestone(milestone)
+        except Exception as e:
+            print(f"[旅] 進捗反映エラー: {e}")
+
     return {"status": "ok" if ok else "error"}
 
 
