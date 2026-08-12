@@ -81,3 +81,7 @@ last_near_spot_id = None
 # アプリ起動直後（Render再起動直後等）は未設定の場合があるので、
 # main.py起動時にDBから最新値を読み込んで初期化する。
 latest_step_count: int | None = None
+
+# ─── 東海道の旅シミュレーション：現在地キャッシュ（Even G2の歩数バッジ合体表示用） ───
+# services/journey.py の apply_daily_steps() が毎日更新する。
+latest_journey_summary: str | None = None

@@ -37,66 +37,128 @@ DEFAULT_STRIDE_M = 0.7  # 1歩あたりの歩幅（m）。将来的にユーザ�
 # 京都・三条大橋(0km)を起点に、江戸・日本橋（約495km）へ向かう順。
 # 「宿場」は本来53だが、起点・終点（三条大橋・日本橋）を含めて55地点として管理する。
 TOKAIDO_ROUTE: list[dict] = [
-    {"name": "三条大橋",   "km": 0.0,   "note": "旅の出発点、京都"},
-    {"name": "大津宿",     "km": 4.0,   "note": "東海道最後（京都から見れば最初）の宿場"},
-    {"name": "草津宿",     "km": 16.0,  "note": "中山道との分岐点として栄えた宿場町"},
-    {"name": "石部宿",     "km": 28.0,  "note": ""},
-    {"name": "水口宿",     "km": 39.0,  "note": ""},
-    {"name": "土山宿",     "km": 49.0,  "note": ""},
-    {"name": "坂下宿",     "km": 58.0,  "note": "鈴鹿峠の手前"},
-    {"name": "関宿",       "km": 64.0,  "note": "今も宿場町の町並みが残る"},
-    {"name": "亀山宿",     "km": 70.0,  "note": ""},
-    {"name": "庄野宿",     "km": 75.0,  "note": ""},
-    {"name": "石薬師宿",   "km": 79.0,  "note": ""},
-    {"name": "四日市宿",   "km": 87.0,  "note": ""},
-    {"name": "桑名宿",     "km": 100.0, "note": "七里の渡しで宮宿と結ばれていた港町"},
-    {"name": "宮宿",       "km": 124.5, "note": "東海道随一の宿場町、熱田"},
-    {"name": "鳴海宿",     "km": 132.0, "note": ""},
-    {"name": "池鯉鮒宿",   "km": 143.0, "note": "現在の知立"},
-    {"name": "岡崎宿",     "km": 155.0, "note": ""},
-    {"name": "藤川宿",     "km": 162.0, "note": ""},
-    {"name": "赤坂宿",     "km": 169.0, "note": ""},
-    {"name": "御油宿",     "km": 170.7, "note": "赤坂宿との間はわずか1.7km、東海道最短区間"},
-    {"name": "吉田宿",     "km": 178.0, "note": "現在の豊橋"},
-    {"name": "二川宿",     "km": 186.0, "note": ""},
-    {"name": "白須賀宿",   "km": 195.0, "note": "潮見坂からの絶景で知られる"},
-    {"name": "新居宿",     "km": 201.0, "note": "今切の渡し"},
-    {"name": "舞坂宿",     "km": 206.0, "note": ""},
-    {"name": "浜松宿",     "km": 216.0, "note": ""},
-    {"name": "見付宿",     "km": 248.0, "note": "現在の磐田"},
-    {"name": "袋井宿",     "km": 257.0, "note": ""},
-    {"name": "掛川宿",     "km": 266.0, "note": ""},
-    {"name": "日坂宿",     "km": 272.0, "note": "小夜の中山峠の手前"},
-    {"name": "金谷宿",     "km": 281.0, "note": ""},
-    {"name": "島田宿",     "km": 286.0, "note": "大井川の渡し"},
-    {"name": "藤枝宿",     "km": 295.0, "note": ""},
-    {"name": "岡部宿",     "km": 302.0, "note": ""},
-    {"name": "丸子宿",     "km": 310.0, "note": "とろろ汁で有名"},
-    {"name": "府中宿",     "km": 316.0, "note": "現在の静岡"},
-    {"name": "江尻宿",     "km": 327.0, "note": "現在の清水"},
-    {"name": "興津宿",     "km": 333.0, "note": ""},
-    {"name": "由比宿",     "km": 339.0, "note": "薩埵峠の絶景"},
-    {"name": "蒲原宿",     "km": 344.0, "note": ""},
-    {"name": "吉原宿",     "km": 352.0, "note": ""},
-    {"name": "原宿",       "km": 361.0, "note": "富士山の眺めで知られる"},
-    {"name": "沼津宿",     "km": 368.0, "note": ""},
-    {"name": "三島宿",     "km": 379.0, "note": "箱根越えの手前"},
-    {"name": "箱根宿",     "km": 392.0, "note": "東海道最大の難所、箱根八里"},
-    {"name": "小田原宿",   "km": 406.0, "note": ""},
-    {"name": "大磯宿",     "km": 417.0, "note": ""},
-    {"name": "平塚宿",     "km": 423.0, "note": ""},
-    {"name": "藤沢宿",     "km": 430.0, "note": ""},
-    {"name": "戸塚宿",     "km": 437.0, "note": ""},
-    {"name": "保土ヶ谷宿", "km": 445.0, "note": ""},
-    {"name": "神奈川宿",   "km": 452.0, "note": ""},
-    {"name": "川崎宿",     "km": 461.0, "note": ""},
-    {"name": "品川宿",     "km": 471.0, "note": ""},
-    {"name": "日本橋",     "km": 495.0, "note": "東海道の終点、旅の目的地"},
+    {"name": "三条大橋",   "km": 0.0,   "note": "旅の出発点、京都", "city": "Kyoto"},
+    {"name": "大津宿",     "km": 4.0,   "note": "東海道最後（京都から見れば最初）の宿場", "city": "Otsu"},
+    {"name": "草津宿",     "km": 16.0,  "note": "中山道との分岐点として栄えた宿場町", "city": "Kusatsu"},
+    {"name": "石部宿",     "km": 28.0,  "note": "", "city": "Konan"},
+    {"name": "水口宿",     "km": 39.0,  "note": "", "city": "Koka"},
+    {"name": "土山宿",     "km": 49.0,  "note": "", "city": "Koka"},
+    {"name": "坂下宿",     "km": 58.0,  "note": "鈴鹿峠の手前", "city": "Kameyama"},
+    {"name": "関宿",       "km": 64.0,  "note": "今も宿場町の町並みが残る", "city": "Kameyama"},
+    {"name": "亀山宿",     "km": 70.0,  "note": "", "city": "Kameyama"},
+    {"name": "庄野宿",     "km": 75.0,  "note": "", "city": "Suzuka"},
+    {"name": "石薬師宿",   "km": 79.0,  "note": "", "city": "Suzuka"},
+    {"name": "四日市宿",   "km": 87.0,  "note": "", "city": "Yokkaichi"},
+    {"name": "桑名宿",     "km": 100.0, "note": "七里の渡しで宮宿と結ばれていた港町", "city": "Kuwana"},
+    {"name": "宮宿",       "km": 124.5, "note": "東海道随一の宿場町、熱田", "city": "Nagoya"},
+    {"name": "鳴海宿",     "km": 132.0, "note": "", "city": "Nagoya"},
+    {"name": "池鯉鮒宿",   "km": 143.0, "note": "現在の知立", "city": "Chiryu"},
+    {"name": "岡崎宿",     "km": 155.0, "note": "", "city": "Okazaki"},
+    {"name": "藤川宿",     "km": 162.0, "note": "", "city": "Okazaki"},
+    {"name": "赤坂宿",     "km": 169.0, "note": "", "city": "Toyokawa"},
+    {"name": "御油宿",     "km": 170.7, "note": "赤坂宿との間はわずか1.7km、東海道最短区間", "city": "Toyokawa"},
+    {"name": "吉田宿",     "km": 178.0, "note": "現在の豊橋", "city": "Toyohashi"},
+    {"name": "二川宿",     "km": 186.0, "note": "", "city": "Toyohashi"},
+    {"name": "白須賀宿",   "km": 195.0, "note": "潮見坂からの絶景で知られる", "city": "Kosai"},
+    {"name": "新居宿",     "km": 201.0, "note": "今切の渡し", "city": "Kosai"},
+    {"name": "舞坂宿",     "km": 206.0, "note": "", "city": "Hamamatsu"},
+    {"name": "浜松宿",     "km": 216.0, "note": "", "city": "Hamamatsu"},
+    {"name": "見付宿",     "km": 248.0, "note": "現在の磐田", "city": "Iwata"},
+    {"name": "袋井宿",     "km": 257.0, "note": "", "city": "Fukuroi"},
+    {"name": "掛川宿",     "km": 266.0, "note": "", "city": "Kakegawa"},
+    {"name": "日坂宿",     "km": 272.0, "note": "小夜の中山峠の手前", "city": "Kakegawa"},
+    {"name": "金谷宿",     "km": 281.0, "note": "", "city": "Shimada"},
+    {"name": "島田宿",     "km": 286.0, "note": "大井川の渡し", "city": "Shimada"},
+    {"name": "藤枝宿",     "km": 295.0, "note": "", "city": "Fujieda"},
+    {"name": "岡部宿",     "km": 302.0, "note": "", "city": "Fujieda"},
+    {"name": "丸子宿",     "km": 310.0, "note": "とろろ汁で有名", "city": "Shizuoka"},
+    {"name": "府中宿",     "km": 316.0, "note": "現在の静岡", "city": "Shizuoka"},
+    {"name": "江尻宿",     "km": 327.0, "note": "現在の清水", "city": "Shizuoka"},
+    {"name": "興津宿",     "km": 333.0, "note": "", "city": "Shizuoka"},
+    {"name": "由比宿",     "km": 339.0, "note": "薩埵峠の絶景", "city": "Shizuoka"},
+    {"name": "蒲原宿",     "km": 344.0, "note": "", "city": "Shizuoka"},
+    {"name": "吉原宿",     "km": 352.0, "note": "", "city": "Fuji"},
+    {"name": "原宿",       "km": 361.0, "note": "富士山の眺めで知られる", "city": "Numazu"},
+    {"name": "沼津宿",     "km": 368.0, "note": "", "city": "Numazu"},
+    {"name": "三島宿",     "km": 379.0, "note": "箱根越えの手前", "city": "Mishima"},
+    {"name": "箱根宿",     "km": 392.0, "note": "東海道最大の難所、箱根八里", "city": "Hakone"},
+    {"name": "小田原宿",   "km": 406.0, "note": "", "city": "Odawara"},
+    {"name": "大磯宿",     "km": 417.0, "note": "", "city": "Oiso"},
+    {"name": "平塚宿",     "km": 423.0, "note": "", "city": "Hiratsuka"},
+    {"name": "藤沢宿",     "km": 430.0, "note": "", "city": "Fujisawa"},
+    {"name": "戸塚宿",     "km": 437.0, "note": "", "city": "Yokohama"},
+    {"name": "保土ヶ谷宿", "km": 445.0, "note": "", "city": "Yokohama"},
+    {"name": "神奈川宿",   "km": 452.0, "note": "", "city": "Yokohama"},
+    {"name": "川崎宿",     "km": 461.0, "note": "", "city": "Kawasaki"},
+    {"name": "品川宿",     "km": 471.0, "note": "", "city": "Tokyo"},
+    {"name": "日本橋",     "km": 495.0, "note": "東海道の終点、旅の目的地", "city": "Tokyo"},
 ]
 
 
 def steps_to_km(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> float:
     return round(steps * stride_m / 1000, 3)
+
+
+async def get_weather_at_city(city: str) -> str | None:
+    """
+    到達地点（現代の都市名）の現在の天気を取得し、短い一言に整形して返す。
+    weather_advisor.pyの予報APIとは別に、OpenWeatherMapの現在天気APIを使う
+    （「今から傘が要るか」ではなく「今そこはどんな天気か」を知りたいため）。
+    取得失敗時はNone（呼び出し側で天気なしのメッセージにフォールバックする）。
+    """
+    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+    if not api_key:
+        return None
+
+    url = (
+        f"https://api.openweathermap.org/data/2.5/weather"
+        f"?q={city},JP&appid={api_key}&units=metric&lang=ja"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, timeout=8.0)
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        weather_list = data.get("weather") or []
+        if not weather_list:
+            return None
+        description = weather_list[0].get("description", "")
+        temp = data.get("main", {}).get("temp")
+        if temp is not None:
+            return f"{description}・気温{round(temp)}度"
+        return description
+    except Exception as e:
+        print(f"[旅] 天気取得エラー: {e}")
+        return None
+
+
+_HAIKU_PROMPT = (
+    "あなたはXR観測ナビゲーター「ルキルキ」です。東海道を歩いて旅する企画の一環で、"
+    "たった今「{station}」に到着しました。この土地・季節・天気を詠み込んだ、"
+    "松尾芭蕉を意識した五七五の俳句を1句だけ作ってください。\n"
+    "【この土地の情報】{note}\n"
+    "【現在の天気】{weather}\n"
+    "【出力ルール】俳句のみを出力してください。前置き・説明・記号は一切不要です。"
+)
+
+
+async def generate_haiku(station: dict, weather: str | None) -> str | None:
+    """到達地・季節・天気を詠み込んだ俳句を1句生成する。失敗時はNone。"""
+    try:
+        from services.resilient_llm import build_fast_llm
+        llm = build_fast_llm(temperature=0.9, name="Journey-Haiku")
+        prompt = _HAIKU_PROMPT.format(
+            station=station["name"],
+            note=station.get("note") or "（特記事項なし）",
+            weather=weather or "（不明）",
+        )
+        response = await llm.ainvoke(prompt)
+        haiku = response.content.strip()
+        return haiku if haiku else None
+    except Exception as e:
+        print(f"[旅] 俳句生成エラー: {e}")
+        return None
 
 
 async def get_journey_progress() -> dict:
@@ -175,6 +237,8 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
     呼ばれる想定。新しく宿場を1つ以上通過していれば、その通過情報（一番新しいもの）を
     返す。通過が無ければNoneを返す。
     """
+    from services import state as _state
+
     progress = await get_journey_progress()
     old_km = progress["total_distance_km"]
     new_km = old_km + steps_to_km(steps, stride_m)
@@ -189,6 +253,10 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
             crossed_index = i
 
     await save_journey_progress(new_km, crossed_index)
+
+    # Even G2の歩数バッジに合体表示するため、通過の有無に関わらず毎回位置情報を更新する
+    pos = current_position(new_km)
+    _state.latest_journey_summary = f"{pos['last_station']['name']} {new_km:.1f}km"
 
     if crossed_index > progress["last_notified_index"]:
         return TOKAIDO_ROUTE[crossed_index]
@@ -232,8 +300,13 @@ async def announce_milestone(station: dict) -> None:
     if not manager.active_connections:
         return
 
+    weather = await get_weather_at_city(station.get("city", ""))
+    haiku = await generate_haiku(station, weather)
+
     note = f"（{station['note']}）" if station.get("note") else ""
-    message = f"歩いた分だけ旅が進んで、「{station['name']}」に到着しました！{note}"
+    weather_line = f"\nそちらは今、{weather}のようです。" if weather else ""
+    haiku_line = f"\n\n{haiku}" if haiku else ""
+    message = f"歩いた分だけ旅が進んで、「{station['name']}」に到着しました！{note}{weather_line}{haiku_line}"
 
     audio_base64 = await generate_tts(message)
     audio_mime = (
