@@ -91,7 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
-from services.journey import apply_daily_steps, announce_milestone, get_journey_status
+from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
 from services.persona import (
@@ -141,6 +141,16 @@ async def lifespan(app: FastAPI):
             state.latest_step_count = recent[0].get("steps")
     except Exception as e:
         print(f"[起動時] 歩数キャッシュの初期化に失敗しました: {e}")
+
+    # 東海道の旅：現在地キャッシュも同様に起動時にDBから初期化する
+    # （latest_step_countと同じ理由。これを忘れていたため、Render再起動後は
+    # 次のhealth_updateまでバッジから旅の位置情報が消えてしまっていた）。
+    try:
+        progress = await get_journey_progress()
+        pos = current_position(progress["total_distance_km"])
+        state.latest_journey_summary = f"{pos['last_station']['name']} {progress['total_distance_km']:.1f}km"
+    except Exception as e:
+        print(f"[起動時] 旅の現在地キャッシュの初期化に失敗しました: {e}")
 
     # FastAPI が動いているイベントループを保持する。
     # APScheduler はスレッドプールから起動するため、
