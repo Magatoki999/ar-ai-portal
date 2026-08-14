@@ -941,7 +941,7 @@ async def chat_endpoint(payload: ChatMessage):
         # Even G2等の表示専用グラスへのHUDミラー配信（2026-08-03追加）
         # 上のstate.manager.broadcast（AR画面向け）とは別の購読リストへの配信であり、
         # 既存のAR側の動作には一切影響しない。
-        await glasses_hud_manager.broadcast_hud(facial_emotion, ai_response)
+        await glasses_hud_manager.broadcast_hud(facial_emotion, ai_response, user_text)
 
         audio_base64 = await generate_tts(ai_response)
 

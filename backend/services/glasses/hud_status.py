@@ -40,7 +40,7 @@ class HudConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-    async def broadcast_hud(self, facial_emotion: str, text: str):
+    async def broadcast_hud(self, facial_emotion: str, text: str, user_text: str = ""):
         try:
             expression = ExpressionCode(facial_emotion)
         except ValueError:
@@ -50,6 +50,10 @@ class HudConnectionManager:
             expression=expression,
             short_text=truncate_for_hud(text),
         ).model_dump()
+
+        # ユーザーの発話文（2026-08-14追加、HUD全面刷新の「YOU //」枠用）。
+        # 長すぎるとcanvas描画側で折り返しが破綻しかねないので同じtruncateを適用。
+        payload["user_text"] = truncate_for_hud(user_text) if user_text else ""
 
         # 歩数バッジ（2026-08-10追加）。HudStatusスキーマ自体は変更せず、
         # model_dump()の結果に後からキーを足す形にしている
