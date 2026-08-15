@@ -11,10 +11,13 @@
 #     id bigint primary key default 1,
 #     total_distance_km numeric not null default 0,
 #     last_notified_index integer not null default 0,
+#     started_at date,
 #     updated_at timestamptz not null default now()
 #   );
 #   insert into journey_progress (id, total_distance_km, last_notified_index)
 #   values (1, 0, 0) on conflict (id) do nothing;
+#   -- 既存テーブルに後から追加する場合は以下だけでよい:
+#   -- alter table journey_progress add column started_at date;
 #
 # 距離データについての注意：
 #   宿場間の正確な実測距離を出典付きで全53区間分揃えるのは断念し、
@@ -162,30 +165,32 @@ async def generate_haiku(station: dict, weather: str | None) -> str | None:
 
 
 async def get_journey_progress() -> dict:
-    """{'total_distance_km': float, 'last_notified_index': int} を返す。取得失敗時はゼロ初期値。"""
+    """{'total_distance_km': float, 'last_notified_index': int, 'started_at': str|None} を返す。取得失敗時はゼロ初期値。"""
     url, key = _sb()
+    empty = {"total_distance_km": 0.0, "last_notified_index": 0, "started_at": None}
     if not url or not key:
-        return {"total_distance_km": 0.0, "last_notified_index": 0}
+        return empty
 
-    endpoint = f"{url}/rest/v1/journey_progress?id=eq.1&select=total_distance_km,last_notified_index"
+    endpoint = f"{url}/rest/v1/journey_progress?id=eq.1&select=total_distance_km,last_notified_index,started_at"
     try:
         async with httpx.AsyncClient() as client:
             res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
         if res.status_code != 200:
-            return {"total_distance_km": 0.0, "last_notified_index": 0}
+            return empty
         rows = res.json()
         if not rows:
-            return {"total_distance_km": 0.0, "last_notified_index": 0}
+            return empty
         return {
             "total_distance_km": float(rows[0].get("total_distance_km", 0.0)),
             "last_notified_index": int(rows[0].get("last_notified_index", 0)),
+            "started_at": rows[0].get("started_at"),
         }
     except Exception as e:
         print(f"[旅] 進捗取得エラー: {e}")
-        return {"total_distance_km": 0.0, "last_notified_index": 0}
+        return empty
 
 
-async def save_journey_progress(total_distance_km: float, last_notified_index: int) -> bool:
+async def save_journey_progress(total_distance_km: float, last_notified_index: int, started_at: str | None = None) -> bool:
     url, key = _sb()
     if not url or not key:
         return False
@@ -198,6 +203,8 @@ async def save_journey_progress(total_distance_km: float, last_notified_index: i
         "last_notified_index": last_notified_index,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if started_at:
+        payload["started_at"] = started_at
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
@@ -243,6 +250,11 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
     old_km = progress["total_distance_km"]
     new_km = old_km + steps_to_km(steps, stride_m)
 
+    # 初回呼び出し時（started_atが未設定）は今日を旅の開始日として記録する
+    started_at = progress["started_at"]
+    if not started_at:
+        started_at = datetime.now(timezone.utc).date().isoformat()
+
     # 新しく通過した地点（index）を探す。複数まとめて通過した場合は最新のものだけ通知する
     # （一気に何日分もまとめて処理された場合等に喋りすぎないため）。
     crossed_index = progress["last_notified_index"]
@@ -252,15 +264,31 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
         if station["km"] <= new_km:
             crossed_index = i
 
-    await save_journey_progress(new_km, crossed_index)
+    await save_journey_progress(new_km, crossed_index, started_at)
 
     # Even G2の歩数バッジに合体表示するため、通過の有無に関わらず毎回位置情報を更新する
     pos = current_position(new_km)
-    _state.latest_journey_summary = f"{pos['last_station']['name']} {new_km:.1f}km"
+    day_count = _day_count_since(started_at)
+    _state.latest_journey_summary = f"{pos['last_station']['name']} {new_km:.1f}km（第{day_count}日目）"
+    _state.latest_journey_ratio = pos["progress_ratio"]
 
     if crossed_index > progress["last_notified_index"]:
         return TOKAIDO_ROUTE[crossed_index]
     return None
+
+
+def _day_count_since(started_at: str) -> int:
+    """started_at（"YYYY-MM-DD"）から数えて今日が何日目かを返す（開始日を1日目とする）。"""
+    try:
+        start_date = datetime.fromisoformat(started_at).date()
+        today = datetime.now(timezone.utc).date()
+        return max(1, (today - start_date).days + 1)
+    except (ValueError, TypeError):
+        return 1
+
+
+# main.py起動時の初期化でも使うための公開エイリアス
+journey_day_count = _day_count_since
 
 
 # ═══════════════════════════════════════════════════════
@@ -277,9 +305,10 @@ async def get_journey_status() -> str:
     last = pos["last_station"]
     nxt = pos["next_station"]
     pct = round(pos["progress_ratio"] * 100, 1)
+    day_count = _day_count_since(progress["started_at"]) if progress["started_at"] else 1
 
     lines = [
-        f"現在地：{last['name']}（京都から{progress['total_distance_km']:.1f}km、旅の進捗{pct}%）",
+        f"現在地：{last['name']}（京都から{progress['total_distance_km']:.1f}km、旅の進捗{pct}%、第{day_count}日目）",
     ]
     if nxt:
         remaining = nxt["km"] - progress["total_distance_km"]

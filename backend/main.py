@@ -91,7 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
-from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position
+from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
 from services.persona import (
@@ -148,7 +148,9 @@ async def lifespan(app: FastAPI):
     try:
         progress = await get_journey_progress()
         pos = current_position(progress["total_distance_km"])
-        state.latest_journey_summary = f"{pos['last_station']['name']} {progress['total_distance_km']:.1f}km"
+        day_count = journey_day_count(progress["started_at"]) if progress["started_at"] else 1
+        state.latest_journey_summary = f"{pos['last_station']['name']} {progress['total_distance_km']:.1f}km（第{day_count}日目）"
+        state.latest_journey_ratio = pos["progress_ratio"]
     except Exception as e:
         print(f"[起動時] 旅の現在地キャッシュの初期化に失敗しました: {e}")
 

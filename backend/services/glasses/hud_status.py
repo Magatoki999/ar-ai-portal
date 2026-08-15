@@ -61,8 +61,9 @@ class HudConnectionManager:
         # 歩数記録が無い場合は空文字にし、main.ts側で非表示にする。
         step_badge = f"{state.latest_step_count:,}歩" if state.latest_step_count is not None else ""
         if state.latest_journey_summary:
-            step_badge = f"{step_badge} {state.latest_journey_summary}" if step_badge else state.latest_journey_summary
+            step_badge = f"{step_badge}\n{state.latest_journey_summary}" if step_badge else state.latest_journey_summary
         payload["step_badge"] = step_badge
+        payload["journey_ratio"] = state.latest_journey_ratio if state.latest_journey_ratio is not None else 0.0
 
         self._last_payload = payload
 

@@ -85,3 +85,7 @@ latest_step_count: int | None = None
 # ─── 東海道の旅シミュレーション：現在地キャッシュ（Even G2の歩数バッジ合体表示用） ───
 # services/journey.py の apply_daily_steps() が毎日更新する。
 latest_journey_summary: str | None = None
+
+# ─── 東海道の旅：ゴールまでの進捗率（0.0〜1.0、Even G2の横棒グラフ表示用） ───
+# services/journey.py の apply_daily_steps() が毎日更新する。
+latest_journey_ratio: float | None = None
