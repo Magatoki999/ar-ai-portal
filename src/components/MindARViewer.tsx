@@ -58,7 +58,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
   const [showBookScan,     setShowBookScan]     = useState(false);
 
   // マーカーロスト中かどうか。RukiFaceIcon（右下の顔アイコン）の表示切り替えに使う。
-  // 字幕の5秒保持（lostSubtitleTimerRef）とは独立しており、アイコンはロスト中ずっと表示し続ける。
+  // 字幕の15秒保持（lostSubtitleTimerRef）とは独立しており、アイコンはロスト中ずっと表示し続ける。
   const [isTargetLost, setIsTargetLost] = useState(false);
 
   // RukiFaceIcon の表情（fun/sad/worry/angry/neutral）。evaluator_node がセリフの意味合いから
@@ -242,7 +242,9 @@ export default function MindARViewer({ address }: MindARViewerProps) {
       setAiStatus("idle");
       setIsTargetLost(true);
 
-      // ルキルキが話していたセリフ（字幕）はすぐに消さず、5秒間そのまま見せておく。
+      // ルキルキが話していたセリフ（字幕）はすぐに消さず、15秒間そのまま見せておく
+      // （以前は5秒だったが、歩きながらの利用でマーカー認識が頻繁に途切れると
+      // 読み終わる前に消えてしまうとの指摘を受けて延長、2026-08-15）。
       // それまでに別の理由で字幕が更新されていれば、このタイマーは古い文言で
       // 上書きしないようにキャンセルする。
       if (lostSubtitleTimerRef.current) {
@@ -251,7 +253,7 @@ export default function MindARViewer({ address }: MindARViewerProps) {
       lostSubtitleTimerRef.current = setTimeout(() => {
         setSubtitle("（マーカーをかざしてください。話しかけることもできます）");
         lostSubtitleTimerRef.current = null;
-      }, 5000);
+      }, 15000);
     },
     onSubtitleChange: updateSubtitle,
     onStatusChange:   setAiStatus,
