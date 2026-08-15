@@ -19,6 +19,15 @@
 #   -- 既存テーブルに後から追加する場合は以下だけでよい:
 #   -- alter table journey_progress add column started_at date;
 #
+#   create table journey_haiku_log (
+#     id bigint generated always as identity primary key,
+#     station_name text not null,
+#     km numeric,
+#     weather text,
+#     haiku text not null,
+#     created_at timestamptz not null default now()
+#   );
+#
 # 距離データについての注意：
 #   宿場間の正確な実測距離を出典付きで全53区間分揃えるのは断念し、
 #   総距離（約495km、「宿村大概帳」準拠）・判明している一部区間
@@ -318,6 +327,26 @@ async def get_journey_status() -> str:
     return "\n".join(lines)
 
 
+@tool
+async def get_haiku_history(limit: int = 5) -> str:
+    """まがときさんから「これまで詠んだ俳句見せて」「道中の俳句一覧」「今までの句をまとめて」のように、
+    東海道の旅で道中詠んだ俳句について尋ねられたときに呼ぶツールです。
+
+    Args:
+        limit: 何句分表示するか。特に指定が無ければ5句程度でよい。
+    """
+    logs = await get_haiku_log(limit=limit)
+    if not logs:
+        return "まだ道中で詠んだ俳句はありません。"
+
+    lines = []
+    for log in logs:
+        station = log.get("station_name", "")
+        haiku = log.get("haiku", "")
+        lines.append(f"【{station}にて】\n{haiku}")
+    return "\n\n".join(lines)
+
+
 # ═══════════════════════════════════════════════════════
 # 通過報告（main.py の health_update_endpoint から呼ばれる）
 # weather_prep_job / spot_proximity_job と同じ「LLM呼び出しなしの固定文言＋TTS」
@@ -325,12 +354,63 @@ async def get_journey_status() -> str:
 # 使うにはlat/lngが必要なため、まずは地名込みの固定文言のみ（天気連携は次段階）。
 # ═══════════════════════════════════════════════════════
 
+async def save_haiku(station_name: str, km: float, weather: str | None, haiku: str) -> bool:
+    """道中で詠んだ俳句を1件保存する。"""
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    endpoint = f"{url}/rest/v1/journey_haiku_log"
+    headers  = {**_sb_headers(), "Content-Type": "application/json"}
+    payload  = {
+        "station_name": station_name,
+        "km": km,
+        "weather": weather,
+        "haiku": haiku,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
+        if res.status_code not in (200, 201):
+            print(f"[旅] 俳句保存失敗: status={res.status_code} body={res.text[:200]}")
+            return False
+        print(f"[旅] 俳句を保存しました: {station_name}")
+        return True
+    except Exception as e:
+        print(f"[旅] 俳句保存エラー: {e}")
+        return False
+
+
+async def get_haiku_log(limit: int = 10) -> list[dict]:
+    """道中で詠んだ俳句を、新しい順に取得する。"""
+    url, key = _sb()
+    if not url or not key:
+        return []
+
+    endpoint = (
+        f"{url}/rest/v1/journey_haiku_log"
+        f"?order=created_at.desc&limit={limit}"
+        f"&select=station_name,km,weather,haiku,created_at"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        if res.status_code != 200:
+            return []
+        return res.json()
+    except Exception as e:
+        print(f"[旅] 俳句取得エラー: {e}")
+        return []
+
+
 async def announce_milestone(station: dict) -> None:
     if not manager.active_connections:
         return
 
     weather = await get_weather_at_city(station.get("city", ""))
     haiku = await generate_haiku(station, weather)
+    if haiku:
+        await save_haiku(station["name"], station["km"], weather, haiku)
 
     note = f"（{station['note']}）" if station.get("note") else ""
     weather_line = f"\nそちらは今、{weather}のようです。" if weather else ""

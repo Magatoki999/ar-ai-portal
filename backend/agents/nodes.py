@@ -53,7 +53,7 @@ from services.places import find_nearby_places
 from services.reminders import set_reminder, get_my_reminders, complete_reminder
 from services.user_growth import log_user_growth, get_user_growth_notes
 from services.health import get_step_history
-from services.journey import get_journey_status
+from services.journey import get_journey_status, get_haiku_history
 
 # ─── クエリ精緻化プロンプト（元 main.py から移動） ───
 from langchain_core.prompts import ChatPromptTemplate as _CPT
@@ -269,7 +269,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         [search_tool, locate_current_position, get_my_schedule, get_today_ai_news,
          get_book_history, get_video_prompt_memories, log_watched_movie, get_movie_history,
          find_nearby_places, set_reminder, get_my_reminders, complete_reminder,
-         log_user_growth, get_user_growth_notes, get_step_history, get_journey_status]
+         log_user_growth, get_user_growth_notes, get_step_history, get_journey_status, get_haiku_history]
     )
 
     base_persona = load_rukiruki_persona(user_call)
