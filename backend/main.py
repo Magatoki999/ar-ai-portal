@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()                                    # ← ここに移動（importの直後、他のservices importより前）
 
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -92,6 +92,7 @@ from services.scheduler import (
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
 from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count
+from services.weather_radar import fetch_radar_tile
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
 from services.persona import (
@@ -991,6 +992,24 @@ async def save_memory_image_endpoint(payload: MemoryImagePayload):
         )
 
     return {"status": "ok" if ok else "error"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 雨雲レーダー画像の中継エンドポイント（Even G2から定期的に取得される）
+# app.jsonのネットワーク許可がバックエンドURLのみのため、グラス側は直接
+# OpenWeatherMapを叩けない。ここでプロキシする。
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/weather/radar")
+async def weather_radar_endpoint():
+    lat, lng = state.weather_cache.get("lat"), state.weather_cache.get("lng")
+    if lat is None or lng is None:
+        return Response(status_code=404)
+
+    tile_bytes = await fetch_radar_tile(lat, lng)
+    if not tile_bytes:
+        return Response(status_code=404)
+
+    return Response(content=tile_bytes, media_type="image/png")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
