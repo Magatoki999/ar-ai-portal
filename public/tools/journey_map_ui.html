@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>東海道五十三次 道中記 ｜ ルキルキの旅</title>
+<style>
+  :root {
+    --paper: #f2e6c9;
+    --paper-dark: #e6d5a8;
+    --ink: #3a2c1a;
+    --ink-soft: #6b5a3e;
+    --red-seal: #a83232;
+    --line: #8b7346;
+    --gold: #b8935a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 24px 16px 60px;
+    background: linear-gradient(180deg, #d9c69a, #c9b482);
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+    color: var(--ink);
+  }
+
+  .scroll {
+    max-width: 960px;
+    margin: 0 auto;
+    background:
+      radial-gradient(circle at 10% 15%, rgba(139,115,70,0.10), transparent 40%),
+      radial-gradient(circle at 90% 80%, rgba(139,115,70,0.10), transparent 40%),
+      var(--paper);
+    border: 3px double var(--line);
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    padding: 32px 28px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    letter-spacing: 0.15em;
+    margin: 0 0 4px;
+    color: var(--ink);
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    margin-bottom: 24px;
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--paper-dark);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 18px;
+    text-align: center;
+    min-width: 110px;
+  }
+  .stat-card .label { font-size: 11px; color: var(--ink-soft); letter-spacing: 0.05em; }
+  .stat-card .value { font-size: 20px; font-weight: bold; margin-top: 2px; }
+  .stat-card .value.small { font-size: 15px; }
+
+  /* ── 街道マップ（蛇行する巻物風の道） ── */
+  .map-wrap {
+    position: relative;
+    margin: 30px 0 40px;
+    overflow-x: auto;
+  }
+  svg#road {
+    display: block;
+    min-width: 900px;
+    width: 100%;
+    height: 460px;
+  }
+  .road-path {
+    fill: none;
+    stroke: var(--gold);
+    stroke-width: 10;
+    stroke-linecap: round;
+  }
+  .road-path-inner {
+    fill: none;
+    stroke: var(--paper);
+    stroke-width: 4;
+    stroke-dasharray: 2 10;
+    stroke-linecap: round;
+  }
+  .station-dot {
+    fill: var(--paper);
+    stroke: var(--ink);
+    stroke-width: 1.5;
+  }
+  .station-dot.passed { fill: var(--red-seal); stroke: var(--red-seal); }
+  .station-dot.current { fill: #2f7a3a; stroke: #1f5527; }
+  .station-label {
+    font-size: 10px;
+    fill: var(--ink-soft);
+  }
+  .station-label.current { fill: var(--ink); font-weight: bold; font-size: 12px; }
+
+  .ruki-marker {
+    transition: transform 1.2s ease-in-out;
+  }
+  .ruki-marker circle {
+    fill: #2f7a3a;
+    stroke: #f2e6c9;
+    stroke-width: 3;
+  }
+  .ruki-marker text {
+    font-size: 20px;
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+
+  /* ── 俳句巻 ── */
+  .haiku-section h2 {
+    font-size: 18px;
+    border-bottom: 2px solid var(--line);
+    padding-bottom: 6px;
+    margin-bottom: 16px;
+    letter-spacing: 0.1em;
+  }
+  .haiku-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .haiku-card {
+    background: var(--paper-dark);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 14px 16px;
+    position: relative;
+  }
+  .haiku-card .station {
+    font-size: 12px;
+    color: var(--red-seal);
+    font-weight: bold;
+    margin-bottom: 6px;
+  }
+  .haiku-card .haiku-body {
+    white-space: pre-line;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .haiku-card .meta {
+    margin-top: 8px;
+    font-size: 10px;
+    color: var(--ink-soft);
+  }
+  .empty-note {
+    color: var(--ink-soft);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px 0;
+  }
+
+  .footer-note {
+    text-align: center;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 30px;
+    letter-spacing: 0.05em;
+  }
+</style>
+</head>
+<body>
+
+<div class="scroll">
+  <h1>東海道五十三次 道中記</h1>
+  <div class="subtitle">ルキルキと歩く、京都・三条大橋から江戸・日本橋への旅</div>
+
+  <div class="stats">
+    <div class="stat-card"><div class="label">現在地</div><div class="value small" id="stat-station">-</div></div>
+    <div class="stat-card"><div class="label">歩いた距離</div><div class="value" id="stat-km">-</div></div>
+    <div class="stat-card"><div class="label">進捗</div><div class="value" id="stat-pct">-</div></div>
+    <div class="stat-card"><div class="label">旅の日数</div><div class="value" id="stat-day">-</div></div>
+    <div class="stat-card"><div class="label">次の目的地</div><div class="value small" id="stat-next">-</div></div>
+  </div>
+
+  <div class="map-wrap">
+    <svg id="road" viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <div class="haiku-section">
+    <h2>道中の句集</h2>
+    <div id="haiku-container">
+      <div class="empty-note">読み込み中...</div>
+    </div>
+  </div>
+
+  <div class="footer-note">MagatokiLab ArtAR / ルキルキ ｜ 60秒ごとに自動更新</div>
+</div>
+
+<script>
+const API_URL = 'https://magatoki-ai-backend.onrender.com/api/journey/status';
+
+// 蛇行する道のウェイポイント（巻物風の見た目にするための固定パス。
+// 実際の地理座標ではなく、演出用のジグザグ経路）
+function buildRoadPoints(n) {
+  const points = [];
+  const width = 900, marginX = 40, marginY = 60;
+  const rows = 4;
+  const rowHeight = (460 - marginY * 2) / (rows - 1);
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const row = Math.floor(t * rows * 0.999);
+    const rowT = (t * rows) - row;
+    const goingRight = row % 2 === 0;
+    const x = marginX + (goingRight ? rowT : 1 - rowT) * (width - marginX * 2);
+    const y = marginY + row * rowHeight;
+    points.push({ x, y });
+  }
+  return points;
+}
+
+function pathFromPoints(points) {
+  return points.map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`)).join(' ');
+}
+
+async function render() {
+  let data;
+  try {
+    const res = await fetch(API_URL);
+    data = await res.json();
+  } catch (e) {
+    document.getElementById('haiku-container').innerHTML = '<div class="empty-note">データの取得に失敗しました</div>';
+    return;
+  }
+
+  const route = data.route || [];
+  const currentKm = data.total_distance_km || 0;
+  const currentStation = data.current_station || route[0];
+
+  document.getElementById('stat-station').textContent = currentStation.name;
+  document.getElementById('stat-km').textContent = `${currentKm.toFixed(1)} km`;
+  document.getElementById('stat-pct').textContent = `${Math.round((data.progress_ratio || 0) * 100)}%`;
+  document.getElementById('stat-day').textContent = `第${data.day_count || 1}日目`;
+  document.getElementById('stat-next').textContent = data.next_station
+    ? `${data.next_station.name}（あと${(data.next_station.km - currentKm).toFixed(1)}km）`
+    : '日本橋到達！';
+
+  // ── 地図描画 ──
+  const svg = document.getElementById('road');
+  svg.innerHTML = '';
+  const points = buildRoadPoints(route.length);
+  const ns = 'http://www.w3.org/2000/svg';
+
+  const pathOuter = document.createElementNS(ns, 'path');
+  pathOuter.setAttribute('d', pathFromPoints(points));
+  pathOuter.setAttribute('class', 'road-path');
+  svg.appendChild(pathOuter);
+
+  const pathInner = document.createElementNS(ns, 'path');
+  pathInner.setAttribute('d', pathFromPoints(points));
+  pathInner.setAttribute('class', 'road-path-inner');
+  svg.appendChild(pathInner);
+
+  let currentIndex = 0;
+  route.forEach((station, i) => {
+    if (station.km <= currentKm) currentIndex = i;
+  });
+
+  route.forEach((station, i) => {
+    const p = points[i];
+    const isPassed = i < currentIndex;
+    const isCurrent = i === currentIndex;
+
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('cx', p.x);
+    dot.setAttribute('cy', p.y);
+    dot.setAttribute('r', isCurrent ? 6 : 4);
+    dot.setAttribute('class', 'station-dot' + (isPassed ? ' passed' : '') + (isCurrent ? ' current' : ''));
+    svg.appendChild(dot);
+
+    // ラベルは全部出すと詰まるので、主要な宿場・現在地・始点終点だけ表示
+    const showLabel = isCurrent || i === 0 || i === route.length - 1 || i % 6 === 0;
+    if (showLabel) {
+      const label = document.createElementNS(ns, 'text');
+      label.setAttribute('x', p.x);
+      label.setAttribute('y', p.y - 10);
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('class', 'station-label' + (isCurrent ? ' current' : ''));
+      label.textContent = station.name;
+      svg.appendChild(label);
+    }
+  });
+
+  // ── ルキルキのマーカー（現在地） ──
+  const cp = points[currentIndex];
+  const marker = document.createElementNS(ns, 'g');
+  marker.setAttribute('class', 'ruki-marker');
+  marker.setAttribute('transform', `translate(${cp.x}, ${cp.y - 22})`);
+  const mCircle = document.createElementNS(ns, 'circle');
+  mCircle.setAttribute('r', 14);
+  const mText = document.createElementNS(ns, 'text');
+  mText.textContent = '🧑';
+  marker.appendChild(mCircle);
+  marker.appendChild(mText);
+  svg.appendChild(marker);
+
+  // ── 俳句一覧 ──
+  const haikuContainer = document.getElementById('haiku-container');
+  const logs = data.haiku_log || [];
+  if (logs.length === 0) {
+    haikuContainer.innerHTML = '<div class="empty-note">まだ道中で詠んだ俳句はありません</div>';
+  } else {
+    haikuContainer.innerHTML = '<div class="haiku-list"></div>';
+    const list = haikuContainer.querySelector('.haiku-list');
+    logs.forEach(log => {
+      const card = document.createElement('div');
+      card.className = 'haiku-card';
+      const date = log.created_at ? new Date(log.created_at).toLocaleDateString('ja-JP') : '';
+      card.innerHTML = `
+        <div class="station">${log.station_name || ''}にて</div>
+        <div class="haiku-body">${(log.haiku || '').replace(/</g, '&lt;')}</div>
+        <div class="meta">${date}${log.weather ? ' ｜ ' + log.weather : ''}</div>
+      `;
+      list.appendChild(card);
+    });
+  }
+}
+
+render();
+setInterval(render, 60_000);
+</script>
+
+</body>
+</html>

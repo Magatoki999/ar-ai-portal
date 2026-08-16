@@ -403,6 +403,27 @@ async def get_haiku_log(limit: int = 10) -> list[dict]:
         return []
 
 
+async def get_journey_full_status() -> dict:
+    """
+    journey_map_ui.html向けの集約データ。進捗・現在地・日数・全ルート・俳句ログを
+    まとめて1回のAPIコールで返す（画面側の実装をシンプルにするため）。
+    """
+    progress = await get_journey_progress()
+    pos = current_position(progress["total_distance_km"])
+    day_count = _day_count_since(progress["started_at"]) if progress["started_at"] else 1
+    haiku_log = await get_haiku_log(limit=20)
+
+    return {
+        "total_distance_km": progress["total_distance_km"],
+        "progress_ratio": pos["progress_ratio"],
+        "day_count": day_count,
+        "current_station": pos["last_station"],
+        "next_station": pos["next_station"],
+        "route": TOKAIDO_ROUTE,
+        "haiku_log": haiku_log,
+    }
+
+
 async def announce_milestone(station: dict) -> None:
     if not manager.active_connections:
         return

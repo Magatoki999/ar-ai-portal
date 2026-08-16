@@ -91,7 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
-from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count
+from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count, get_journey_full_status
 from services.weather_radar import fetch_radar_tile
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
@@ -999,6 +999,14 @@ async def save_memory_image_endpoint(payload: MemoryImagePayload):
 # app.jsonのネットワーク許可がバックエンドURLのみのため、グラス側は直接
 # OpenWeatherMapを叩けない。ここでプロキシする。
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 東海道五十三次マップ画面（public/tools/journey_map_ui.html）向けAPI
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/journey/status")
+async def journey_status_endpoint():
+    return await get_journey_full_status()
+
+
 @app.get("/api/weather/radar")
 async def weather_radar_endpoint():
     lat, lng = state.weather_cache.get("lat"), state.weather_cache.get("lng")
