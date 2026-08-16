@@ -12,7 +12,6 @@
     --ink-soft: #6b5a3e;
     --red-seal: #a83232;
     --line: #8b7346;
-    --gold: #b8935a;
   }
 
   * { box-sizing: border-box; }
@@ -26,12 +25,9 @@
   }
 
   .scroll {
-    max-width: 960px;
+    max-width: 1100px;
     margin: 0 auto;
-    background:
-      radial-gradient(circle at 10% 15%, rgba(139,115,70,0.10), transparent 40%),
-      radial-gradient(circle at 90% 80%, rgba(139,115,70,0.10), transparent 40%),
-      var(--paper);
+    background: var(--paper);
     border: 3px double var(--line);
     border-radius: 6px;
     box-shadow: 0 10px 30px rgba(0,0,0,0.35);
@@ -43,7 +39,6 @@
     font-size: 28px;
     letter-spacing: 0.15em;
     margin: 0 0 4px;
-    color: var(--ink);
   }
   .subtitle {
     text-align: center;
@@ -72,56 +67,45 @@
   .stat-card .value { font-size: 20px; font-weight: bold; margin-top: 2px; }
   .stat-card .value.small { font-size: 15px; }
 
-  /* ── 街道マップ（蛇行する巻物風の道） ── */
+  /* ── 街道マップ（実画像＋ルキルキマーカー） ── */
   .map-wrap {
     position: relative;
     margin: 30px 0 40px;
-    overflow-x: auto;
+    border: 2px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    line-height: 0;
   }
-  svg#road {
+  .map-wrap img.base-map {
     display: block;
-    min-width: 900px;
     width: 100%;
-    height: 460px;
+    height: auto;
   }
-  .road-path {
-    fill: none;
-    stroke: var(--gold);
-    stroke-width: 10;
-    stroke-linecap: round;
-  }
-  .road-path-inner {
-    fill: none;
-    stroke: var(--paper);
-    stroke-width: 4;
-    stroke-dasharray: 2 10;
-    stroke-linecap: round;
-  }
-  .station-dot {
-    fill: var(--paper);
-    stroke: var(--ink);
-    stroke-width: 1.5;
-  }
-  .station-dot.passed { fill: var(--red-seal); stroke: var(--red-seal); }
-  .station-dot.current { fill: #2f7a3a; stroke: #1f5527; }
-  .station-label {
-    font-size: 10px;
-    fill: var(--ink-soft);
-  }
-  .station-label.current { fill: var(--ink); font-weight: bold; font-size: 12px; }
-
   .ruki-marker {
-    transition: transform 1.2s ease-in-out;
+    position: absolute;
+    width: 7%;
+    aspect-ratio: 1 / 1;
+    transform: translate(-50%, -100%);
+    transition: left 1.4s ease-in-out, top 1.4s ease-in-out;
+    filter: drop-shadow(0 3px 4px rgba(0,0,0,0.5));
   }
-  .ruki-marker circle {
-    fill: #2f7a3a;
-    stroke: #f2e6c9;
-    stroke-width: 3;
+  .ruki-marker img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,255,255,0.9) 55%, rgba(255,255,255,0) 75%);
   }
-  .ruki-marker text {
-    font-size: 20px;
-    text-anchor: middle;
-    dominant-baseline: central;
+  .ruki-marker .pin-dot {
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    width: 10px;
+    height: 10px;
+    background: var(--red-seal);
+    border: 2px solid var(--paper);
+    border-radius: 50%;
+    transform: translateX(-50%);
   }
 
   /* ── 俳句巻 ── */
@@ -142,7 +126,6 @@
     border: 1px solid var(--line);
     border-radius: 4px;
     padding: 14px 16px;
-    position: relative;
   }
   .haiku-card .station {
     font-size: 12px;
@@ -191,7 +174,11 @@
   </div>
 
   <div class="map-wrap">
-    <svg id="road" viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg"></svg>
+    <img class="base-map" src="./tokaido_map.jpg" alt="東海道五十三宿場絵図">
+    <div class="ruki-marker" id="ruki-marker">
+      <img src="./ruki_icon.png" alt="ルキルキ">
+      <div class="pin-dot"></div>
+    </div>
   </div>
 
   <div class="haiku-section">
@@ -207,27 +194,25 @@
 <script>
 const API_URL = 'https://magatoki-ai-backend.onrender.com/api/journey/status';
 
-// 蛇行する道のウェイポイント（巻物風の見た目にするための固定パス。
-// 実際の地理座標ではなく、演出用のジグザグ経路）
-function buildRoadPoints(n) {
-  const points = [];
-  const width = 900, marginX = 40, marginY = 60;
-  const rows = 4;
-  const rowHeight = (460 - marginY * 2) / (rows - 1);
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const row = Math.floor(t * rows * 0.999);
-    const rowT = (t * rows) - row;
-    const goingRight = row % 2 === 0;
-    const x = marginX + (goingRight ? rowT : 1 - rowT) * (width - marginX * 2);
-    const y = marginY + row * rowHeight;
-    points.push({ x, y });
-  }
-  return points;
-}
+// 地図画像(1376x768)上で、実際に描かれた道（黒い線）を目視でたどった
+// ウェイポイント（%表記）。京都・三条大橋(0%)→江戸・日本橋(100%)の順。
+// 地図を差し替えた場合はここも合わせて調整が必要。
+const ROAD_WAYPOINTS = [
+  [9.4, 39.1], [12.4, 33.9], [14.5, 30.6], [18.9, 28.6], [24.0, 28.9],
+  [28.3, 33.2], [31.2, 39.1], [33.1, 44.3], [33.4, 51.4], [34.9, 57.3],
+  [37.8, 62.5], [40.7, 65.8], [43.6, 69.0], [47.2, 71.0], [50.9, 71.4],
+  [54.5, 71.0], [58.1, 68.4], [60.3, 63.8], [62.5, 59.2], [65.4, 54.0],
+  [68.3, 50.1], [71.2, 48.8], [74.9, 49.2], [78.5, 50.1], [82.1, 49.7],
+  [85.8, 49.2], [89.4, 47.9], [92.3, 44.9], [94.5, 42.3],
+];
 
-function pathFromPoints(points) {
-  return points.map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`)).join(' ');
+function pointAtRatio(ratio) {
+  const t = Math.max(0, Math.min(1, ratio)) * (ROAD_WAYPOINTS.length - 1);
+  const i = Math.floor(t);
+  const frac = t - i;
+  const a = ROAD_WAYPOINTS[i];
+  const b = ROAD_WAYPOINTS[Math.min(i + 1, ROAD_WAYPOINTS.length - 1)];
+  return [a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac];
 }
 
 async function render() {
@@ -240,76 +225,22 @@ async function render() {
     return;
   }
 
-  const route = data.route || [];
   const currentKm = data.total_distance_km || 0;
-  const currentStation = data.current_station || route[0];
+  const currentStation = data.current_station || {};
+  const ratio = data.progress_ratio || 0;
 
-  document.getElementById('stat-station').textContent = currentStation.name;
+  document.getElementById('stat-station').textContent = currentStation.name || '-';
   document.getElementById('stat-km').textContent = `${currentKm.toFixed(1)} km`;
-  document.getElementById('stat-pct').textContent = `${Math.round((data.progress_ratio || 0) * 100)}%`;
+  document.getElementById('stat-pct').textContent = `${Math.round(ratio * 100)}%`;
   document.getElementById('stat-day').textContent = `第${data.day_count || 1}日目`;
   document.getElementById('stat-next').textContent = data.next_station
     ? `${data.next_station.name}（あと${(data.next_station.km - currentKm).toFixed(1)}km）`
     : '日本橋到達！';
 
-  // ── 地図描画 ──
-  const svg = document.getElementById('road');
-  svg.innerHTML = '';
-  const points = buildRoadPoints(route.length);
-  const ns = 'http://www.w3.org/2000/svg';
-
-  const pathOuter = document.createElementNS(ns, 'path');
-  pathOuter.setAttribute('d', pathFromPoints(points));
-  pathOuter.setAttribute('class', 'road-path');
-  svg.appendChild(pathOuter);
-
-  const pathInner = document.createElementNS(ns, 'path');
-  pathInner.setAttribute('d', pathFromPoints(points));
-  pathInner.setAttribute('class', 'road-path-inner');
-  svg.appendChild(pathInner);
-
-  let currentIndex = 0;
-  route.forEach((station, i) => {
-    if (station.km <= currentKm) currentIndex = i;
-  });
-
-  route.forEach((station, i) => {
-    const p = points[i];
-    const isPassed = i < currentIndex;
-    const isCurrent = i === currentIndex;
-
-    const dot = document.createElementNS(ns, 'circle');
-    dot.setAttribute('cx', p.x);
-    dot.setAttribute('cy', p.y);
-    dot.setAttribute('r', isCurrent ? 6 : 4);
-    dot.setAttribute('class', 'station-dot' + (isPassed ? ' passed' : '') + (isCurrent ? ' current' : ''));
-    svg.appendChild(dot);
-
-    // ラベルは全部出すと詰まるので、主要な宿場・現在地・始点終点だけ表示
-    const showLabel = isCurrent || i === 0 || i === route.length - 1 || i % 6 === 0;
-    if (showLabel) {
-      const label = document.createElementNS(ns, 'text');
-      label.setAttribute('x', p.x);
-      label.setAttribute('y', p.y - 10);
-      label.setAttribute('text-anchor', 'middle');
-      label.setAttribute('class', 'station-label' + (isCurrent ? ' current' : ''));
-      label.textContent = station.name;
-      svg.appendChild(label);
-    }
-  });
-
-  // ── ルキルキのマーカー（現在地） ──
-  const cp = points[currentIndex];
-  const marker = document.createElementNS(ns, 'g');
-  marker.setAttribute('class', 'ruki-marker');
-  marker.setAttribute('transform', `translate(${cp.x}, ${cp.y - 22})`);
-  const mCircle = document.createElementNS(ns, 'circle');
-  mCircle.setAttribute('r', 14);
-  const mText = document.createElementNS(ns, 'text');
-  mText.textContent = '🧑';
-  marker.appendChild(mCircle);
-  marker.appendChild(mText);
-  svg.appendChild(marker);
+  const [x, y] = pointAtRatio(ratio);
+  const marker = document.getElementById('ruki-marker');
+  marker.style.left = `${x}%`;
+  marker.style.top = `${y}%`;
 
   // ── 俳句一覧 ──
   const haikuContainer = document.getElementById('haiku-container');
