@@ -425,9 +425,12 @@ async def get_journey_full_status() -> dict:
 
 
 async def announce_milestone(station: dict) -> None:
-    if not manager.active_connections:
-        return
-
+    # 注意：以前はここで「誰も接続していなければ何もしない」というガードで
+    # 早期returnしていたが、それだと俳句の生成・保存まで一緒にスキップされて
+    # しまっていた（歩数Webhookは深夜0時台に実行され、その時間にスマホアプリを
+    # 開いている人はまず居ないため）。天気取得・俳句生成・保存は接続の有無に
+    # 関わらず必ず行う。broadcast()自体は接続が無ければ何もしないので、
+    # 生放送の通知だけが自然にスキップされる形になり、これで正しい。
     weather = await get_weather_at_city(station.get("city", ""))
     haiku = await generate_haiku(station, weather)
     if haiku:
@@ -437,6 +440,12 @@ async def announce_milestone(station: dict) -> None:
     weather_line = f"\nそちらは今、{weather}のようです。" if weather else ""
     haiku_line = f"\n\n{haiku}" if haiku else ""
     message = f"歩いた分だけ旅が進んで、「{station['name']}」に到着しました！{note}{weather_line}{haiku_line}"
+
+    # TTS生成だけは、聞く人がいない深夜に無駄な音声合成APIコストを払わないよう
+    # 接続がある時だけ行う（俳句の生成・保存は上ですでに完了している）。
+    if not manager.active_connections:
+        print(f"[旅] 通過（接続なし、俳句のみ保存）: {station['name']}")
+        return
 
     audio_base64 = await generate_tts(message)
     audio_mime = (
