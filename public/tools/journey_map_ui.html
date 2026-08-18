@@ -224,7 +224,7 @@
     <div class="ruki-marker" id="ruki-marker">
       <div class="speech-bubble" id="ruki-bubble">-</div>
       <div class="icon-wrap">
-        <img src="./ruki_icon.png" alt="ルキルキ">
+        <img src="./ruki_icon.png" alt="ルキルキ" id="ruki-face">
       </div>
       <div class="pin-dot"></div>
     </div>
@@ -349,6 +349,17 @@ async function render() {
     });
   }
 }
+
+// ── まばたき ──
+// Even G2側のグラス表示と同じ演出（4秒おきに220msだけ目を閉じる）。
+const EYES_OPEN = './ruki_icon.png';
+const EYES_CLOSED = './ruki_icon_blink.png';
+setInterval(() => {
+  const face = document.getElementById('ruki-face');
+  if (!face) return;
+  face.src = EYES_CLOSED;
+  setTimeout(() => { face.src = EYES_OPEN; }, 220);
+}, 4000);
 
 render();
 setInterval(render, 60_000);
