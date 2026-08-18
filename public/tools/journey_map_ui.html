@@ -83,10 +83,14 @@
   }
   .ruki-marker {
     position: absolute;
-    width: 7%;
+    width: 6.5%;
     aspect-ratio: 1 / 1;
     transform: translate(-50%, -100%);
     transition: left 1.4s ease-in-out, top 1.4s ease-in-out;
+  }
+  .ruki-marker .icon-wrap {
+    width: 100%;
+    height: 100%;
     filter: drop-shadow(0 3px 4px rgba(0,0,0,0.5));
   }
   .ruki-marker img {
@@ -106,6 +110,42 @@
     border: 2px solid var(--paper);
     border-radius: 50%;
     transform: translateX(-50%);
+  }
+
+  /* ── 現在地の吹き出し ── */
+  .speech-bubble {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 6px;
+    background: #fffdf5;
+    border: 1.5px solid var(--ink);
+    border-radius: 10px;
+    padding: 4px 10px;
+    font-size: 13px;
+    font-weight: bold;
+    white-space: nowrap;
+    box-shadow: 1px 2px 3px rgba(0,0,0,0.25);
+  }
+  .speech-bubble::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: var(--ink);
+  }
+  .speech-bubble::before {
+    content: "";
+    position: absolute;
+    top: calc(100% - 1.5px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #fffdf5;
+    z-index: 1;
   }
 
   /* ── 俳句巻 ── */
@@ -174,9 +214,12 @@
   </div>
 
   <div class="map-wrap">
-    <img class="base-map" src="./tokaido_map.jpg" alt="東海道五十三宿場絵図">
+    <img class="base-map" src="./tokaido_map.png" alt="ルキルキ東海道五十三次の旅">
     <div class="ruki-marker" id="ruki-marker">
-      <img src="./ruki_icon.png" alt="ルキルキ">
+      <div class="speech-bubble" id="ruki-bubble">-</div>
+      <div class="icon-wrap">
+        <img src="./ruki_icon.png" alt="ルキルキ">
+      </div>
       <div class="pin-dot"></div>
     </div>
   </div>
@@ -194,25 +237,62 @@
 <script>
 const API_URL = 'https://magatoki-ai-backend.onrender.com/api/journey/status';
 
-// 地図画像(1376x768)上で、実際に描かれた道（黒い線）を目視でたどった
-// ウェイポイント（%表記）。京都・三条大橋(0%)→江戸・日本橋(100%)の順。
-// 地図を差し替えた場合はここも合わせて調整が必要。
-const ROAD_WAYPOINTS = [
-  [9.4, 39.1], [12.4, 33.9], [14.5, 30.6], [18.9, 28.6], [24.0, 28.9],
-  [28.3, 33.2], [31.2, 39.1], [33.1, 44.3], [33.4, 51.4], [34.9, 57.3],
-  [37.8, 62.5], [40.7, 65.8], [43.6, 69.0], [47.2, 71.0], [50.9, 71.4],
-  [54.5, 71.0], [58.1, 68.4], [60.3, 63.8], [62.5, 59.2], [65.4, 54.0],
-  [68.3, 50.1], [71.2, 48.8], [74.9, 49.2], [78.5, 50.1], [82.1, 49.7],
-  [85.8, 49.2], [89.4, 47.9], [92.3, 44.9], [94.5, 42.3],
+// journey.py の TOKAIDO_ROUTE と同じ順序（index 0=三条大橋, 1-53=宿場, 54=日本橋）。
+// station.name は「◯◯宿」の形で来るため、末尾の「宿」を除いた名前で照合する。
+const STATION_NAMES = [
+  '三条大橋','大津','草津','石部','水口','土山','坂下','関','亀山','庄野','石薬師','四日市','桑名',
+  '宮','鳴海','池鯉鮒','岡崎','藤川','赤坂','御油','吉田','二川',
+  '白須賀','新居','舞坂','浜松','見付','袋井','掛川','日坂','金谷','島田','藤枝',
+  '岡部','丸子','府中','江尻','興津','由比','蒲原','吉原','原','沼津','三島',
+  '箱根','小田原','大磯','平塚','藤沢','戸塚','保土ヶ谷','神奈川','川崎','品川','日本橋',
 ];
 
-function pointAtRatio(ratio) {
-  const t = Math.max(0, Math.min(1, ratio)) * (ROAD_WAYPOINTS.length - 1);
-  const i = Math.floor(t);
-  const frac = t - i;
-  const a = ROAD_WAYPOINTS[i];
-  const b = ROAD_WAYPOINTS[Math.min(i + 1, ROAD_WAYPOINTS.length - 1)];
-  return [a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac];
+// 地図画像(map.png)上の実際のピン位置を画像処理（Hough変換＋最近傍トレース）で
+// 抽出した座標（%表記）。STATION_NAMESと同じ順序でindexが対応する。
+const ROAD_POINTS = [
+  [12.0, 42.0],  // 0: 三条大橋（始点、目視推定）
+  [20.14, 40.42], [21.41, 41.97], [22.82, 43.2], [24.28, 44.35], [25.55, 46.15],
+  [27.06, 47.38], [28.62, 48.53], [30.13, 49.59], [31.88, 50.0], [33.2, 50.08],
+  [34.46, 48.53], [35.92, 48.12], [37.53, 48.61], [38.85, 50.0], [39.97, 51.72],
+  [41.48, 52.29], [42.5, 54.1], [43.08, 56.39], [43.42, 58.76], [44.15, 60.48],
+  [45.08, 62.45], [46.25, 63.51], [47.13, 65.48], [48.44, 66.87], [50.0, 67.53],
+  [51.51, 68.1], [53.07, 68.67], [54.34, 70.31], [55.89, 71.13], [57.45, 71.29],
+  [58.91, 70.72], [60.42, 69.82], [61.84, 68.84], [63.35, 69.0], [64.71, 67.94],
+  [66.03, 66.54], [67.39, 65.89], [69.0, 65.89], [70.46, 66.63], [71.97, 65.48],
+  [73.04, 63.6], [74.35, 62.12], [75.77, 61.14], [76.84, 59.34], [77.86, 57.53],
+  [79.18, 56.31], [80.54, 55.24], [82.15, 55.24], [83.12, 53.77], [84.05, 51.88],
+  [85.61, 51.31], [87.26, 50.74], [88.68, 48.94],
+  [94.0, 50.0],  // 54: 日本橋（終点、目視推定）
+];
+
+function stationIndex(name) {
+  if (!name) return 0;
+  const bare = name.replace(/宿$/, '');
+  const i = STATION_NAMES.indexOf(bare);
+  return i === -1 ? 0 : i;
+}
+
+// 現在地・次の目的地・累積距離から、2地点間を距離の割合で線形補間した座標を返す
+function currentPosition(data) {
+  const curIdx = stationIndex(data.current_station && data.current_station.name);
+  const curPoint = ROAD_POINTS[curIdx];
+
+  if (!data.next_station) return curPoint;
+
+  const nextIdx = stationIndex(data.next_station.name);
+  const nextPoint = ROAD_POINTS[nextIdx];
+
+  const curKm = (data.current_station && data.current_station.km) || 0;
+  const nextKm = data.next_station.km;
+  const totalKm = data.total_distance_km || 0;
+
+  const span = nextKm - curKm;
+  const frac = span > 0 ? Math.max(0, Math.min(1, (totalKm - curKm) / span)) : 0;
+
+  return [
+    curPoint[0] + (nextPoint[0] - curPoint[0]) * frac,
+    curPoint[1] + (nextPoint[1] - curPoint[1]) * frac,
+  ];
 }
 
 async function render() {
@@ -227,20 +307,20 @@ async function render() {
 
   const currentKm = data.total_distance_km || 0;
   const currentStation = data.current_station || {};
-  const ratio = data.progress_ratio || 0;
 
   document.getElementById('stat-station').textContent = currentStation.name || '-';
   document.getElementById('stat-km').textContent = `${currentKm.toFixed(1)} km`;
-  document.getElementById('stat-pct').textContent = `${Math.round(ratio * 100)}%`;
+  document.getElementById('stat-pct').textContent = `${Math.round((data.progress_ratio || 0) * 100)}%`;
   document.getElementById('stat-day').textContent = `第${data.day_count || 1}日目`;
   document.getElementById('stat-next').textContent = data.next_station
     ? `${data.next_station.name}（あと${(data.next_station.km - currentKm).toFixed(1)}km）`
     : '日本橋到達！';
 
-  const [x, y] = pointAtRatio(ratio);
+  const [x, y] = currentPosition(data);
   const marker = document.getElementById('ruki-marker');
   marker.style.left = `${x}%`;
   marker.style.top = `${y}%`;
+  document.getElementById('ruki-bubble').textContent = currentStation.name || '-';
 
   // ── 俳句一覧 ──
   const haikuContainer = document.getElementById('haiku-container');
