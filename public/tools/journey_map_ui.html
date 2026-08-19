@@ -90,6 +90,7 @@
     transform: translate(-50%, -100%);
     transition: left 1.4s ease-in-out, top 1.4s ease-in-out;
     overflow: visible;
+    cursor: pointer;
   }
   .ruki-marker .icon-wrap {
     width: 100%;
@@ -131,6 +132,15 @@
     white-space: nowrap;
     width: max-content;
     box-shadow: 1px 2px 3px rgba(0,0,0,0.25);
+  }
+  .speech-bubble.haiku-mode {
+    white-space: pre-line;
+    max-width: 200px;
+    width: max-content;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.6;
+    font-weight: normal;
   }
   .speech-bubble::after {
     content: "";
@@ -311,6 +321,9 @@ async function render() {
     return;
   }
 
+  lastData = data;
+  showingHaiku = false; // 定期更新のたびに地名表示へ戻す（現在地とズレた俳句が残らないように）
+
   const currentKm = data.total_distance_km || 0;
   const currentStation = data.current_station || {};
 
@@ -326,7 +339,9 @@ async function render() {
   const marker = document.getElementById('ruki-marker');
   marker.style.left = `${x}%`;
   marker.style.top = `${y}%`;
-  document.getElementById('ruki-bubble').textContent = currentStation.name || '-';
+  const bubble = document.getElementById('ruki-bubble');
+  bubble.textContent = currentStation.name || '-';
+  bubble.classList.remove('haiku-mode');
 
   // ── 俳句一覧 ──
   const haikuContainer = document.getElementById('haiku-container');
@@ -360,6 +375,40 @@ setInterval(() => {
   face.src = EYES_CLOSED;
   setTimeout(() => { face.src = EYES_OPEN; }, 220);
 }, 4000);
+
+// ── クリックで俳句表示 ──
+// 現在地で詠んだ俳句があれば吹き出しに表示、もう一度クリックで地名表示に戻す。
+let lastData = null;
+let showingHaiku = false;
+
+function findHaikuForStation(data, stationName) {
+  if (!data || !data.haiku_log) return null;
+  return data.haiku_log.find(h => h.station_name === stationName) || null;
+}
+
+document.getElementById('ruki-marker').addEventListener('click', () => {
+  if (!lastData) return;
+  const bubble = document.getElementById('ruki-bubble');
+  const stationName = (lastData.current_station && lastData.current_station.name) || '-';
+
+  if (showingHaiku) {
+    bubble.textContent = stationName;
+    bubble.classList.remove('haiku-mode');
+    showingHaiku = false;
+    return;
+  }
+
+  const entry = findHaikuForStation(lastData, stationName);
+  if (entry) {
+    bubble.textContent = entry.haiku;
+    bubble.classList.add('haiku-mode');
+    showingHaiku = true;
+  } else {
+    const original = bubble.textContent;
+    bubble.textContent = 'まだこの地で句は詠んでいません';
+    setTimeout(() => { bubble.textContent = original; }, 2000);
+  }
+});
 
 render();
 setInterval(render, 60_000);
