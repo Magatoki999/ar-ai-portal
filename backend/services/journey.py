@@ -226,6 +226,58 @@ async def save_journey_progress(total_distance_km: float, last_notified_index: i
         return False
 
 
+async def reset_journey() -> bool:
+    """
+    旅の進捗・俳句ログを完全にリセットし、三条大橋(0km)からやり直せる状態にする。
+    save_journey_progress()（upsert、started_atは値がある時しか送らない）とは別に、
+    started_atを明示的にnullへ戻す必要があるため、直接PATCHする専用関数にしている。
+    """
+    url, key = _sb()
+    if not url or not key:
+        return False
+
+    ok = True
+    headers = {**_sb_headers(), "Content-Type": "application/json"}
+
+    # journey_progress を初期値に戻す（started_atも明示的にnullへ）
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.patch(
+                f"{url}/rest/v1/journey_progress?id=eq.1",
+                json={
+                    "total_distance_km": 0,
+                    "last_notified_index": 0,
+                    "started_at": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers=headers,
+                timeout=5.0,
+            )
+        if res.status_code not in (200, 204):
+            print(f"[旅] リセット(進捗)失敗: status={res.status_code} body={res.text[:200]}")
+            ok = False
+    except Exception as e:
+        print(f"[旅] リセット(進捗)エラー: {e}")
+        ok = False
+
+    # journey_haiku_log を全件削除
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.delete(
+                f"{url}/rest/v1/journey_haiku_log?id=gte.0",
+                headers=headers,
+                timeout=5.0,
+            )
+        if res.status_code not in (200, 204):
+            print(f"[旅] リセット(俳句ログ)失敗: status={res.status_code} body={res.text[:200]}")
+            ok = False
+    except Exception as e:
+        print(f"[旅] リセット(俳句ログ)エラー: {e}")
+        ok = False
+
+    return ok
+
+
 def current_position(total_distance_km: float) -> dict:
     """
     現在の累積距離から、直近に通過した地点と次の目的地を割り出す。
@@ -273,7 +325,13 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
         if station["km"] <= new_km:
             crossed_index = i
 
-    await save_journey_progress(new_km, crossed_index, started_at)
+    saved = await save_journey_progress(new_km, crossed_index, started_at)
+    if not saved:
+        # DB保存に失敗した場合、メモリ上のキャッシュ（Even G2表示用）だけを
+        # 進めてしまうとWebページ側（DBを直接読む）とズレてしまうため、
+        # ここで処理を打ち切る。次回のWebhookで再度加算が試みられる。
+        print("[旅] DB保存に失敗したため、今回の進捗反映を見送りました")
+        return None
 
     # Even G2の歩数バッジに合体表示するため、通過の有無に関わらず毎回位置情報を更新する
     pos = current_position(new_km)

@@ -91,7 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
-from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count, get_journey_full_status, compose_haiku_for_current_station
+from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count, get_journey_full_status, compose_haiku_for_current_station, reset_journey
 from services.weather_radar import fetch_radar_tile
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
@@ -1013,6 +1013,19 @@ async def journey_haiku_endpoint():
     if not result:
         return Response(status_code=500)
     return result
+
+
+@app.post("/api/journey/reset")
+async def journey_reset_endpoint():
+    ok = await reset_journey()
+    if not ok:
+        return Response(status_code=500)
+    # DBだけでなく、Even G2表示用のメモリ上キャッシュも即座に三条大橋(0km)へ戻す。
+    # ここを揃えておかないと、次回health_updateまでグラス側だけ古い値が残り続ける
+    # （今回のズレの原因と同じ問題が起きる）。
+    state.latest_journey_summary = "三条大橋 0.0km（第1日目）"
+    state.latest_journey_ratio = 0.0
+    return {"status": "ok"}
 
 
 @app.get("/api/weather/radar")
