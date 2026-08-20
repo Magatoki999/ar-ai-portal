@@ -252,6 +252,7 @@
 
 <script>
 const API_URL = 'https://magatoki-ai-backend.onrender.com/api/journey/status';
+const JOURNEY_HAIKU_URL = 'https://magatoki-ai-backend.onrender.com/api/journey/haiku';
 
 // journey.py の TOKAIDO_ROUTE と同じ順序（index 0=三条大橋, 1-53=宿場, 54=日本橋）。
 // station.name は「◯◯宿」の形で来るため、末尾の「宿」を除いた名前で照合する。
@@ -311,7 +312,7 @@ function currentPosition(data) {
   ];
 }
 
-async function render() {
+async function render(preserveBubble = false) {
   let data;
   try {
     const res = await fetch(API_URL);
@@ -322,7 +323,9 @@ async function render() {
   }
 
   lastData = data;
-  showingHaiku = false; // 定期更新のたびに地名表示へ戻す（現在地とズレた俳句が残らないように）
+  if (!preserveBubble) {
+    showingHaiku = false; // 定期更新のたびに地名表示へ戻す（現在地とズレた俳句が残らないように）
+  }
 
   const currentKm = data.total_distance_km || 0;
   const currentStation = data.current_station || {};
@@ -339,9 +342,11 @@ async function render() {
   const marker = document.getElementById('ruki-marker');
   marker.style.left = `${x}%`;
   marker.style.top = `${y}%`;
-  const bubble = document.getElementById('ruki-bubble');
-  bubble.textContent = currentStation.name || '-';
-  bubble.classList.remove('haiku-mode');
+  if (!preserveBubble) {
+    const bubble = document.getElementById('ruki-bubble');
+    bubble.textContent = currentStation.name || '-';
+    bubble.classList.remove('haiku-mode');
+  }
 
   // ── 俳句一覧 ──
   const haikuContainer = document.getElementById('haiku-container');
@@ -386,7 +391,7 @@ function findHaikuForStation(data, stationName) {
   return data.haiku_log.find(h => h.station_name === stationName) || null;
 }
 
-document.getElementById('ruki-marker').addEventListener('click', () => {
+document.getElementById('ruki-marker').addEventListener('click', async () => {
   if (!lastData) return;
   const bubble = document.getElementById('ruki-bubble');
   const stationName = (lastData.current_station && lastData.current_station.name) || '-';
@@ -404,9 +409,21 @@ document.getElementById('ruki-marker').addEventListener('click', () => {
     bubble.classList.add('haiku-mode');
     showingHaiku = true;
   } else {
-    const original = bubble.textContent;
-    bubble.textContent = 'まだこの地で句は詠んでいません';
-    setTimeout(() => { bubble.textContent = original; }, 2000);
+    bubble.textContent = 'ただいま一句、詠んでおります…';
+    bubble.classList.remove('haiku-mode');
+    try {
+      const res = await fetch(JOURNEY_HAIKU_URL, { method: 'POST' });
+      if (!res.ok) throw new Error('haiku生成に失敗');
+      const result = await res.json();
+      bubble.textContent = result.haiku;
+      bubble.classList.add('haiku-mode');
+      showingHaiku = true;
+      // 句集一覧にも反映されるよう、データを再取得しておく（吹き出し表示はそのまま）
+      void render(true);
+    } catch (e) {
+      bubble.textContent = '句が詠めませんでした…';
+      setTimeout(() => { bubble.textContent = stationName; }, 2000);
+    }
   }
 });
 

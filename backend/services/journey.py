@@ -424,6 +424,26 @@ async def get_journey_full_status() -> dict:
     }
 
 
+async def compose_haiku_for_current_station() -> dict | None:
+    """
+    journey_map_ui.htmlの「クリックしてその場で詠ませる」用。現在地の宿場について
+    その場で俳句を生成し、announce_milestoneと同じ要領で保存する
+    （通過通知の音声・broadcastは行わない、UIからの明示リクエストのため）。
+    戻り値: {"station_name":, "weather":, "haiku":} または生成失敗時None。
+    """
+    progress = await get_journey_progress()
+    pos = current_position(progress["total_distance_km"])
+    station = pos["last_station"]
+
+    weather = await get_weather_at_city(station.get("city", ""))
+    haiku = await generate_haiku(station, weather)
+    if not haiku:
+        return None
+
+    await save_haiku(station["name"], station["km"], weather, haiku)
+    return {"station_name": station["name"], "weather": weather, "haiku": haiku}
+
+
 async def announce_milestone(station: dict) -> None:
     # 注意：以前はここで「誰も接続していなければ何もしない」というガードで
     # 早期returnしていたが、それだと俳句の生成・保存まで一緒にスキップされて
