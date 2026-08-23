@@ -329,6 +329,9 @@ async def synthesizer_node(state: RukirukiState) -> dict:
         "写して", "見せて", "撮って", "撮影して",
         "タイトル", "表紙", "何て書いて", "何と書いて",
         "映っている", "写っている", "誰ですか", "誰なの",
+        # 2026-08-22追加：カメラ越しの外国語翻訳用
+        "翻訳して", "訳して", "日本語にして", "日本語で何",
+        "何語", "英語で", "これ読んで", "読める？",
     ]
     user_text = ""
     if last_human:
@@ -358,12 +361,21 @@ async def synthesizer_node(state: RukirukiState) -> dict:
             "会話履歴に含まれていない、もっと前の記録を聞かれた場合のみツールを使ってください。)"
         )
 
+    translation_keywords = ["翻訳して", "訳して", "日本語にして", "日本語で何", "何語", "英語で", "これ読んで", "読める？"]
+    has_translation_intent = any(kw in user_text for kw in translation_keywords) if user_text else False
+
     if image_base64 and (has_vision_intent or is_initial or not user_text):
         if not image_base64.startswith("data:image/"):
             image_base64 = f"data:image/jpeg;base64,{image_base64}"
         vision_text = user_text if user_text else "これ見て、何かわかる？"
         if not is_initial:
             vision_text += "\n\n(※システム絶対指示: 画像内のARカード等は完全無視し、現実の物体のみに言及してください。)"
+        if has_translation_intent:
+            vision_text += (
+                "\n\n(※システム注記: 画像内に外国語の文字（看板・メニュー・標識等）があれば、"
+                "①何語か②原文③日本語訳、の順で簡潔に答えてください。文字が見当たらない場合は"
+                "その旨を伝えてください。)"
+            )
         messages.append(HumanMessage(content=[
             {"type": "text", "text": vision_text},
             {"type": "image_url", "image_url": {"url": image_base64, "detail": "high"}}
