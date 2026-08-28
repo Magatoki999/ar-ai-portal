@@ -506,6 +506,16 @@ async def chat_endpoint(payload: ChatMessage):
 
     await state.manager.broadcast({"type": "status", "status": "thinking"})
 
+    # ── G2スマートグラスからの召喚 ──
+    is_glasses_summon = user_text == "[GLASSES_SUMMON]"
+
+    if is_glasses_summon:
+        user_text = (
+            "（システム絶対指示：まがときさんがスマートグラスからあなたを呼び出しました。"
+            "ARカードやカメラについては言及せず、すぐそばに現れたような自然な短い挨拶を、"
+            "親しみのある丁寧語で返してください。URLの出力は厳禁です。）"
+        )
+
     # ── 初期挨拶置換 ──
     is_initial_greeting = user_text == "[INITIAL_GREETING]"
     if is_initial_greeting:
