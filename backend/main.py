@@ -229,6 +229,8 @@ from services.glasses.voice_stream import router as glasses_router
 app.include_router(glasses_router)
 from services.glasses.hud_status import router as glasses_hud_router
 app.include_router(glasses_hud_router)
+from services.glasses.stt import router as glasses_stt_router
+app.include_router(glasses_stt_router)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic モデル
