@@ -20,6 +20,33 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter()
 
 
+def _analyze_pcm16le(pcm: bytes) -> dict:
+    peak = 0
+    sum_sq = 0
+    samples = 0
+    non_zero = 0
+
+    usable = len(pcm) - (len(pcm) % 2)
+    for i in range(0, usable, 2):
+        sample = int.from_bytes(pcm[i:i+2], byteorder="little", signed=True)
+        a = abs(sample)
+        if a > peak:
+            peak = a
+        if sample != 0:
+            non_zero += 1
+        sum_sq += sample * sample
+        samples += 1
+
+    rms = (sum_sq / samples) ** 0.5 if samples else 0.0
+    return {
+        "bytes": len(pcm),
+        "samples": samples,
+        "peak": peak,
+        "rms": round(rms, 1),
+        "non_zero": non_zero,
+    }
+
+
 def _pcm_to_wav(pcm: bytes) -> bytes:
     """Wrap raw G2 PCM (s16le, 16 kHz, mono) in a WAV container."""
     buf = io.BytesIO()
@@ -94,9 +121,12 @@ async def glasses_transcribe(request: Request):
         raise HTTPException(status_code=413, detail="audio too long")
 
     try:
+        stats = _analyze_pcm16le(pcm)
+        print(f"[G2 STT] PCM stats: {stats}")
         wav_bytes = _pcm_to_wav(pcm)
         text = await asyncio.to_thread(_transcribe_sync, wav_bytes)
-        return {"text": text}
+        print(f"[G2 STT] transcript={text!r}")
+        return {"text": text, "pcm": stats}
     except Exception as e:
         print(f"[G2 STT] {e}")
         raise HTTPException(status_code=500, detail=str(e))
