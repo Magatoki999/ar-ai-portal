@@ -91,7 +91,7 @@ from services.scheduler import (
 )
 from services.reminders import get_upcoming_reminders
 from services.health import save_daily_steps, get_recent_steps, build_step_context, get_step_history
-from services.journey import apply_daily_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count, get_journey_full_status, compose_haiku_for_current_station, reset_journey
+from services.journey import apply_daily_steps, apply_realtime_steps, announce_milestone, get_journey_status, get_journey_progress, current_position, journey_day_count, get_journey_full_status, compose_haiku_for_current_station, reset_journey
 from services.weather_radar import fetch_radar_tile
 from services.profile import build_memory_base
 from services.user_growth import get_recent_growth_notes
@@ -1053,6 +1053,55 @@ async def weather_radar_endpoint():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# M5Atom リアルタイム歩数エンドポイント
+# PulseBLEBridge がまとめた「増分歩数」だけを受け取り、既存の東海道ロジックへ流す。
+# M5側のセッション累積値そのものは加算しないため、再起動時の0リセットで旅が戻らない。
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/m5_steps")
+async def m5_steps_endpoint(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "error", "detail": "invalid json"}
+
+    expected_secret = os.getenv("M5_STEP_WEBHOOK_SECRET") or os.getenv("HEALTH_WEBHOOK_SECRET")
+    if not expected_secret or payload.get("secret") != expected_secret:
+        return {"status": "error", "detail": "invalid secret"}
+
+    try:
+        delta_steps = int(payload.get("delta_steps", 0))
+    except (TypeError, ValueError):
+        return {"status": "error", "detail": "invalid delta_steps"}
+
+    if delta_steps <= 0 or delta_steps > 5000:
+        return {"status": "error", "detail": "delta_steps out of range"}
+
+    # G2の歩数表示はM5の当日/セッション累積値を優先して即時更新できる。
+    session_steps = payload.get("session_steps")
+    if session_steps is not None:
+        try:
+            state.latest_step_count = max(0, int(session_steps))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        milestone = await apply_realtime_steps(delta_steps)
+        if milestone:
+            await announce_milestone(milestone)
+    except Exception as e:
+        print(f"[M5歩数] 旅の進捗反映エラー: {e}")
+        return {"status": "error", "detail": "journey update failed"}
+
+    return {
+        "status": "ok",
+        "delta_steps": delta_steps,
+        "session_steps": state.latest_step_count,
+        "journey_summary": state.latest_journey_summary,
+        "journey_ratio": state.latest_journey_ratio,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 歩数Webhookエンドポイント（iOSショートカットの個人用オートメーションから叩かれる）
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/health_update")
@@ -1078,8 +1127,10 @@ async def health_update_endpoint(request: Request):
     ok = await save_daily_steps(date, steps)
     print(f"[歩数Webhook] {date} → {steps}歩 ({'成功' if ok else '失敗'})")
 
-    # 東海道の旅シミュレーション：歩数を距離に加算し、新しく宿場を通過していれば報告
-    if ok:
+    # 東海道の旅シミュレーション。
+    # JOURNEY_STEP_SOURCE=m5 のときはHealthKitを記録用途だけに残し、旅には二重加算しない。
+    journey_step_source = os.getenv("JOURNEY_STEP_SOURCE", "healthkit").strip().lower()
+    if ok and journey_step_source != "m5":
         try:
             milestone = await apply_daily_steps(steps)
             if milestone:

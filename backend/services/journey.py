@@ -299,6 +299,17 @@ def current_position(total_distance_km: float) -> dict:
     }
 
 
+async def apply_realtime_steps(delta_steps: int, stride_m: float = DEFAULT_STRIDE_M) -> dict | None:
+    """
+    M5Atomなどのリアルタイム歩数源から届いた「増分歩数」だけを旅へ反映する。
+    既存の apply_daily_steps() と同じ進捗・宿場判定・G2キャッシュ更新を再利用する。
+    delta_steps <= 0 は無視する。
+    """
+    if delta_steps <= 0:
+        return None
+    return await apply_daily_steps(delta_steps, stride_m)
+
+
 async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> dict | None:
     """
     その日の歩数を旅の進捗に反映する。services/health.py の save_daily_steps 成功時に
