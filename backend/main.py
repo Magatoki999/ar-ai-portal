@@ -19,7 +19,7 @@ load_dotenv()                                    # ← ここに移動（import�
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -1062,19 +1062,19 @@ async def m5_steps_endpoint(request: Request):
     try:
         payload = await request.json()
     except Exception:
-        return {"status": "error", "detail": "invalid json"}
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "invalid json"})
 
     expected_secret = os.getenv("M5_STEP_WEBHOOK_SECRET") or os.getenv("HEALTH_WEBHOOK_SECRET")
     if not expected_secret or payload.get("secret") != expected_secret:
-        return {"status": "error", "detail": "invalid secret"}
+        return JSONResponse(status_code=401, content={"status": "error", "detail": "invalid secret"})
 
     try:
         delta_steps = int(payload.get("delta_steps", 0))
     except (TypeError, ValueError):
-        return {"status": "error", "detail": "invalid delta_steps"}
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "invalid delta_steps"})
 
     if delta_steps <= 0 or delta_steps > 5000:
-        return {"status": "error", "detail": "delta_steps out of range"}
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "delta_steps out of range"})
 
     # G2の歩数表示はM5の当日/セッション累積値を優先して即時更新できる。
     session_steps = payload.get("session_steps")
@@ -1090,7 +1090,8 @@ async def m5_steps_endpoint(request: Request):
             await announce_milestone(milestone)
     except Exception as e:
         print(f"[M5歩数] 旅の進捗反映エラー: {e}")
-        return {"status": "error", "detail": "journey update failed"}
+        # Non-2xx is intentional: the iPhone bridge can retain/retry the unsent delta.
+        return JSONResponse(status_code=503, content={"status": "error", "detail": "journey update failed"})
 
     return {
         "status": "ok",

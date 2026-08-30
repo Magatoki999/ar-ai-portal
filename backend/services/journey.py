@@ -36,6 +36,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from datetime import datetime, timezone
 import os
+import asyncio
 
 import httpx
 from langchain_core.tools import tool
@@ -171,6 +172,44 @@ async def generate_haiku(station: dict, weather: str | None) -> str | None:
     except Exception as e:
         print(f"[旅] 俳句生成エラー: {e}")
         return None
+
+
+class JourneyProgressReadError(RuntimeError):
+    """Raised when journey_progress cannot be read safely from Supabase."""
+
+
+# Serialize journey read-modify-write cycles inside this Render process.
+# This prevents two near-simultaneous M5 batches from crossing the same station twice.
+_journey_update_lock = asyncio.Lock()
+
+
+async def _get_journey_progress_strict() -> dict:
+    """Read journey progress for a write operation. Never converts a DB failure into 0 km."""
+    url, key = _sb()
+    if not url or not key:
+        raise JourneyProgressReadError("Supabase configuration is missing")
+
+    endpoint = f"{url}/rest/v1/journey_progress?id=eq.1&select=total_distance_km,last_notified_index,started_at"
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+    except Exception as e:
+        raise JourneyProgressReadError(f"Supabase request failed: {e}") from e
+
+    if res.status_code != 200:
+        raise JourneyProgressReadError(
+            f"Supabase returned status={res.status_code}: {res.text[:200]}"
+        )
+
+    rows = res.json()
+    if not rows:
+        raise JourneyProgressReadError("journey_progress id=1 does not exist")
+
+    return {
+        "total_distance_km": float(rows[0].get("total_distance_km", 0.0)),
+        "last_notified_index": int(rows[0].get("last_notified_index", 0)),
+        "started_at": rows[0].get("started_at"),
+    }
 
 
 async def get_journey_progress() -> dict:
@@ -312,47 +351,60 @@ async def apply_realtime_steps(delta_steps: int, stride_m: float = DEFAULT_STRID
 
 async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> dict | None:
     """
-    その日の歩数を旅の進捗に反映する。services/health.py の save_daily_steps 成功時に
-    呼ばれる想定。新しく宿場を1つ以上通過していれば、その通過情報（一番新しいもの）を
-    返す。通過が無ければNoneを返す。
+    歩数の「増分」を旅へ加算する。
+
+    安全策:
+    - 更新時のDB読み込み失敗を0kmとして扱わない。失敗時は保存せず例外にする。
+    - read -> add -> save をロックし、同一Renderプロセス内の並行更新を直列化する。
+    - 通常更新では距離を減らさない。
     """
     from services import state as _state
 
-    progress = await get_journey_progress()
-    old_km = progress["total_distance_km"]
-    new_km = old_km + steps_to_km(steps, stride_m)
-
-    # 初回呼び出し時（started_atが未設定）は今日を旅の開始日として記録する
-    started_at = progress["started_at"]
-    if not started_at:
-        started_at = datetime.now(timezone.utc).date().isoformat()
-
-    # 新しく通過した地点（index）を探す。複数まとめて通過した場合は最新のものだけ通知する
-    # （一気に何日分もまとめて処理された場合等に喋りすぎないため）。
-    crossed_index = progress["last_notified_index"]
-    for i, station in enumerate(TOKAIDO_ROUTE):
-        if i <= progress["last_notified_index"]:
-            continue
-        if station["km"] <= new_km:
-            crossed_index = i
-
-    saved = await save_journey_progress(new_km, crossed_index, started_at)
-    if not saved:
-        # DB保存に失敗した場合、メモリ上のキャッシュ（Even G2表示用）だけを
-        # 進めてしまうとWebページ側（DBを直接読む）とズレてしまうため、
-        # ここで処理を打ち切る。次回のWebhookで再度加算が試みられる。
-        print("[旅] DB保存に失敗したため、今回の進捗反映を見送りました")
+    if steps <= 0:
         return None
 
-    # Even G2の歩数バッジに合体表示するため、通過の有無に関わらず毎回位置情報を更新する
-    pos = current_position(new_km)
-    day_count = _day_count_since(started_at)
-    _state.latest_journey_summary = f"{pos['last_station']['name']} {new_km:.1f}km（第{day_count}日目）"
-    _state.latest_journey_ratio = pos["progress_ratio"]
+    async with _journey_update_lock:
+        progress = await _get_journey_progress_strict()
+        old_km = float(progress["total_distance_km"])
+        delta_km = steps_to_km(steps, stride_m)
+        new_km = old_km + delta_km
 
-    if crossed_index > progress["last_notified_index"]:
-        return TOKAIDO_ROUTE[crossed_index]
-    return None
+        # Defensive guard: a normal step update must never move the journey backwards.
+        if new_km < old_km:
+            raise RuntimeError(
+                f"Journey rollback blocked: old={old_km} new={new_km}"
+            )
+
+        started_at = progress["started_at"]
+        if not started_at:
+            started_at = datetime.now(timezone.utc).date().isoformat()
+
+        crossed_index = progress["last_notified_index"]
+        for i, station in enumerate(TOKAIDO_ROUTE):
+            if i <= progress["last_notified_index"]:
+                continue
+            if station["km"] <= new_km:
+                crossed_index = i
+
+        saved = await save_journey_progress(new_km, crossed_index, started_at)
+        if not saved:
+            raise RuntimeError("journey_progress save failed")
+
+        pos = current_position(new_km)
+        day_count = _day_count_since(started_at)
+        _state.latest_journey_summary = (
+            f"{pos['last_station']['name']} {new_km:.1f}km（第{day_count}日目）"
+        )
+        _state.latest_journey_ratio = pos["progress_ratio"]
+
+        print(
+            f"[旅] 安全加算: {old_km:.3f}km + {delta_km:.3f}km "
+            f"({steps}歩) = {new_km:.3f}km"
+        )
+
+        if crossed_index > progress["last_notified_index"]:
+            return TOKAIDO_ROUTE[crossed_index]
+        return None
 
 
 def _day_count_since(started_at: str) -> int:
