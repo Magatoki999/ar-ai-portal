@@ -1076,11 +1076,14 @@ async def m5_steps_endpoint(request: Request):
     if delta_steps <= 0 or delta_steps > 5000:
         return JSONResponse(status_code=400, content={"status": "error", "detail": "delta_steps out of range"})
 
-    # G2の歩数表示はM5の当日/セッション累積値を優先して即時更新できる。
+    # G2の歩数表示には、iPhone側で日付ごとに永続化した「今日の累積歩数」を優先する。
+    # today_stepsが無い旧クライアントだけsession_stepsへフォールバックする。
+    today_steps = payload.get("today_steps")
     session_steps = payload.get("session_steps")
-    if session_steps is not None:
+    display_steps = today_steps if today_steps is not None else session_steps
+    if display_steps is not None:
         try:
-            state.latest_step_count = max(0, int(session_steps))
+            state.latest_step_count = max(0, int(display_steps))
         except (TypeError, ValueError):
             pass
 
@@ -1096,7 +1099,8 @@ async def m5_steps_endpoint(request: Request):
     return {
         "status": "ok",
         "delta_steps": delta_steps,
-        "session_steps": state.latest_step_count,
+        "session_steps": session_steps,
+        "today_steps": state.latest_step_count,
         "journey_summary": state.latest_journey_summary,
         "journey_ratio": state.latest_journey_ratio,
     }
