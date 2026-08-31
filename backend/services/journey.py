@@ -147,24 +147,43 @@ async def get_weather_at_city(city: str) -> str | None:
 
 
 _HAIKU_PROMPT = (
-    "あなたはXR観測ナビゲーター「ルキルキ」です。東海道を歩いて旅する企画の一環で、"
-    "たった今「{station}」に到着しました。この土地・季節・天気を詠み込んだ、"
-    "松尾芭蕉を意識した五七五の俳句を1句だけ作ってください。\n"
-    "【この土地の情報】{note}\n"
+    "あなたはXR観測ナビゲーター『ルキルキ』です。東海道を歩く旅で、たった今『{station}』に到着しました。\n"
+    "その宿場でしか生まれない五七五の俳句を1句だけ作ってください。\n"
+    "【宿場・土地の情報】{note}\n"
     "【現在の天気】{weather}\n"
-    "【出力ルール】俳句のみを出力してください。前置き・説明・記号は一切不要です。"
+    "【最近の旅の俳句】\n{history}\n"
+    "【作句方針】\n"
+    "・主役は土地、旅路、歴史、街道の気配、人の営み、風景、季節感から選ぶ。\n"
+    "・天気や気温は参考情報に留め、毎回の主題にしない。天候を直接詠まない句も積極的に作る。\n"
+    "・最近の俳句と同じ語、季語、書き出し、結び、情景、発想をできるだけ避ける。\n"
+    "・宿場名を毎回そのまま入れる必要はない。土地固有の特徴が伝わる表現を優先する。\n"
+    "・説明文ではなく、旅の一瞬を切り取った俳句にする。\n"
+    "・古典の模倣になりすぎず、現代の旅人ルキルキの観察眼を少し残す。\n"
+    "【出力ルール】俳句のみ。前置き・解説・括弧・引用符は一切不要。"
 )
 
 
 async def generate_haiku(station: dict, weather: str | None) -> str | None:
-    """到達地・季節・天気を詠み込んだ俳句を1句生成する。失敗時はNone。"""
+    """土地性を主役にし、直近の句との重複を避けて1句生成する。失敗時はNone。"""
     try:
         from services.resilient_llm import build_fast_llm
-        llm = build_fast_llm(temperature=0.9, name="Journey-Haiku")
+
+        recent_logs = await get_haiku_log(limit=5)
+        if recent_logs:
+            history = "\n".join(
+                f"- {log.get('station_name', '')}: {log.get('haiku', '')}"
+                for log in recent_logs
+                if log.get("haiku")
+            )
+        else:
+            history = "（まだ過去の俳句なし）"
+
+        llm = build_fast_llm(temperature=1.0, name="Journey-Haiku")
         prompt = _HAIKU_PROMPT.format(
             station=station["name"],
-            note=station.get("note") or "（特記事項なし）",
-            weather=weather or "（不明）",
+            note=station.get("note") or f"{station.get('city', '')}周辺の東海道宿場",
+            weather=weather or "（不明。天候を無理に詠み込まない）",
+            history=history,
         )
         response = await llm.ainvoke(prompt)
         haiku = response.content.strip()
@@ -172,6 +191,7 @@ async def generate_haiku(station: dict, weather: str | None) -> str | None:
     except Exception as e:
         print(f"[旅] 俳句生成エラー: {e}")
         return None
+
 
 
 class JourneyProgressReadError(RuntimeError):
