@@ -67,11 +67,16 @@ class HudConnectionManager:
 
         self._last_payload = payload
 
-        for connection in self.active_connections:
+        dead_connections: list[WebSocket] = []
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(payload)
             except Exception:
-                pass
+                dead_connections.append(connection)
+        for connection in dead_connections:
+            self.disconnect(connection)
+        if dead_connections:
+            print(f"[G2 HUD] dead connections cleaned: {len(dead_connections)} (active={len(self.active_connections)})")
 
 
 # main.py からもimportして使うシングルトン
@@ -86,8 +91,14 @@ async def glasses_hud_endpoint(websocket: WebSocket):
     （接続維持のため receive_text() で待機するだけ）。
     """
     await glasses_hud_manager.connect(websocket)
+    print(f"[G2 HUD] connected (active={len(glasses_hud_manager.active_connections)})")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[G2 HUD] WebSocket error: {e}")
+    finally:
         glasses_hud_manager.disconnect(websocket)
+        print(f"[G2 HUD] disconnected (active={len(glasses_hud_manager.active_connections)})")
