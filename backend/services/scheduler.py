@@ -84,6 +84,7 @@ def _load_research_keywords() -> dict:
 
 # ─── 定期リサーチジョブ ───
 async def auto_research_job(llm) -> None:
+    # main.py の定期登録は診断中いったん停止。関数自体は将来の手動/低頻度実行用に保持。
     print("─── [脳内情報調査部] クローリング・リサーチを開始します ───")
     keywords_dict = _load_research_keywords()
     if not keywords_dict:

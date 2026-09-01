@@ -13,6 +13,26 @@ import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
+
+def _memory_mb() -> float:
+    """Linux /proc から現在プロセスのRSS(MB)を取得。追加依存なし。"""
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+    return -1.0
+
+
+def _log_memory(label: str) -> None:
+    mb = _memory_mb()
+    if mb >= 0:
+        print(f"[MEM] {label}: {mb:.1f} MB")
+    else:
+        print(f"[MEM] {label}: unavailable")
+
 from dotenv import load_dotenv
 load_dotenv()                                    # ← ここに移動（importの直後、他のservices importより前）
 
@@ -132,6 +152,7 @@ rukiruki_graph = None
 async def lifespan(app: FastAPI):
     global rukiruki_graph
     rukiruki_graph = build_rukiruki_graph()
+    _log_memory("startup after graph")
 
     # Even G2の歩数バッジ用キャッシュを起動時に一度だけDBから初期化する。
     # これが無いと、Render再起動直後は次にhealth_updateが叩かれる（＝翌日0時）
@@ -167,10 +188,14 @@ async def lifespan(app: FastAPI):
         lambda: _run(fetch_weather_job),
         "interval", minutes=30,
     )
-    scheduler.add_job(
-        lambda: _run(auto_research_job, llm),
-        "interval", minutes=15,
-    )
+    # 2026-09-01 診断: 15分ごとの自動Webリサーチは一旦停止。
+    # Tavily検索 + LLM要約 + DB保存を常駐バックエンドで繰り返す必要性が低く、
+    # Render再起動との時間的相関も見えたため、安定性確認中は実行しない。
+    # 必要なら後で「1日1回」または「アプリ起動時」に戻せる。
+    # scheduler.add_job(
+    #     lambda: _run(auto_research_job, llm),
+    #     "interval", minutes=15,
+    # )
     # 2026-08-08: 「1分間無言だったら雑談で話しかける」proactive_talk_jobの定期実行は廃止。
     # 意味のある変化（カレンダー予定・リマインダー期限・天気急変など）があった時だけ
     # 声をかける方針に変更したため。calendar_prep_job/reminder_prep_job/weather_prep_job/
@@ -188,10 +213,16 @@ async def lifespan(app: FastAPI):
         lambda: _run(calendar_upcoming_job),
         "interval", minutes=5,
     )
+    # 無料Renderでもメモリ推移を追える軽量診断ログ。
+    scheduler.add_job(
+        lambda: _log_memory("periodic"),
+        "interval", minutes=5,
+    )
     # ⚠️ calendar_prep_job と daily_ai_news_job は、いずれもRender無料プランのスリープで
     # cronが時刻通りに動かないため、固定時刻のcron登録は廃止。
     # 代わりに [INITIAL_GREETING] 時に呼び出す方式に統一済み
     # （下記 /api/chat 内の is_initial_greeting 分岐を参照）。
+    _log_memory("before scheduler start")
     scheduler.start()
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
     yield
@@ -1411,8 +1442,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "heartbeat", "status": "error"})
 
     except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WebSocket] 接続エラー: {e}")
+    finally:
+        # HUD側と同様、どの切断経路でも死んだ接続を必ず掃除する。
         state.manager.disconnect(websocket)
-        print("[WebSocket] 切断されました。")
+        print(f"[WebSocket] 切断されました。active={len(state.manager.active_connections)}")
 
 # ─────────────────────────────────────────────────────────────────────────
 # アルバム（タイムライン）用エンドポイント
