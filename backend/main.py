@@ -444,6 +444,7 @@ async def _extract_and_save_meal_log_with_photo(
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
+    _log_memory("CHAT start")
     state.last_user_interaction = datetime.now(timezone.utc)
 
     user_text      = payload.message
@@ -794,6 +795,7 @@ async def chat_endpoint(payload: ChatMessage):
         # cancel() する。asyncio.CancelledError は Exception ではなく
         # BaseException のサブクラスなので、resilient_llm.py の except Exception には
         # 捕捉されず安全に上まで伝播する。
+        _log_memory("CHAT before graph")
         state.active_chat_task = asyncio.ensure_future(rukiruki_graph.ainvoke(graph_input))
         try:
             result = await state.active_chat_task
@@ -810,6 +812,7 @@ async def chat_endpoint(payload: ChatMessage):
             }
         finally:
             state.active_chat_task = None
+        _log_memory("CHAT after graph")
         ai_response    = result.get("ai_reply", ai_response)
         spatial_effect = result.get("spatial_effect", "cyber")
         active_memo_ids = result.get("active_memo_ids", active_memo_ids)
@@ -988,13 +991,16 @@ async def chat_endpoint(payload: ChatMessage):
         # 既存のAR側の動作には一切影響しない。
         await glasses_hud_manager.broadcast_hud(facial_emotion, ai_response, user_text)
 
+        _log_memory("CHAT before TTS")
         audio_base64 = await generate_tts(ai_response)
+        _log_memory("CHAT after TTS")
 
     except Exception as e:
         print(f"[LangGraph Error] {e}")
         await state.manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
     await state.manager.broadcast({"type": "status", "status": "idle"})
+    _log_memory("CHAT before response")
 
     audio_mime = (
         "audio/wav"
