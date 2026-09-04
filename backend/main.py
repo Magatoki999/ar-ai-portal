@@ -205,14 +205,10 @@ async def lifespan(app: FastAPI):
     #
     # 2026-08-08追加: 「意味のある変化」の新規2種類。どちらもLLM呼び出しなしの
     # 機械的判定のみなので、他のcron（15分・30分おき）より短い間隔でも問題ない。
-    scheduler.add_job(
-        lambda: _run(spot_proximity_job),
-        "interval", minutes=2,
-    )
-    scheduler.add_job(
-        lambda: _run(calendar_upcoming_job),
-        "interval", minutes=5,
-    )
+    # STEP7.9 TEST: 自律発話を完全停止。スポット接近/予定30分前ジョブは登録しない。
+    # scheduler.add_job(lambda: _run(spot_proximity_job), "interval", minutes=2)
+    # scheduler.add_job(lambda: _run(calendar_upcoming_job), "interval", minutes=5)
+    print("[STEP7.9] autonomous speech jobs: OFF")
     # 無料Renderでもメモリ推移を追える軽量診断ログ。
     scheduler.add_job(
         lambda: _log_memory("periodic"),
@@ -566,7 +562,8 @@ async def chat_endpoint(payload: ChatMessage):
         async def _delayed_calendar_check():
             await asyncio.sleep(8)
             await calendar_prep_job(llm)
-        asyncio.create_task(_delayed_calendar_check())
+        # STEP7.9 TEST: autonomous speech OFF
+        # asyncio.create_task(_delayed_calendar_check())
 
         # AI情報ダイジェストの生成チェック（fire-and-forget）。
         # 当初はAPSchedulerのcronで毎日5:00 JSTに固定実行していたが、
@@ -579,7 +576,8 @@ async def chat_endpoint(payload: ChatMessage):
             await asyncio.sleep(15)
             if await should_generate_ai_news_today():
                 await daily_ai_news_job(llm)
-        asyncio.create_task(_delayed_ai_news_check())
+        # STEP7.9 TEST: autonomous speech OFF
+        # asyncio.create_task(_delayed_ai_news_check())
 
         # 食事リマインダーチェック（fire-and-forget・孤食ロボット機能）。
         # 今が食事時間帯（朝/昼/晩）で、まだ今日その食事の記録が無ければ
@@ -588,7 +586,8 @@ async def chat_endpoint(payload: ChatMessage):
         async def _delayed_meal_check():
             await asyncio.sleep(22)
             await meal_reminder_job(llm)
-        asyncio.create_task(_delayed_meal_check())
+        # STEP7.9 TEST: autonomous speech OFF
+        # asyncio.create_task(_delayed_meal_check())
 
         # 軽量リマインダーの期限通知チェック（fire-and-forget）。
         # calendar_prep_job(8秒) / daily_ai_news_job(15秒) / meal_reminder_job(22秒)
@@ -596,7 +595,8 @@ async def chat_endpoint(payload: ChatMessage):
         async def _delayed_reminder_check():
             await asyncio.sleep(29)
             await reminder_prep_job(llm)
-        asyncio.create_task(_delayed_reminder_check())
+        # STEP7.9 TEST: autonomous speech OFF
+        # asyncio.create_task(_delayed_reminder_check())
 
         # 天気ベースの自発提案チェック（fire-and-forget）。
         # calendar_prep_job(8秒) / daily_ai_news_job(15秒) / meal_reminder_job(22秒) /
@@ -604,7 +604,8 @@ async def chat_endpoint(payload: ChatMessage):
         async def _delayed_weather_check():
             await asyncio.sleep(36)
             await weather_prep_job(llm)
-        asyncio.create_task(_delayed_weather_check())
+        # STEP7.9 TEST: autonomous speech OFF
+        # asyncio.create_task(_delayed_weather_check())
 
     # ── 時刻 / 位置コンテキスト ──
     JST     = timezone(timedelta(hours=+9))
@@ -1418,10 +1419,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     print("[WebSocket] ARマーカー: 認識 → 自発発話を再開")
 
                 elif msg_type == "request_proactive":
-                    print("[WebSocket] フロントエンドから1分間の無言シグナルを受信しました。")
-                    asyncio.create_task(
-                        trigger_proactive_speech(llm, MAGATOKI_KNOWLEDGE)
-                    )
+                    # STEP7.9 TEST: フロントからの無言検知も受信だけして発話しない。
+                    print("[STEP7.9] request_proactive received -> ignored (autonomous speech OFF)")
 
                 elif msg_type == "interrupt":
                     task = state.active_chat_task

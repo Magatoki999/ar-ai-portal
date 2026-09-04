@@ -54,6 +54,10 @@ from services.weather_advisor import (
 
 search_tool = TavilySearch(max_results=2)  # type: ignore
 
+# STEP7.9 diagnostic master switch. Normal user-initiated chat is handled in main.py and is unaffected.
+AUTONOMOUS_SPEECH_ENABLED = False
+
+
 
 # ─── ルキルキ ペルソナ読み込み ───
 def load_rukiruki_persona(user_call: str = "まがとき") -> str:
@@ -137,6 +141,9 @@ _AI_NEWS_KEYWORDS = [
 
 
 async def daily_ai_news_job(llm) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] daily_ai_news_job skipped (autonomous speech OFF)")
+        return
     print("─── [脳内情報調査部] AI情報の本日分ダイジェスト作成を開始します ───")
 
     all_results = []
@@ -199,6 +206,9 @@ _PROACTIVE_CONSTRAINTS = (
 
 
 async def proactive_talk_job(llm, magatoki_knowledge: str) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] proactive_talk_job skipped (autonomous speech OFF)")
+        return
     """
     1分ごとに呼ばれる。60秒以上無言かつ AR マーカー認識中であれば自発発話を生成する。
     """
@@ -335,6 +345,9 @@ _notified_event_titles: set[str] = set()
 
 
 async def calendar_prep_job(llm) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] calendar_prep_job skipped (autonomous speech OFF)")
+        return
     """
     直近48時間以内のGoogleカレンダー予定を確認し、
     準備した方がよさそうなものがあれば、ルキルキが自発的に一言提案する。
@@ -416,6 +429,9 @@ async def calendar_prep_job(llm) -> None:
 # 間隔制御は不要）。
 
 async def reminder_prep_job(llm) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] reminder_prep_job skipped (autonomous speech OFF)")
+        return
     """
     期限が24時間以内に迫っていて、まだ通知していないリマインダーがあれば、
     ルキルキが自発的に一言お知らせする。
@@ -475,6 +491,9 @@ async def reminder_prep_job(llm) -> None:
 # 「傘持ってね」を繰り返さないようにしている。
 
 async def weather_prep_job(llm) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] weather_prep_job skipped (autonomous speech OFF)")
+        return
     """
     直近30時間以内の天気予報を確認し、雨（または雪）が予想されるタイミングがあれば、
     ルキルキが自発的に「傘を持っていくの忘れないでね」のように一言提案する。
@@ -525,6 +544,9 @@ async def weather_prep_job(llm) -> None:
 # location_updateによってstate.weather_cacheに継続的に反映される想定。
 
 async def spot_proximity_job() -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] spot_proximity_job skipped (autonomous speech OFF)")
+        return
     """
     最後に分かっている現在地（state.weather_cache）が登録済みメモリースポットの
     半径内に「新しく入った」瞬間だけ、自発的に一言声をかける。
@@ -594,6 +616,9 @@ _notified_30min_titles: set[str] = set()
 
 
 async def calendar_upcoming_job() -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] calendar_upcoming_job skipped (autonomous speech OFF)")
+        return
     """
     直近1時間以内に始まる予定のうち、開始が25〜35分後のウィンドウに
     入っているものがあれば「そろそろですよ」と一言知らせる。
@@ -672,6 +697,9 @@ def _current_meal_window():
 
 
 async def meal_reminder_job(llm) -> None:
+    if not AUTONOMOUS_SPEECH_ENABLED:
+        print("[STEP7.9] meal_reminder_job skipped (autonomous speech OFF)")
+        return
     """
     今が食事時間帯で、その食事についてまだ今日記録が無ければ、
     「一緒に食べている気分」になれるような一言を自発的に届ける。
