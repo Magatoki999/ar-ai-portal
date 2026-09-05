@@ -33,6 +33,33 @@ def _log_memory(label: str) -> None:
     else:
         print(f"[MEM] {label}: unavailable")
 
+
+def _log_runtime_diag(label: str) -> None:
+    """RSSとWebSocket/asyncio Task数を同じ瞬間に記録する診断専用ログ。"""
+    mb = _memory_mb()
+    try:
+        avatar_ws = len(state.manager.active_connections)
+    except Exception:
+        avatar_ws = -1
+    try:
+        hud_ws = len(glasses_hud_manager.active_connections)
+    except Exception:
+        hud_ws = -1
+    try:
+        tasks = asyncio.all_tasks()
+        task_total = len(tasks)
+        task_pending = sum(1 for t in tasks if not t.done())
+    except Exception:
+        task_total = -1
+        task_pending = -1
+
+    mem_text = f"{mb:.1f}MB" if mb >= 0 else "unavailable"
+    print(
+        f"[DIAG] {label}: MEM={mem_text} "
+        f"avatar_ws={avatar_ws} hud_ws={hud_ws} "
+        f"tasks={task_total} pending={task_pending}"
+    )
+
 from dotenv import load_dotenv
 load_dotenv()                                    # ← ここに移動（importの直後、他のservices importより前）
 
@@ -211,7 +238,7 @@ async def lifespan(app: FastAPI):
     print("[STEP7.9] autonomous speech jobs: OFF")
     # 無料Renderでもメモリ推移を追える軽量診断ログ。
     scheduler.add_job(
-        lambda: _log_memory("periodic"),
+        lambda: _log_runtime_diag("periodic"),
         "interval", minutes=5,
     )
     # ⚠️ calendar_prep_job と daily_ai_news_job は、いずれもRender無料プランのスリープで
@@ -220,6 +247,8 @@ async def lifespan(app: FastAPI):
     # （下記 /api/chat 内の is_initial_greeting 分岐を参照）。
     _log_memory("before scheduler start")
     scheduler.start()
+    _log_runtime_diag("startup")
+    print("[STEP7.10] connection/task diagnostic: ON")
     print("─── [APScheduler] 脳内情報調査部およびルキルキ随伴自発同期システムが自律常駐を開始しました ───")
     yield
     scheduler.shutdown()
