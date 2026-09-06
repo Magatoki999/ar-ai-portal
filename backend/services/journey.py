@@ -416,6 +416,12 @@ async def apply_daily_steps(steps: int, stride_m: float = DEFAULT_STRIDE_M) -> d
             f"{pos['last_station']['name']} {new_km:.1f}km（第{day_count}日目）"
         )
         _state.latest_journey_ratio = pos["progress_ratio"]
+        # STEP7.13: M5更新時にG2へ返すため、同じ更新処理で得た値を軽量キャッシュ。
+        # 追加のDB readは発生させない。
+        _state.latest_journey_distance_km = new_km
+        _state.latest_journey_day_count = day_count
+        _state.latest_journey_current_station = pos["last_station"]
+        _state.latest_journey_next_station = pos["next_station"]
 
         print(
             f"[旅] 安全加算: {old_km:.3f}km + {delta_km:.3f}km "
@@ -585,7 +591,7 @@ async def compose_haiku_for_current_station() -> dict | None:
     return {"station_name": station["name"], "weather": weather, "haiku": haiku}
 
 
-async def announce_milestone(station: dict) -> None:
+async def announce_milestone(station: dict) -> str | None:
     # 注意：以前はここで「誰も接続していなければ何もしない」というガードで
     # 早期returnしていたが、それだと俳句の生成・保存まで一緒にスキップされて
     # しまっていた（歩数Webhookは深夜0時台に実行され、その時間にスマホアプリを
@@ -606,7 +612,7 @@ async def announce_milestone(station: dict) -> None:
     # 接続がある時だけ行う（俳句の生成・保存は上ですでに完了している）。
     if not manager.active_connections:
         print(f"[旅] 通過（接続なし、俳句のみ保存）: {station['name']}")
-        return
+        return haiku
 
     audio_base64 = await generate_tts(message)
     audio_mime = (
@@ -623,3 +629,4 @@ async def announce_milestone(station: dict) -> None:
         "spatial_effect": "cyber",
     })
     print(f"[旅] 通過を報告しました: {station['name']}")
+    return haiku

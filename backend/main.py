@@ -200,6 +200,12 @@ async def lifespan(app: FastAPI):
         day_count = journey_day_count(progress["started_at"]) if progress["started_at"] else 1
         state.latest_journey_summary = f"{pos['last_station']['name']} {progress['total_distance_km']:.1f}km（第{day_count}日目）"
         state.latest_journey_ratio = pos["progress_ratio"]
+        state.latest_journey_distance_km = float(progress["total_distance_km"])
+        state.latest_journey_day_count = day_count
+        state.latest_journey_current_station = pos["last_station"]
+        state.latest_journey_next_station = pos["next_station"]
+        if not hasattr(state, "latest_journey_haiku"):
+            state.latest_journey_haiku = ""
     except Exception as e:
         print(f"[起動時] 旅の現在地キャッシュの初期化に失敗しました: {e}")
 
@@ -1157,11 +1163,22 @@ async def m5_steps_endpoint(request: Request):
     try:
         milestone = await apply_realtime_steps(delta_steps)
         if milestone:
-            await announce_milestone(milestone)
+            new_haiku = await announce_milestone(milestone)
+            if new_haiku:
+                state.latest_journey_haiku = new_haiku
     except Exception as e:
         print(f"[M5歩数] 旅の進捗反映エラー: {e}")
         # Non-2xx is intentional: the iPhone bridge can retain/retry the unsent delta.
         return JSONResponse(status_code=503, content={"status": "error", "detail": "journey update failed"})
+
+    # STEP7.13: /api/journey/status をG2からpollしない。
+    # apply_realtime_steps() が同じ更新処理内で作った軽量キャッシュだけを返す。
+    distance_km = float(getattr(state, "latest_journey_distance_km", 0.0) or 0.0)
+    ratio = float(getattr(state, "latest_journey_ratio", 0.0) or 0.0)
+    current_station = getattr(state, "latest_journey_current_station", None) or {}
+    next_station = getattr(state, "latest_journey_next_station", None)
+    next_km = next_station.get("km") if isinstance(next_station, dict) else None
+    remaining_km = max(0.0, float(next_km) - distance_km) if next_km is not None else 0.0
 
     return {
         "status": "ok",
@@ -1169,7 +1186,16 @@ async def m5_steps_endpoint(request: Request):
         "session_steps": session_steps,
         "today_steps": state.latest_step_count,
         "journey_summary": state.latest_journey_summary,
-        "journey_ratio": state.latest_journey_ratio,
+        "journey_ratio": ratio,
+        "journey": {
+            "total_distance_km": distance_km,
+            "progress_ratio": ratio,
+            "day_count": int(getattr(state, "latest_journey_day_count", 1) or 1),
+            "current_station": current_station.get("name", "") if isinstance(current_station, dict) else "",
+            "next_station": next_station.get("name", "") if isinstance(next_station, dict) else "",
+            "remaining_km": remaining_km,
+            "haiku": str(getattr(state, "latest_journey_haiku", "") or ""),
+        },
     }
 
 
