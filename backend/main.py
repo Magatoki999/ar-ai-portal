@@ -739,9 +739,14 @@ async def chat_endpoint(payload: ChatMessage):
             "名前を教えてもらったら ||NAME:名前|| タグを使って保存してください。\n"
         )
     else:
+        # STEP7.14: G2はウォレットを持たない常用端末。
+        # wallet_address=None を「知らないユーザー」と扱うと、既知の対話相手まで忘れたように振る舞う。
+        # 個人用G2セッションでは既定の呼び名を使い、認証要求はしない。
         identity_context = (
             "【対話コンテキスト】\n"
-            "まだウォレット接続が確認できていません。認証を促してください。\n"
+            f"現在の対話相手は、この個人用ルキルキ環境の『{user_call}』さんです。\n"
+            f"対話相手の呼び名: 『{user_call}』さん\n"
+            "ウォレット未接続を理由に、名前を忘れた・初対面だとは扱わないでください。\n"
         )
 
     base_persona        = load_rukiruki_persona(user_call)
