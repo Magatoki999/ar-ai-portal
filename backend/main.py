@@ -771,9 +771,10 @@ async def chat_endpoint(payload: ChatMessage):
                 history_messages.append(AIMessage(content=item.text))
 
     # ── Vision 対応メッセージ組み立て ──
-    vision_keywords = ["見て", "みてください", "なに", "何", "これ", "写っ", "映っ", "視覚"]
-    has_vision_intent = any(kw in user_text for kw in vision_keywords) if user_text else False
-    if image_base64 and (has_vision_intent or is_initial_greeting or not user_text):
+    # STEP7.15: G2/iPhone camera is one-shot. If an image is attached to this turn,
+    # always treat the turn as Vision input. Do not gate it by transcript keywords.
+    # This avoids losing camera understanding for phrases such as 「どう？」「これは？」.
+    if image_base64:
         if not image_base64.startswith("data:image/"):
             image_base64 = f"data:image/jpeg;base64,{image_base64}"
         vision_text = user_text if user_text else "これ見て、何かわかる？"
