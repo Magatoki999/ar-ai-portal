@@ -309,6 +309,9 @@ class ChatMessage(BaseModel):
     image_base64: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    # STEP7.21: iPhone側で逆ジオコーディング済みの現在地名。
+    # 未送信なら既存スマホ版の挙動をそのまま維持する。
+    location_name: str | None = None
     history: list[HistoryItem] | None = None
 
 
@@ -483,6 +486,7 @@ async def chat_endpoint(payload: ChatMessage):
     image_base64   = payload.image_base64
     lat            = payload.latitude
     lng            = payload.longitude
+    location_name  = (payload.location_name or "").strip()[:120]
 
     # ── 場所登録フロー（2ターン完結） ──
     register_keywords = ["ここを登録", "この場所を登録", "登録して", "ここを覚えて", "ここを刻んで"]
@@ -648,13 +652,36 @@ async def chat_endpoint(payload: ChatMessage):
     time_context     = f"【現在の観測日時（日本時間）】\n現在時刻: {now_str}\n\n"
     location_context = ""
     if lat is not None and lng is not None:
-        sector_info      = judge_magatoki_sector(lat, lng)
-        location_context = (
-            f"【現在の観測位置（GPS空間同期）】\n"
-            f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
-            f"識別セクター: {sector_info}\n\n"
-        )
+        sector_info = judge_magatoki_sector(lat, lng)
+
+        if location_name:
+            # STEP7.21: G2経路ではiPhoneで地名まで解決済み。
+            # 現在地質問のためだけにBackend側で外部逆ジオコーディングを呼ばせない。
+            location_context = (
+                f"【現在の観測位置（iPhone GPS空間同期）】\n"
+                f"現在地名: {location_name}\n"
+                f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
+                f"識別セクター: {sector_info}\n"
+                "現在地名はiPhoneが取得したGPSを元に解決済みの一次情報です。\n"
+                "ユーザーに現在地を尋ねられた場合は、この現在地名を優先して自然に答えてください。\n"
+                "このターンでは現在地特定のために locate_current_position ツールや外部逆ジオコーディングを呼び出さないでください。\n\n"
+            )
+        else:
+            # 既存スマホ版など location_name 未送信の経路は従来挙動を維持する。
+            location_context = (
+                f"【現在の観測位置（GPS空間同期）】\n"
+                f"現在の座標: 緯度 {lat} / 経度 {lng}\n"
+                f"識別セクター: {sector_info}\n\n"
+            )
+
         asyncio.create_task(fetch_weather_by_location(lat, lng))
+    elif location_name:
+        location_context = (
+            f"【現在の観測位置（iPhone位置情報）】\n"
+            f"現在地名: {location_name}\n"
+            "ユーザーに現在地を尋ねられた場合は、この現在地名を優先して答えてください。\n"
+            "このターンでは現在地特定のために locate_current_position ツールや外部逆ジオコーディングを呼び出さないでください。\n\n"
+        )
 
     # ── メモリースポット ──
     nearby_spot = None
