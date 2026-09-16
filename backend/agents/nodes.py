@@ -44,6 +44,7 @@ llm_fast = build_fast_llm(temperature=0.7, name="Nodes-FAST-LLM")
 search_tool = TavilySearch(max_results=2)  # type: ignore
 
 from services.location import locate_current_position
+from services.emotion import get_weather_forecast
 from services.calendar import get_my_schedule
 from services.memory import get_today_ai_news
 from services.books import get_book_history
@@ -266,7 +267,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
     system_constraints = build_dynamic_constraints(user_call, state.get("episode_context", ""))
     main_search_tool   = search_tool
     llm_with_tools     = llm_synth.bind_tools(
-        [search_tool, locate_current_position, get_my_schedule, get_today_ai_news,
+        [search_tool, locate_current_position, get_weather_forecast, get_my_schedule, get_today_ai_news,
          get_book_history, get_video_prompt_memories, log_watched_movie, get_movie_history,
          find_nearby_places, set_reminder, get_my_reminders, complete_reminder,
          log_user_growth, get_user_growth_notes, get_step_history, get_journey_status, get_haiku_history]
@@ -426,6 +427,18 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                         content=str(address_result),
                         tool_call_id=str(tool_call["id"])
                     ))
+                elif tool_call["name"] == "get_weather_forecast":
+                    # STEP7.22: iPhone/G2から渡された現在座標を優先して天気予報を取得する。
+                    # 住所の逆ジオコーディングは行わない。
+                    t_lat = tool_call["args"].get("lat", lat)
+                    t_lng = tool_call["args"].get("lng", lng)
+                    days = tool_call["args"].get("days", 2)
+                    forecast_result = await get_weather_forecast(t_lat, t_lng, days)
+                    messages.append(ToolMessage(
+                        content=str(forecast_result),
+                        tool_call_id=str(tool_call["id"])
+                    ))
+
                 elif tool_call["name"] == "get_my_schedule":
                     schedule_result = await get_my_schedule.ainvoke(tool_call["args"])
                     messages.append(ToolMessage(

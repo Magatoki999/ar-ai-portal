@@ -83,6 +83,98 @@ async def fetch_weather_by_location(lat: float, lng: float) -> None:
         print(f"[天気取得エラー] {e}")
 
 
+async def get_weather_forecast(lat: float, lng: float, days: int = 2) -> str:
+    """
+    現在地の天気予報を OpenWeatherMap から取得する。
+    会話中の「明日の天気」などへの回答用。
+    逆ジオコーディングは行わず、iPhone/G2から渡された緯度経度を直接使用する。
+    """
+    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+    if not api_key or lat is None or lng is None:
+        return "天気予報を取得できませんでした。"
+
+    url = (
+        "https://api.openweathermap.org/data/2.5/forecast"
+        f"?lat={lat}&lon={lng}&appid={api_key}&units=metric&lang=ja"
+    )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url, timeout=5.0)
+
+        if res.status_code != 200:
+            print(f"[天気予報エラー] status={res.status_code}")
+            return "天気予報を取得できませんでした。"
+
+        data = res.json()
+        forecasts = data.get("list", [])
+
+        JST = timezone(timedelta(hours=9))
+        now_jst = datetime.now(JST)
+        today = now_jst.date()
+
+        target_dates = {
+            today + timedelta(days=i)
+            for i in range(max(1, days))
+        }
+
+        grouped: dict = {}
+
+        for item in forecasts:
+            dt_utc = datetime.fromtimestamp(item["dt"], tz=timezone.utc)
+            dt_jst = dt_utc.astimezone(JST)
+            forecast_date = dt_jst.date()
+
+            if forecast_date not in target_dates:
+                continue
+
+            grouped.setdefault(forecast_date, []).append(
+                {
+                    "time": dt_jst,
+                    "temp": item["main"]["temp"],
+                    "description": item["weather"][0]["description"],
+                }
+            )
+
+        if not grouped:
+            return "天気予報データが見つかりませんでした。"
+
+        city = weather_cache.get("city") or data.get("city", {}).get("name", "現在地")
+        lines = ["【現在地の天気予報】"]
+
+        for forecast_date in sorted(grouped):
+            items = grouped[forecast_date]
+            temps = [x["temp"] for x in items]
+            min_temp = round(min(temps), 1)
+            max_temp = round(max(temps), 1)
+
+            representative = min(
+                items,
+                key=lambda x: abs(x["time"].hour - 12)
+            )
+
+            if forecast_date == today:
+                date_label = "今日"
+            elif forecast_date == today + timedelta(days=1):
+                date_label = "明日"
+            else:
+                date_label = forecast_date.strftime("%m月%d日")
+
+            lines.append(
+                f"{date_label}: "
+                f"{representative['description']}、"
+                f"最低{min_temp}℃ / 最高{max_temp}℃"
+            )
+
+        result = f"{city}\n" + "\n".join(lines)
+        print(f"[天気予報取得]\n{result}")
+        return result
+
+    except Exception as e:
+        print(f"[天気予報取得エラー] {e}")
+        return "天気予報を取得できませんでした。"
+
+
 async def fetch_weather_job() -> None:
     """APScheduler から呼ばれるスタブ。実際の更新は chat_endpoint 経由で行う。"""
     pass
