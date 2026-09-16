@@ -432,7 +432,7 @@ async def synthesizer_node(state: RukirukiState) -> dict:
                     # 住所の逆ジオコーディングは行わない。
                     t_lat = tool_call["args"].get("lat", lat)
                     t_lng = tool_call["args"].get("lng", lng)
-                    days = tool_call["args"].get("days", 2)
+                    days = max(2, int(tool_call["args"].get("days", 2)))
                     forecast_result = await get_weather_forecast(t_lat, t_lng, days)
                     messages.append(ToolMessage(
                         content=str(forecast_result),
