@@ -203,6 +203,37 @@ class JourneyProgressReadError(RuntimeError):
 _journey_update_lock = asyncio.Lock()
 
 
+# STEP7.20: Journey/Supabase hot path reuses one AsyncClient instead of
+# creating and destroying a fresh client for every M5 step batch.
+# This keeps connection pooling/TLS resources bounded during long walks.
+_journey_http_client: httpx.AsyncClient | None = None
+
+
+def _get_journey_http_client() -> httpx.AsyncClient:
+    global _journey_http_client
+    if _journey_http_client is None or _journey_http_client.is_closed:
+        _journey_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0),
+            limits=httpx.Limits(
+                max_connections=4,
+                max_keepalive_connections=2,
+                keepalive_expiry=30.0,
+            ),
+        )
+        print("[旅] Supabase HTTP client pool initialized")
+    return _journey_http_client
+
+
+async def close_journey_http_client() -> None:
+    """Optional shutdown hook. Safe to call from FastAPI lifespan shutdown."""
+    global _journey_http_client
+    client = _journey_http_client
+    _journey_http_client = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+
 async def _get_journey_progress_strict() -> dict:
     """Read journey progress for a write operation. Never converts a DB failure into 0 km."""
     url, key = _sb()
@@ -211,8 +242,8 @@ async def _get_journey_progress_strict() -> dict:
 
     endpoint = f"{url}/rest/v1/journey_progress?id=eq.1&select=total_distance_km,last_notified_index,started_at"
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        client = _get_journey_http_client()
+        res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
     except Exception as e:
         raise JourneyProgressReadError(f"Supabase request failed: {e}") from e
 
@@ -241,8 +272,8 @@ async def get_journey_progress() -> dict:
 
     endpoint = f"{url}/rest/v1/journey_progress?id=eq.1&select=total_distance_km,last_notified_index,started_at"
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        client = _get_journey_http_client()
+        res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
         if res.status_code != 200:
             return empty
         rows = res.json()
@@ -274,8 +305,8 @@ async def save_journey_progress(total_distance_km: float, last_notified_index: i
     if started_at:
         payload["started_at"] = started_at
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
+        client = _get_journey_http_client()
+        res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
         if res.status_code not in (200, 201):
             print(f"[旅] 進捗保存失敗: status={res.status_code} body={res.text[:200]}")
             return False
@@ -300,18 +331,18 @@ async def reset_journey() -> bool:
 
     # journey_progress を初期値に戻す（started_atも明示的にnullへ）
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.patch(
-                f"{url}/rest/v1/journey_progress?id=eq.1",
-                json={
-                    "total_distance_km": 0,
-                    "last_notified_index": 0,
-                    "started_at": None,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-                headers=headers,
-                timeout=5.0,
-            )
+        client = _get_journey_http_client()
+        res = await client.patch(
+            f"{url}/rest/v1/journey_progress?id=eq.1",
+            json={
+                "total_distance_km": 0,
+                "last_notified_index": 0,
+                "started_at": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            headers=headers,
+            timeout=5.0,
+        )
         if res.status_code not in (200, 204):
             print(f"[旅] リセット(進捗)失敗: status={res.status_code} body={res.text[:200]}")
             ok = False
@@ -321,12 +352,12 @@ async def reset_journey() -> bool:
 
     # journey_haiku_log を全件削除
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.delete(
-                f"{url}/rest/v1/journey_haiku_log?id=gte.0",
-                headers=headers,
-                timeout=5.0,
-            )
+        client = _get_journey_http_client()
+        res = await client.delete(
+            f"{url}/rest/v1/journey_haiku_log?id=gte.0",
+            headers=headers,
+            timeout=5.0,
+        )
         if res.status_code not in (200, 204):
             print(f"[旅] リセット(俳句ログ)失敗: status={res.status_code} body={res.text[:200]}")
             ok = False
@@ -516,8 +547,8 @@ async def save_haiku(station_name: str, km: float, weather: str | None, haiku: s
         "haiku": haiku,
     }
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
+        client = _get_journey_http_client()
+        res = await client.post(endpoint, json=payload, headers=headers, timeout=5.0)
         if res.status_code not in (200, 201):
             print(f"[旅] 俳句保存失敗: status={res.status_code} body={res.text[:200]}")
             return False
@@ -540,8 +571,8 @@ async def get_haiku_log(limit: int = 10) -> list[dict]:
         f"&select=station_name,km,weather,haiku,created_at"
     )
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
+        client = _get_journey_http_client()
+        res = await client.get(endpoint, headers=_sb_headers(), timeout=5.0)
         if res.status_code != 200:
             return []
         return res.json()
