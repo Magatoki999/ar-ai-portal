@@ -21,6 +21,16 @@ from agents.nodes import (
 )
 
 
+def _route_after_evaluation(state: RukirukiState) -> str:
+    # 明示的な画像翻訳では、会話向け採点による再生成を行わない。
+    constraints = state.get("system_constraints_override") or ""
+    marker = "\n\n[Image translation] Read the visible text in the attached image"
+    if state.get("image_base64") and marker in constraints:
+        print("[Image translation] Keeping the first answer after evaluation")
+        return "ok"
+    return should_retry(state)
+
+
 def build_rukiruki_graph():
     """
     ルキルキの思考グラフを構築して返す。
@@ -44,7 +54,7 @@ def build_rukiruki_graph():
     # ─── 条件分岐：品質OK → END / 品質NG → 再試行 ───
     graph.add_conditional_edges(
         "evaluator",
-        should_retry,
+        _route_after_evaluation,
         {
             "ok":    END,
             "retry": "increment_retry"
