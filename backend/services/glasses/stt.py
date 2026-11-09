@@ -74,7 +74,7 @@ def _transcribe_sync(wav_bytes: bytes) -> str:
 
     body = bytearray()
     body += field("model", "gpt-4o-mini-transcribe")
-    body += field("language", "ja")
+    # 発話の言語を自動判定するため、language は送らない。
     body += (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="file"; filename="g2.wav"\r\n'

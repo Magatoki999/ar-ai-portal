@@ -41,7 +41,7 @@ async def generate_elevenlabs_voice(text: str) -> str | None:
 
 
 # ─── Gemini TTS ───
-async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
+async def generate_gemini_tts(text: str, *, language: str | None = None) -> tuple[str, str] | None:
     """
     Gemini Speech Generation API で音声を生成する。
     戻り値: (base64_audio, mime_type) または None
@@ -71,7 +71,10 @@ async def generate_gemini_tts(text: str) -> tuple[str, str] | None:
         return None
 
     # ── スタイル指示（シンプルに短く。長いと400になりやすい） ──
-    style_prefix = "元気よく自然に話してください: "
+    style_prefix = (
+        "Speak the following English text naturally: "
+        if language == "en" else "元気よく自然に話してください: "
+    )
     styled_text = style_prefix + clean_text
     print(f"[Gemini TTS] 送信テキスト({len(clean_text)}文字): {clean_text[:80]}")
 
@@ -193,9 +196,9 @@ async def pcm_to_wav_base64(pcm_b64: str, mime_type: str) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-async def _run_gemini_tts(text: str) -> str | None:
+async def _run_gemini_tts(text: str, *, language: str | None = None) -> str | None:
     """Gemini TTSを実行し、必要ならPCM→WAV変換まで行ってbase64を返す。"""
-    result = await generate_gemini_tts(text)
+    result = await generate_gemini_tts(text, language=language)
     if not result:
         return None
     audio_b64, mime_type = result
@@ -212,7 +215,7 @@ async def _run_gemini_tts(text: str) -> str | None:
 
 
 # ─── 統合ディスパッチャー ───
-async def generate_tts(text: str) -> str | None:
+async def generate_tts(text: str, *, language: str | None = None) -> str | None:
     """
     TTS_PROVIDER 環境変数に応じてプロバイダーを選択する統合関数。
     デフォルト: gemini
@@ -226,10 +229,10 @@ async def generate_tts(text: str) -> str | None:
         if audio:
             return audio
         print("[TTS] ElevenLabs失敗 → Geminiにフォールバック")
-        return await _run_gemini_tts(text)
+        return await _run_gemini_tts(text, language=language)
 
     # gemini（デフォルト）
-    audio = await _run_gemini_tts(text)
+    audio = await _run_gemini_tts(text, language=language)
     if audio:
         return audio
 

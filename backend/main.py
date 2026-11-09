@@ -476,12 +476,40 @@ async def _extract_and_save_meal_log_with_photo(
 # ─────────────────────────────────────────────────────────────────────────────
 # チャットエンドポイント
 # ─────────────────────────────────────────────────────────────────────────────
+_JP_SCRIPT = re.compile(r"[ぁ-ゟァ-ヿ㐀-䶿一-鿿]")
+_EN_RETRY = "I couldn't finish that reply. Could you ask me again?"
+
+
+def _english_turn(message: str, history: list[HistoryItem] | None) -> bool:
+    # 現在の発話を優先し、言語の手掛かりが薄い相づちだけ履歴を参照。
+    def classify(text: str) -> bool | None:
+        if _JP_SCRIPT.search(text):
+            return False
+        words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text.lower())
+        if not words or words in (["ok"], ["okay"]):
+            return None
+        return True
+
+    if message in {"[GLASSES_SUMMON]", "[INITIAL_GREETING]"}:
+        return False
+    language = classify(message)
+    if language is not None:
+        return language
+    for item in reversed(history or []):
+        if item.role == "user":
+            language = classify(item.text)
+            if language is not None:
+                return language
+    return False
+
+
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
     _log_memory("CHAT start")
     state.last_user_interaction = datetime.now(timezone.utc)
 
     user_text      = payload.message
+    english        = _english_turn(user_text, payload.history)
     wallet_address = payload.wallet_address
     image_base64   = payload.image_base64
     lat            = payload.latitude
@@ -509,8 +537,13 @@ async def chat_endpoint(payload: ChatMessage):
             if success
             else "ごめんなさい、登録に失敗しました。もう一度試してみてください。||EFFECT:cyber||"
         )
+        if english:
+            reply_text = (
+                "I've registered this place. Next time you visit, I'll ask if you want to save a memory."
+                if success else "I couldn't register this place. Please try again."
+            )
         await state.manager.broadcast({"type": "status", "status": "talking", "text": reply_text})
-        audio = await generate_tts(reply_text)
+        audio = await generate_tts(reply_text, language="en" if english else None)
         await state.manager.broadcast({"type": "status", "status": "idle"})
         return {
             "reply":          re.sub(r"\|\|EFFECT:.*?\|\|", "", reply_text).strip(),
@@ -531,11 +564,13 @@ async def chat_endpoint(payload: ChatMessage):
             "lng":    pending_data["lng"],
         }
         ask_text = f"『{spot_name}』ですね！ひらがなで読み方を教えてもらえますか？||EFFECT:cyber||"
+        if english:
+            ask_text = "How do you pronounce that name? Please give me the reading in hiragana."
         await state.manager.broadcast({"type": "status", "status": "talking", "text": ask_text})
-        audio = await generate_tts(ask_text)
+        audio = await generate_tts(ask_text, language="en" if english else None)
         await state.manager.broadcast({"type": "status", "status": "idle"})
         return {
-            "reply":          f"『{spot_name}』ですね！ひらがなで読み方を教えてもらえますか？",
+            "reply":          re.sub(r"\|\|EFFECT:.*?\|\|", "", ask_text).strip(),
             "audio_data":     audio,
             "spatial_effect": "cyber",
             "spot_proposal":  "",
@@ -778,6 +813,15 @@ async def chat_endpoint(payload: ChatMessage):
 
     base_persona        = load_rukiruki_persona(user_call)
     dynamic_constraints = build_dynamic_constraints(user_call, episode_context)
+    if english:
+        dynamic_constraints += (
+            "\n\n[Response language] The current question is in English. "
+            "Write all user-facing prose in English, even when history or reference material is Japanese. "
+            "Romanize Japanese proper names in the prose. Preserve machine-readable tags and their values."
+        )
+
+    elif _JP_SCRIPT.search(payload.message):
+        dynamic_constraints += "\n\n【回答言語】今回の質問に合わせ、日本語で回答してください。"
 
     # ── エージェントメモ取得 ──
     fetched_memos, active_memo_ids = await get_active_agent_memos(
@@ -816,6 +860,9 @@ async def chat_endpoint(payload: ChatMessage):
 
     # ── LangGraph 呼び出し ──
     ai_response    = "あ、すみません！空間ノイズで同期が一瞬ブレちゃいました。もう一回言ってください？"
+    if english:
+        ai_response = _EN_RETRY
+    facial_emotion = "neutral"
     spatial_effect = "cyber"
     audio_base64   = None
     result: dict   = {}
@@ -1049,7 +1096,12 @@ async def chat_endpoint(payload: ChatMessage):
         if active_memo_ids:
             await mark_memos_as_consumed(active_memo_ids)
 
-        if _used_fallback:
+        if english:
+            visible_reply = re.sub(r"\|\|.*?\|\|", "", ai_response).strip()
+            if not re.search(r"[A-Za-z]", visible_reply) or _JP_SCRIPT.search(visible_reply):
+                print("[Chat] English turn received a reply outside the expected language")
+                ai_response = _EN_RETRY
+        if _used_fallback and not english:
             ai_response = f"{ai_response}\n{random.choice(FALLBACK_QUIPS)}"
             print("[フォールバック通知] 今回はGemini→OpenAIの自動フォールバックが発生しました")
 
@@ -1061,11 +1113,15 @@ async def chat_endpoint(payload: ChatMessage):
         await glasses_hud_manager.broadcast_hud(facial_emotion, ai_response, user_text)
 
         _log_memory("CHAT before TTS")
-        audio_base64 = await generate_tts(ai_response)
+        audio_base64 = await generate_tts(ai_response, language="en" if english else None)
         _log_memory("CHAT after TTS")
 
     except Exception as e:
         print(f"[LangGraph Error] {e}")
+        if english:
+            ai_response = _EN_RETRY
+            await glasses_hud_manager.broadcast_hud("neutral", ai_response, user_text)
+            audio_base64 = await generate_tts(ai_response, language="en")
         await state.manager.broadcast({"type": "status", "status": "talking", "text": ai_response})
 
     await state.manager.broadcast({"type": "status", "status": "idle"})
