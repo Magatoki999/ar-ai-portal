@@ -528,6 +528,7 @@ async def chat_endpoint(payload: ChatMessage):
     wallet_address = payload.wallet_address
     image_base64   = payload.image_base64
     translation_language = _image_translation_language(user_text) if image_base64 else None
+    print(f"[CAMERA CHECK] attached={bool(image_base64)} base64_chars={len(image_base64 or '')} target={translation_language or '-'}", flush=True)
     english = (
         translation_language == "en"
         if translation_language is not None
