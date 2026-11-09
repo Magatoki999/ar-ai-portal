@@ -503,15 +503,36 @@ def _english_turn(message: str, history: list[HistoryItem] | None) -> bool:
     return False
 
 
+
+def _image_translation_language(message: str) -> str | None:
+    """画像翻訳の依頼で明示された日英の翻訳先を返す。"""
+    japanese = re.search(
+        r"(英語|日本語)\s*(?:に|へ|で)\s*(?:翻訳|訳し|訳す|訳せ|訳を)"
+        r"|(英訳|和訳)\s*(?:して|しろ|お願い|を|できる|[。！？!?]|$)",
+        message,
+    )
+    if japanese:
+        return "en" if (japanese.group(1) or japanese.group(2)) in {"英語", "英訳"} else "ja"
+    english = re.search(r"\btranslate\b[^.!?]*?\b(?:to|into)\s+(English|Japanese)\b", message, re.I)
+    if english:
+        return "en" if english.group(1).lower() == "english" else "ja"
+    return None
+
+
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
     _log_memory("CHAT start")
     state.last_user_interaction = datetime.now(timezone.utc)
 
     user_text      = payload.message
-    english        = _english_turn(user_text, payload.history)
     wallet_address = payload.wallet_address
     image_base64   = payload.image_base64
+    translation_language = _image_translation_language(user_text) if image_base64 else None
+    english = (
+        translation_language == "en"
+        if translation_language is not None
+        else _english_turn(user_text, payload.history)
+    )
     lat            = payload.latitude
     lng            = payload.longitude
     location_name  = (payload.location_name or "").strip()[:120]
@@ -815,13 +836,20 @@ async def chat_endpoint(payload: ChatMessage):
     dynamic_constraints = build_dynamic_constraints(user_call, episode_context)
     if english:
         dynamic_constraints += (
-            "\n\n[Response language] The current question is in English. "
+            "\n\n[Response language] "
             "Write all user-facing prose in English, even when history or reference material is Japanese. "
             "Romanize Japanese proper names in the prose. Preserve machine-readable tags and their values."
         )
 
-    elif _JP_SCRIPT.search(payload.message):
-        dynamic_constraints += "\n\n【回答言語】今回の質問に合わせ、日本語で回答してください。"
+    elif translation_language == "ja" or _JP_SCRIPT.search(payload.message):
+        dynamic_constraints += "\n\n【回答言語】日本語で回答してください。"
+
+    if translation_language:
+        dynamic_constraints += (
+            "\n\n[Image translation] Read the visible text in the attached image and translate it "
+            "into the specified response language. Return the translation without repeating the source. "
+            "If the text is illegible, say so in the specified language without guessing."
+        )
 
     # ── エージェントメモ取得 ──
     fetched_memos, active_memo_ids = await get_active_agent_memos(
