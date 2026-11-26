@@ -1,5 +1,6 @@
 """Text replies for the Magatoki bear via the Meta Model API."""
 import os
+import hashlib
 
 import httpx
 
@@ -44,6 +45,8 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
         if choice.get("finish_reason") != "stop" or not isinstance(reply, str) or not reply.strip():
             raise ValueError("Muse returned an incomplete or empty reply")
     except httpx.HTTPStatusError as exc:
+        key_id = hashlib.sha256(key.encode()).hexdigest()[:12]
+        print(f"[MAGATOKI MUSE CHECK] key_id={key_id} model={MODEL}", flush=True)
         code = "unknown"
         try:
             candidate = exc.response.json()["error"]["code"]
