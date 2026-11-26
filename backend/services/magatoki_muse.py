@@ -58,6 +58,11 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
                     visible = any(item.get("id") == MODEL for item in models)
                     spark_ids = [m["id"] for m in models if m.get("id", "").startswith("muse-spark-")]
                     print(f"[MAGATOKI SPARK] available={spark_ids}", flush=True)
+                    all_ids = [item.get("id") for item in models]
+                    print(
+                        f"[MAGATOKI ALL MODELS] count={len(all_ids)} ids={all_ids[:50]}",
+                        flush=True,
+                    )
                 print(
                     f"[MAGATOKI MODELS] HTTP {listing.status_code} visible={visible}",
                     flush=True,
@@ -65,7 +70,6 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
             except (httpx.RequestError, ValueError, KeyError, TypeError, AttributeError) as check:
                 print(f"[MAGATOKI MODELS] check_failed={type(check).__name__}", flush=True)
         key_id = hashlib.sha256(key.encode()).hexdigest()[:12]
-        print(f"[MAGATOKI MUSE CHECK] key_id={key_id} model={MODEL}", flush=True)
         code = "unknown"
         try:
             candidate = exc.response.json()["error"]["code"]
@@ -77,6 +81,11 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
                 code = candidate
         except (ValueError, KeyError, TypeError):
             pass
+        print(
+            f"[MAGATOKI MUSE CHECK] key_id={key_id} model={MODEL} "
+            f"status={exc.response.status_code} code={code}",
+            flush=True,
+        )
         raise MuseReplyError(
             f"Meta Model API returned HTTP {exc.response.status_code}; code={code}"
         ) from None
