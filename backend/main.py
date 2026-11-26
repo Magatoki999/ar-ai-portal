@@ -519,6 +519,11 @@ def _image_translation_language(message: str) -> str | None:
     return None
 
 
+# The watch's bear conversation uses its own model and does not enter Ruki's graph.
+from services.magatoki_muse_route import router as magatoki_muse_router
+app.include_router(magatoki_muse_router)
+
+
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatMessage):
     _log_memory("CHAT start")
