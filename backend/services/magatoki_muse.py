@@ -45,6 +45,23 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
         if choice.get("finish_reason") != "stop" or not isinstance(reply, str) or not reply.strip():
             raise ValueError("Muse returned an incomplete or empty reply")
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            try:
+                listing = await client.get(
+                    "https://api.meta.ai/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=5,
+                )
+                visible = "unknown"
+                if listing.is_success:
+                    models = listing.json()["data"]
+                    visible = any(item.get("id") == MODEL for item in models)
+                print(
+                    f"[MAGATOKI MODELS] HTTP {listing.status_code} visible={visible}",
+                    flush=True,
+                )
+            except (httpx.RequestError, ValueError, KeyError, TypeError, AttributeError) as check:
+                print(f"[MAGATOKI MODELS] check_failed={type(check).__name__}", flush=True)
         key_id = hashlib.sha256(key.encode()).hexdigest()[:12]
         print(f"[MAGATOKI MUSE CHECK] key_id={key_id} model={MODEL}", flush=True)
         code = "unknown"
