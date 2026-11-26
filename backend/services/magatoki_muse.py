@@ -56,6 +56,8 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
                 if listing.is_success:
                     models = listing.json()["data"]
                     visible = any(item.get("id") == MODEL for item in models)
+                    spark_ids = [m["id"] for m in models if m.get("id", "").startswith("muse-spark-")]
+                    print(f"[MAGATOKI SPARK] available={spark_ids}", flush=True)
                 print(
                     f"[MAGATOKI MODELS] HTTP {listing.status_code} visible={visible}",
                     flush=True,
