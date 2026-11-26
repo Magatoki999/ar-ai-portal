@@ -31,6 +31,7 @@ async def bear_chat(
         async with httpx.AsyncClient() as client:
             reply = await bear_reply(client, payload.message)
     except MuseReplyError as exc:
+        print(f"[MAGATOKI MUSE] {exc}", flush=True)
         raise HTTPException(502, "Muse could not answer") from exc
     audio = await generate_tts(reply)
     if not audio:
