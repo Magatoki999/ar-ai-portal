@@ -44,7 +44,20 @@ async def bear_reply(client: httpx.AsyncClient, transcript: str) -> str:
         if choice.get("finish_reason") != "stop" or not isinstance(reply, str) or not reply.strip():
             raise ValueError("Muse returned an incomplete or empty reply")
     except httpx.HTTPStatusError as exc:
-        raise MuseReplyError(f"Meta Model API returned HTTP {exc.response.status_code}") from None
+        code = "unknown"
+        try:
+            candidate = exc.response.json()["error"]["code"]
+            if (
+                isinstance(candidate, str)
+                and 1 <= len(candidate) <= 64
+                and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in candidate)
+            ):
+                code = candidate
+        except (ValueError, KeyError, TypeError):
+            pass
+        raise MuseReplyError(
+            f"Meta Model API returned HTTP {exc.response.status_code}; code={code}"
+        ) from None
     except (httpx.RequestError, ValueError, KeyError, IndexError, TypeError):
         raise MuseReplyError("Could not retrieve a complete Muse reply") from None
     return reply.strip()
